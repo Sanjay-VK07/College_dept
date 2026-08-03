@@ -1,0 +1,401 @@
+import { Response } from 'express';
+import { AuthRequest } from '../middlewares/authMiddleware';
+import { prisma } from '../config/prisma';
+import { GateScoringService } from '../services/gateScoringService';
+
+export class ExamController {
+  /**
+   * Get student's assigned tests (Upcoming, Active, Completed)
+   */
+  public static async getStudentTests(req: AuthRequest, res: Response) {
+    try {
+      const studentId = req.user!.id;
+
+      const assignments = await prisma.testAssignment.findMany({
+        where: { studentId },
+        include: {
+          test: {
+            include: {
+              createdBy: {
+                select: { name: true, department: true },
+              },
+            },
+          },
+        },
+        orderBy: { test: { startTime: 'desc' } },
+      });
+
+      return res.status(200).json({ success: true, data: assignments });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Start Exam Session & Fetch Question Paper
+   */
+  public static async startExam(req: AuthRequest, res: Response) {
+    try {
+      const { testId } = req.params;
+      const studentId = req.user!.id;
+
+      let assignment = await prisma.testAssignment.findFirst({
+        where: { testId, studentId },
+      });
+
+      if (!assignment) {
+        // Auto assign if student qualifies target department
+        assignment = await prisma.testAssignment.create({
+          data: {
+            testId,
+            studentId,
+            status: 'IN_PROGRESS',
+            startedAt: new Date(),
+          },
+        });
+      } else if (assignment.status === 'SCHEDULED') {
+        assignment = await prisma.testAssignment.update({
+          where: { id: assignment.id },
+          data: { status: 'IN_PROGRESS', startedAt: new Date() },
+        });
+      }
+
+      // Fetch test details & question paper
+      const test = await prisma.mockTest.findUnique({
+        where: { id: testId },
+        include: {
+          testQuestions: {
+            include: {
+              question: {
+                include: {
+                  subtopic: {
+                    include: {
+                      topic: {
+                        include: {
+                          module: {
+                            include: {
+                              subject: true,
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: { order: 'asc' },
+          },
+        },
+      });
+
+      if (!test) {
+        return res.status(404).json({ success: false, message: 'Mock Test not found' });
+      }
+
+      // Fetch existing saved responses for session recovery
+      const existingResponses = await prisma.questionResponse.findMany({
+        where: { assignmentId: assignment.id },
+      });
+
+      const responseMap = new Map();
+      existingResponses.forEach(r => responseMap.set(r.questionId, r));
+
+      // Sanitize question paper (hide correct answers during live exam)
+      const questions = test.testQuestions.map(tq => {
+        const q = tq.question;
+        const savedResp = responseMap.get(q.id);
+
+        return {
+          id: q.id,
+          order: tq.order,
+          text: q.text,
+          type: q.type,
+          difficulty: q.difficulty,
+          marks: q.marks,
+          negativeMarks: q.negativeMarks,
+          options: q.options,
+          imageUrl: q.imageUrl,
+          subject: q.subtopic.topic.module.subject.name,
+          module: q.subtopic.topic.module.name,
+          topic: q.subtopic.topic.name,
+          subtopic: q.subtopic.name,
+          savedAnswer: savedResp ? savedResp.chosenAnswer : null,
+          status: savedResp ? savedResp.status : 'NOT_VISITED',
+        };
+      });
+
+      // Calculate server-side remaining time
+      const elapsedSec = Math.floor((Date.now() - new Date(assignment.startedAt || Date.now()).getTime()) / 1000);
+      const totalAllowedSec = test.durationMinutes * 60;
+      const remainingSec = Math.max(0, totalAllowedSec - elapsedSec);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          assignmentId: assignment.id,
+          test: {
+            id: test.id,
+            title: test.title,
+            description: test.description,
+            durationMinutes: test.durationMinutes,
+            totalMarks: test.totalMarks,
+            instructions: test.instructions,
+            maxViolations: test.maxViolations,
+          },
+          remainingSec,
+          questions,
+        },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Multi-trigger Autosave Endpoint (Option click, question change, 5s ticker, blur, reconnect)
+   */
+  public static async autoSaveResponse(req: AuthRequest, res: Response) {
+    try {
+      const { assignmentId, questionId, chosenAnswer, status, timeSpentSec } = req.body;
+
+      if (!assignmentId || !questionId) {
+        return res.status(400).json({ success: false, message: 'Assignment ID and Question ID required' });
+      }
+
+      await prisma.questionResponse.upsert({
+        where: {
+          assignmentId_questionId: {
+            assignmentId,
+            questionId,
+          },
+        },
+        update: {
+          chosenAnswer,
+          status: status || 'ANSWERED',
+          timeSpentSec: { increment: timeSpentSec || 0 },
+        },
+        create: {
+          assignmentId,
+          questionId,
+          chosenAnswer,
+          status: status || 'ANSWERED',
+          timeSpentSec: timeSpentSec || 0,
+        },
+      });
+
+      return res.status(200).json({ success: true, message: 'Response saved' });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Submit Exam & Compute GATE Official Scoring
+   */
+  public static async submitExam(req: AuthRequest, res: Response) {
+    try {
+      const { assignmentId } = req.body;
+
+      const assignment = await prisma.testAssignment.findUnique({
+        where: { id: assignmentId },
+        include: {
+          test: {
+            include: {
+              testQuestions: {
+                include: { question: true },
+              },
+            },
+          },
+          responses: true,
+        },
+      });
+
+      if (!assignment) {
+        return res.status(404).json({ success: false, message: 'Assignment not found' });
+      }
+
+      let totalScore = 0;
+      let totalAttempted = 0;
+      let totalCorrect = 0;
+
+      const responseMap = new Map();
+      assignment.responses.forEach(r => responseMap.set(r.questionId, r));
+
+      // Evaluate each question using GATE official scoring service
+      for (const tq of assignment.test.testQuestions) {
+        const q = tq.question;
+        const studentResp = responseMap.get(q.id);
+        const chosenAnswer = studentResp ? studentResp.chosenAnswer : null;
+
+        if (chosenAnswer !== null && chosenAnswer !== undefined && chosenAnswer !== '') {
+          totalAttempted++;
+          const evaluation = GateScoringService.evaluateResponse(
+            {
+              id: q.id,
+              type: q.type,
+              marks: q.marks,
+              negativeMarks: q.negativeMarks,
+              correctAnswer: q.correctAnswer,
+            },
+            chosenAnswer
+          );
+
+          totalScore += evaluation.marksObtained;
+          if (evaluation.isCorrect) totalCorrect++;
+
+          // Update QuestionResponse evaluation in DB
+          if (studentResp) {
+            await prisma.questionResponse.update({
+              where: { id: studentResp.id },
+              data: {
+                isCorrect: evaluation.isCorrect,
+                marksObtained: evaluation.marksObtained,
+              },
+            });
+          }
+        }
+      }
+
+      const finalScore = Math.max(0, Number(totalScore.toFixed(2)));
+      const accuracy = totalAttempted > 0 ? (totalCorrect / totalAttempted) * 100 : 0;
+      const timeTakenSec = Math.floor((Date.now() - new Date(assignment.startedAt || Date.now()).getTime()) / 1000);
+
+      const updatedAssignment = await prisma.testAssignment.update({
+        where: { id: assignmentId },
+        data: {
+          status: 'COMPLETED',
+          score: finalScore,
+          totalMarks: assignment.test.totalMarks,
+          accuracy: Number(accuracy.toFixed(1)),
+          timeTakenSec,
+          submittedAt: new Date(),
+        },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Exam submitted successfully',
+        data: {
+          assignmentId,
+          score: finalScore,
+          totalMarks: assignment.test.totalMarks,
+          accuracy: Number(accuracy.toFixed(1)),
+          timeTakenSec,
+          totalCorrect,
+          totalAttempted,
+          resultVisibility: assignment.test.resultVisibility,
+        },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Solution Review Endpoint (Respects Faculty Configurable Solution Visibility)
+   */
+  public static async getSolutionReview(req: AuthRequest, res: Response) {
+    try {
+      const { assignmentId } = req.params;
+      const studentId = req.user!.id;
+
+      const assignment = await prisma.testAssignment.findUnique({
+        where: { id: assignmentId },
+        include: {
+          test: {
+            include: {
+              testQuestions: {
+                include: {
+                  question: {
+                    include: {
+                      subtopic: {
+                        include: {
+                          topic: {
+                            include: {
+                              module: {
+                                include: {
+                                  subject: true,
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+                orderBy: { order: 'asc' },
+              },
+            },
+          },
+          responses: true,
+        },
+      });
+
+      if (!assignment) {
+        return res.status(404).json({ success: false, message: 'Assignment not found' });
+      }
+
+      // Detailed logging for development diagnostic tracking
+      console.log({
+        loggedInUserId: studentId,
+        requestParam: assignmentId,
+        solutionOwnerId: assignment.studentId,
+      });
+
+      // Enforce Privacy Check
+      if (req.user!.role === 'STUDENT' && assignment.studentId !== studentId) {
+        return res.status(403).json({
+          success: false,
+          message: '403 Forbidden: Student Privacy Policy strictly prohibits viewing other students metrics, rank lists, or answer sheets.',
+        });
+      }
+
+      const responseMap = new Map();
+      assignment.responses.forEach(r => responseMap.set(r.questionId, r));
+
+      const solutions = assignment.test.testQuestions.map(tq => {
+        const q = tq.question;
+        const resp = responseMap.get(q.id);
+
+        return {
+          id: q.id,
+          order: tq.order,
+          text: q.text,
+          type: q.type,
+          difficulty: q.difficulty,
+          marks: q.marks,
+          negativeMarks: q.negativeMarks,
+          options: q.options,
+          correctAnswer: q.correctAnswer,
+          chosenAnswer: resp ? resp.chosenAnswer : null,
+          isCorrect: resp ? resp.isCorrect : false,
+          marksObtained: resp ? resp.marksObtained : 0,
+          timeSpentSec: resp ? resp.timeSpentSec : 0,
+          explanation: q.explanation,
+          reference: q.reference,
+          previousYear: q.previousYear,
+          subject: q.subtopic.topic.module.subject.name,
+          module: q.subtopic.topic.module.name,
+          topic: q.subtopic.topic.name,
+          subtopic: q.subtopic.name,
+        };
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          testTitle: assignment.test.title,
+          score: assignment.score,
+          totalMarks: assignment.test.totalMarks,
+          accuracy: assignment.accuracy,
+          timeTakenSec: assignment.timeTakenSec,
+          solutions,
+        },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+}

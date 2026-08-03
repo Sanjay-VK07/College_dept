@@ -1,0 +1,239 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  STUDENT
+  FACULTY
+  ADMIN
+}
+
+enum ExamType {
+  SCHEDULED
+  PRACTICE
+  ASSIGNMENT
+  PREVIOUS_YEAR
+  DEPARTMENT_TEST
+}
+
+enum QuestionType {
+  MCQ
+  MSQ
+  NAT
+}
+
+enum Difficulty {
+  VERY_EASY
+  EASY
+  MEDIUM
+  HARD
+  VERY_HARD
+}
+
+enum ResultVisibility {
+  IMMEDIATE
+  AFTER_EXAM_ENDS
+  MANUAL_PUBLISH
+}
+
+enum SolutionVisibility {
+  HIDE_SOLUTIONS
+  SHOW_ALWAYS
+  SHOW_AFTER_RESULT
+  SHOW_AFTER_EXAM_ENDS
+}
+
+enum RiskLevel {
+  SAFE
+  WARNING
+  HIGH_RISK
+}
+
+model User {
+  id           String      @id @default(uuid())
+  registerNo   String?     @unique
+  name         String
+  email        String      @unique
+  passwordHash String?
+  googleId     String?
+  role         Role        @default(STUDENT)
+  department   String      // e.g. CSE, ECE, IT, EEE, MECH
+  year         Int?        // 1, 2, 3, 4
+  semester     Int?        // 1..8
+  section      String?     // A, B, C
+  avatar       String?
+  sessionId    String?
+  fingerprint  String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  assignments  TestAssignment[]
+  createdTests MockTest[]       @relation("CreatedBy")
+  questions    Question[]       @relation("CreatedQuestions")
+  auditLogs    AuditLog[]
+}
+
+model Subject {
+  id           String      @id @default(uuid())
+  name         String
+  code         String      @unique
+  department   String
+  modules      Module[]
+}
+
+model Module {
+  id           String      @id @default(uuid())
+  name         String
+  subjectId    String
+  subject      Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topics       Topic[]
+}
+
+model Topic {
+  id           String      @id @default(uuid())
+  name         String
+  moduleId     String
+  module       Module      @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  subtopics    Subtopic[]
+}
+
+model Subtopic {
+  id           String      @id @default(uuid())
+  name         String
+  topicId      String
+  topic        Topic       @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  questions    Question[]
+}
+
+model Question {
+  id             String       @id @default(uuid())
+  text           String
+  type           QuestionType
+  difficulty     Difficulty   @default(MEDIUM)
+  marks          Float        @default(1.0)
+  negativeMarks  Float        @default(0.33)
+  options        Json         // Options array: [{ text: "", latex: "", image: "" }]
+  correctAnswer  Json         // Array of indices for MCQ/MSQ, or { min: 1.5, max: 1.6, value: 1.55 } for NAT
+  explanation    String?
+  reference      String?
+  previousYear   String?      // e.g., "GATE CS 2023"
+  imageUrl       String?
+  subtopicId     String
+  subtopic       Subtopic     @relation(fields: [subtopicId], references: [id])
+  createdById    String
+  createdBy      User         @relation("CreatedQuestions", fields: [createdById], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  mockTestQuestions MockTestQuestion[]
+  responses         QuestionResponse[]
+}
+
+model MockTest {
+  id                 String             @id @default(uuid())
+  title              String
+  description        String?
+  examType           ExamType           @default(SCHEDULED)
+  durationMinutes    Int                @default(180)
+  totalMarks         Float              @default(100.0)
+  startTime          DateTime
+  endTime            DateTime
+  targetDepartment   String
+  targetYear         Int?
+  targetSection      String?
+  isPublished        Boolean            @default(false)
+  resultVisibility   ResultVisibility   @default(AFTER_EXAM_ENDS)
+  solutionVisibility SolutionVisibility @default(SHOW_AFTER_RESULT)
+  shuffleQuestions   Boolean            @default(true)
+  shuffleOptions     Boolean            @default(true)
+  maxViolations      Int                @default(5)
+  instructions       String?
+  createdById        String
+  createdBy          User               @relation("CreatedBy", fields: [createdById], references: [id])
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  testQuestions      MockTestQuestion[]
+  assignments        TestAssignment[]
+}
+
+model MockTestQuestion {
+  id         String   @id @default(uuid())
+  mockTestId String
+  mockTest   MockTest @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id])
+  order      Int      @default(1)
+
+  @@unique([mockTestId, questionId])
+}
+
+model TestAssignment {
+  id              String             @id @default(uuid())
+  testId          String
+  test            MockTest           @relation(fields: [testId], references: [id], onDelete: Cascade)
+  studentId       String
+  student         User               @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  status          String             @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, COMPLETED, AUTO_SUBMITTED
+  score           Float?
+  totalMarks      Float?
+  accuracy        Float?
+  timeTakenSec    Int                @default(0)
+  riskLevel       RiskLevel          @default(SAFE)
+  violationCount  Int                @default(0)
+  startedAt       DateTime?
+  submittedAt     DateTime?
+
+  responses       QuestionResponse[]
+  violations      ViolationLog[]
+}
+
+model QuestionResponse {
+  id              String          @id @default(uuid())
+  assignmentId    String
+  assignment      TestAssignment  @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  questionId      String
+  question        Question        @relation(fields: [questionId], references: [id])
+  chosenAnswer    Json?           // Selected option index/indices or numerical value string
+  status          String          @default("NOT_VISITED") // NOT_VISITED, VISITED, ANSWERED, SKIPPED, MARKED_FOR_REVIEW, ANSWERED_AND_MARKED
+  isCorrect       Boolean         @default(false)
+  marksObtained   Float           @default(0.0)
+  timeSpentSec    Int             @default(0)
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([assignmentId, questionId])
+}
+
+model ViolationLog {
+  id              String          @id @default(uuid())
+  assignmentId    String
+  assignment      TestAssignment  @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  type            String          // FULLSCREEN_EXIT, TAB_SWITCH, BLUR, DEVTOOLS, REFRESH
+  timestamp       DateTime        @default(now())
+  details         String?
+}
+
+model SystemSetting {
+  id                String   @id @default(uuid())
+  key               String   @unique
+  value             String
+  description       String?
+  updatedAt         DateTime @updatedAt
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  action      String
+  resource    String
+  ipAddress   String?
+  details     String?
+  timestamp   DateTime @default(now())
+}
