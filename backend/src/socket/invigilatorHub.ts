@@ -19,8 +19,10 @@ export interface ConnectedStudent {
 }
 
 const activeStudents = new Map<string, ConnectedStudent>();
+let globalIo: Server | null = null;
 
 export function setupInvigilatorHub(io: Server) {
+  globalIo = io;
   io.on('connection', (socket: Socket) => {
     console.log(`🔌 [Socket.IO] Client connected: ${socket.id}`);
 
@@ -275,4 +277,10 @@ export function setupInvigilatorHub(io: Server) {
       }
     });
   });
+}
+
+export function broadcastNotification(notif: any) {
+  if (globalIo) {
+    globalIo.emit('new_notification', notif);
+  }
 }

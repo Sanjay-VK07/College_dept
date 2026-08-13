@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { ShieldAlert, Maximize2 } from 'lucide-react';
+import { ShieldAlert, Maximize2, AlertCircle } from 'lucide-react';
 
 interface SecurityGuardProps {
   onViolation: (type: string, details?: string) => void;
@@ -36,7 +36,7 @@ export const SecurityGuard: React.FC<SecurityGuardProps> = ({
       setIsFullscreen(isFull);
       if (!isFull) {
         onViolation('FULLSCREEN_EXIT', 'Exited mandatory exam fullscreen mode');
-        setWarningMessage('WARNING: Exiting Fullscreen is recorded as a security violation!');
+        setWarningMessage('SECURITY ALERT: Exiting fullscreen mode is recorded as an exam security infraction!');
         setShowWarningModal(true);
       }
     };
@@ -45,7 +45,7 @@ export const SecurityGuard: React.FC<SecurityGuardProps> = ({
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         onViolation('TAB_SWITCH', 'Switched browser tab or minimized window');
-        setWarningMessage('SECURITY ALERT: Tab switching detected! Activity reported to faculty.');
+        setWarningMessage('SECURITY ALERT: Tab switching detected! Recorded and transmitted to invigilator.');
         setShowWarningModal(true);
       }
     };
@@ -57,21 +57,18 @@ export const SecurityGuard: React.FC<SecurityGuardProps> = ({
 
     // 4. Keyboard Shortcuts Interceptor
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Block F12
       if (e.key === 'F12') {
         e.preventDefault();
         onViolation('DEVTOOLS', 'Attempted F12 DevTools access');
         return false;
       }
 
-      // Block Ctrl+Shift+I / J / C
       if (e.ctrlKey && e.shiftKey && ['I', 'J', 'C'].includes(e.key.toUpperCase())) {
         e.preventDefault();
         onViolation('DEVTOOLS', 'Attempted DevTools shortcut');
         return false;
       }
 
-      // Block Ctrl+C, Ctrl+V, Ctrl+U, Ctrl+P, Ctrl+S
       if (e.ctrlKey && ['C', 'V', 'U', 'P', 'S', 'A'].includes(e.key.toUpperCase())) {
         e.preventDefault();
         onViolation('KEYBOARD_SHORTCUT', `Attempted shortcut Ctrl+${e.key.toUpperCase()}`);
@@ -105,35 +102,39 @@ export const SecurityGuard: React.FC<SecurityGuardProps> = ({
     <>
       {/* Fullscreen Re-entry Banner if exited */}
       {!isFullscreen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center">
-          <ShieldAlert className="w-16 h-16 text-rose-500 mb-4 animate-bounce" />
-          <h2 className="text-2xl font-bold text-white mb-2">Exam Fullscreen Required</h2>
-          <p className="text-slate-400 max-w-md mb-6 text-sm">
-            GSMAS exam security policy requires continuous fullscreen execution. Exceeding maximum allowed violations ({maxViolations}) will auto-submit your test.
-          </p>
+        <div className="fixed inset-0 z-50 bg-slate-900/90 flex flex-col items-center justify-center p-6 text-center font-sans">
+          <div className="erp-card max-w-md w-full p-8 text-center space-y-4">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-red-100 text-red-600 mb-1 border border-red-200">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900">Exam Fullscreen Required</h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              University examination governance policy requires continuous fullscreen execution. Exceeding maximum permitted security violations (<b>{maxViolations}</b>) will result in automatic submission.
+            </p>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 mb-6 font-mono text-xs text-amber-400">
-            Recorded Security Violations: {currentViolations} / {maxViolations}
+            <div className="bg-amber-50 border border-amber-200 rounded-md p-2.5 font-mono text-xs text-amber-900">
+              Recorded Security Infractions: <b>{currentViolations} / {maxViolations}</b>
+            </div>
+
+            <button
+              onClick={requestFullscreen}
+              className="erp-btn-primary w-full py-2.5 text-xs font-semibold"
+            >
+              <Maximize2 className="w-4 h-4" />
+              <span>Re-enter Fullscreen & Resume Exam</span>
+            </button>
           </div>
-
-          <button
-            onClick={requestFullscreen}
-            className="flex items-center space-x-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 font-semibold text-white rounded-lg shadow-lg shadow-indigo-600/30 transition-all"
-          >
-            <Maximize2 className="w-5 h-5" />
-            <span>Re-enter Fullscreen & Continue</span>
-          </button>
         </div>
       )}
 
       {/* Temporary Warning Modal */}
       {showWarningModal && isFullscreen && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 glass-panel px-6 py-3 rounded-full border border-rose-500/40 text-rose-300 text-sm font-medium flex items-center space-x-3 shadow-2xl animate-pulse">
-          <ShieldAlert className="w-5 h-5 text-rose-500" />
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-50 border border-red-300 text-red-900 px-5 py-2.5 rounded-md text-xs font-semibold flex items-center space-x-3 shadow-lg">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
           <span>{warningMessage}</span>
           <button
             onClick={() => setShowWarningModal(false)}
-            className="ml-3 text-xs bg-rose-500/20 px-2 py-0.5 rounded text-rose-200"
+            className="ml-3 text-[11px] bg-red-200 hover:bg-red-300 px-2 py-0.5 rounded text-red-900"
           >
             Dismiss
           </button>

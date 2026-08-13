@@ -4,21 +4,89 @@
 
 @layer base {
   body {
-    @apply bg-slate-950 text-slate-100 font-sans antialiased selection:bg-indigo-500 selection:text-white;
+    @apply bg-[#F8FAFC] text-slate-900 font-sans antialiased selection:bg-blue-600 selection:text-white;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply text-slate-900 tracking-tight font-semibold;
   }
 }
 
-/* Glassmorphism helpers */
-.glass-panel {
-  background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+/* ERP Layout Component Helpers */
+.erp-card {
+  @apply bg-white border border-slate-200 rounded-lg shadow-sm p-4 sm:p-6 transition-all;
 }
 
-.glass-card {
-  background: rgba(30, 41, 59, 0.6);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+.erp-card-header {
+  @apply border-b border-slate-200 pb-3 mb-4 flex items-center justify-between;
+}
+
+.erp-table-container {
+  @apply bg-white border border-slate-200 rounded-lg shadow-sm overflow-x-auto;
+}
+
+.erp-table {
+  @apply w-full text-left text-sm text-slate-700 border-collapse;
+}
+
+.erp-table th {
+  @apply bg-slate-50 text-slate-700 font-semibold text-xs uppercase tracking-wider px-4 py-3 border-b border-slate-200;
+}
+
+.erp-table td {
+  @apply px-4 py-3 border-b border-slate-100 text-slate-800 text-xs sm:text-sm;
+}
+
+.erp-table tr:last-child td {
+  @apply border-b-0;
+}
+
+.erp-table tr:hover td {
+  @apply bg-slate-50/80;
+}
+
+.erp-input {
+  @apply w-full bg-white border border-slate-300 rounded-md px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition-colors disabled:bg-slate-100 disabled:text-slate-500;
+}
+
+.erp-select {
+  @apply bg-white border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition-colors;
+}
+
+.erp-btn-primary {
+  @apply bg-[#1E40AF] hover:bg-[#1D4ED8] disabled:opacity-50 text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+}
+
+.erp-btn-secondary {
+  @apply bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+}
+
+.erp-btn-danger {
+  @apply bg-[#DC2626] hover:bg-red-700 disabled:opacity-50 text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+}
+
+.erp-btn-success {
+  @apply bg-[#16A34A] hover:bg-emerald-700 disabled:opacity-50 text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+}
+
+.erp-badge-blue {
+  @apply bg-blue-50 text-blue-800 border border-blue-200 text-xs font-semibold px-2.5 py-0.5 rounded-md inline-flex items-center;
+}
+
+.erp-badge-green {
+  @apply bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold px-2.5 py-0.5 rounded-md inline-flex items-center;
+}
+
+.erp-badge-red {
+  @apply bg-red-50 text-red-800 border border-red-200 text-xs font-semibold px-2.5 py-0.5 rounded-md inline-flex items-center;
+}
+
+.erp-badge-amber {
+  @apply bg-amber-50 text-amber-800 border border-amber-200 text-xs font-semibold px-2.5 py-0.5 rounded-md inline-flex items-center;
+}
+
+.erp-badge-gray {
+  @apply bg-slate-100 text-slate-700 border border-slate-200 text-xs font-semibold px-2.5 py-0.5 rounded-md inline-flex items-center;
 }
 
 /* Prevent text selection during exam */

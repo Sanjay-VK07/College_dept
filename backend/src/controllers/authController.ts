@@ -2,7 +2,9 @@ import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { ENV } from '../config/env';
 import { prisma } from '../config/prisma';
+import { AuditLogger } from '../services/auditLogger';
 import { Role } from '@prisma/client';
+import { NotificationController } from './notificationController';
 
 export class AuthController {
   /**
@@ -22,6 +24,13 @@ export class AuthController {
       const isAllowed = ENV.ALLOWED_DOMAINS.some(d => d.trim().toLowerCase() === emailDomain?.toLowerCase());
 
       if (!isAllowed && role !== Role.ADMIN) {
+        await NotificationController.createSystemNotification(
+          'Login Attempt Failed',
+          `Unauthorized login attempt for domain @${emailDomain} (${email})`,
+          'error',
+          'Admin'
+        );
+
         return res.status(403).json({
           success: false,
           message: `Access Denied: Domain '@${emailDomain}' is not an authorized college email domain. Please use your official college account (@cit.edu.in).`,
@@ -32,15 +41,14 @@ export class AuthController {
       let user = await prisma.user.findUnique({ where: { email } });
 
       if (!user) {
-        // If student doesn't exist in system pre-imported roster, allow creation or block
         user = await prisma.user.create({
           data: {
             email,
             name: name || email.split('@')[0],
             googleId: googleId || `g_${Date.now()}`,
             role: role || Role.STUDENT,
-            department: department || 'CSE',
-            registerNo: registerNo || (role === Role.STUDENT ? `REG_${Date.now().toString().slice(-6)}` : null),
+            department: department || 'Computer Science and Engineering',
+            registerNo: registerNo || (role === Role.STUDENT ? `717621050${Date.now().toString().slice(-3)}` : null),
             year: 3,
             semester: 6,
             section: 'A',
@@ -65,6 +73,23 @@ export class AuthController {
         },
         ENV.JWT_SECRET,
         { expiresIn: '12h' }
+      );
+
+      // Audit Log Entry
+      await AuditLogger.log({
+        userId: user.id,
+        action: 'USER_LOGIN',
+        resource: 'User',
+        details: `${user.name} (${user.role}) signed in successfully`,
+        ipAddress: req.ip,
+      });
+
+      await NotificationController.createSystemNotification(
+        'Login Successful',
+        `User ${user.name} (${user.role}) logged in successfully`,
+        'info',
+        user.role,
+        user.id
       );
 
       const userResponse = {

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Shield,
+  GraduationCap,
   Users,
   UserCheck,
   BookOpen,
@@ -20,81 +20,176 @@ import {
   Download,
   Database,
   Radio,
-  BarChart2,
+  BarChart3,
   Settings,
   Lock,
   LogOut,
   ChevronRight,
+  ChevronDown,
   TrendingUp,
+  ShieldCheck,
+  FileText,
+  Activity,
+  X,
+  Bell,
+  CheckSquare,
+  Zap,
+  Calendar,
+  Layers,
+  ArrowUpDown,
+  Server,
+  Mail,
+  HardDrive,
+  Key,
+  Award,
+  RefreshCw,
+  LayoutGrid,
+  List,
+  Copy,
   Eye,
+  Archive,
+  Printer,
+  Ticket,
+  FileCheck,
+  UserPlus,
+  PieChart as PieChartIcon,
 } from 'lucide-react';
 import api from '@/lib/api';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
+import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts';
 
 export default function AdminDashboard() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<
-    'OVERVIEW' | 'STUDENTS' | 'FACULTY' | 'QUESTIONS' | 'EXAMS' | 'ANALYTICS' | 'IMPORTS' | 'SECURITY' | 'SETTINGS'
+    | 'OVERVIEW'
+    | 'EXAMS'
+    | 'QUESTIONS'
+    | 'STUDENTS'
+    | 'FACULTY'
+    | 'DEPARTMENTS'
+    | 'RESULTS'
+    | 'ANALYTICS'
+    | 'REPORTS'
+    | 'HEALTH'
+    | 'LOGS'
+    | 'SETTINGS'
   >('OVERVIEW');
 
-  // Overview Data
   const [overview, setOverview] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [errorState, setErrorState] = useState('');
   const [toastMsg, setToastMsg] = useState('');
+  const [searchGlobal, setSearchGlobal] = useState('');
 
-  // Student Management State
+  // Table State: Student Roster
   const [students, setStudents] = useState<any[]>([]);
   const [studentSearch, setStudentSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
+  const [studentSortOrder, setStudentSortOrder] = useState<'ASC' | 'DESC'>('ASC');
+  const [studentPage, setStudentPage] = useState(1);
+  const itemsPerPage = 5;
+
   const [isAddStudentOpen, setIsAddStudentOpen] = useState(false);
   const [newStudent, setNewStudent] = useState({
     registerNo: '',
     name: '',
     email: '',
-    department: 'CSE',
+    department: 'Computer Science and Engineering',
     year: '3',
     semester: '6',
     section: 'A',
   });
 
-  // Faculty Management State
+  // Table State: Faculty Directory
   const [faculty, setFaculty] = useState<any[]>([]);
   const [isAddFacultyOpen, setIsAddFacultyOpen] = useState(false);
-  const [newFaculty, setNewFaculty] = useState({ name: '', email: '', department: 'CSE' });
+  const [newFaculty, setNewFaculty] = useState({ name: '', email: '', department: 'Computer Science and Engineering' });
 
-  // Question Bank State
+  // Question Bank & Exams
   const [questions, setQuestions] = useState<any[]>([]);
-  const [questionTypeFilter, setQuestionTypeFilter] = useState('ALL');
-  const [isAddQuestionOpen, setIsAddQuestionOpen] = useState(false);
-  const [newQuestion, setNewQuestion] = useState({
-    text: '',
-    type: 'MCQ',
-    difficulty: 'MEDIUM',
-    marks: '1.0',
-    negativeMarks: '0.33',
-    explanation: '',
-  });
-
-  // Exam Management State
   const [exams, setExams] = useState<any[]>([]);
-  const [isAddExamOpen, setIsAddExamOpen] = useState(false);
-  const [newExam, setNewExam] = useState({
+
+  // Examination Management Enhanced State
+  const [examViewMode, setExamViewMode] = useState<'TABLE' | 'GRID'>('TABLE');
+  const [examSearch, setExamSearch] = useState('');
+  const [examDeptFilter, setExamDeptFilter] = useState('ALL');
+  const [examSemFilter, setExamSemFilter] = useState('ALL');
+  const [examFacultyFilter, setExamFacultyFilter] = useState('ALL');
+  const [examStatusFilter, setExamStatusFilter] = useState('ALL');
+  const [examDateRange, setExamDateRange] = useState('');
+  const [examSortBy, setExamSortBy] = useState('NEWEST');
+  const [expandedExamIds, setExpandedExamIds] = useState<string[]>([]);
+  const [isCreateExamOpen, setIsCreateExamOpen] = useState(false);
+  const [showAnalyticsPanel, setShowAnalyticsPanel] = useState(false);
+  const [selectedExamPreview, setSelectedExamPreview] = useState<any>(null);
+
+  const [newExamForm, setNewExamForm] = useState({
     title: '',
     description: '',
     examType: 'SCHEDULED',
     durationMinutes: '180',
     totalMarks: '100',
-    targetDepartment: 'CSE',
+    targetDepartment: 'Computer Science and Engineering',
     maxViolations: '5',
+    instructions: '1. Total Duration: 180 Minutes.\n2. Fullscreen security mode is strictly enforced.',
   });
 
-  // Imports & Settings
-  const [questionFile, setQuestionFile] = useState<File | null>(null);
-  const [studentFile, setStudentFile] = useState<File | null>(null);
-  const [allowedDomains, setAllowedDomains] = useState('cit.edu.in');
+  // Results Ledger & System Settings State
+  const [resultsLedger, setResultsLedger] = useState<any[]>([]);
+  const [systemSettings, setSystemSettings] = useState<any[]>([]);
+  const [isAssignInvigilatorOpen, setIsAssignInvigilatorOpen] = useState(false);
+  const [assignForm, setAssignForm] = useState({ testId: '', facultyId: '' });
+  const [isAddQuestionOpen, setIsAddQuestionOpen] = useState(false);
+  const [newQuestionForm, setNewQuestionForm] = useState({
+    text: '',
+    type: 'MCQ',
+    difficulty: 'MEDIUM',
+    marks: '1',
+    negativeMarks: '0.33',
+    explanation: '',
+  });
+
+  // Live Clock & Reactive State
+  const [currentDateTime, setCurrentDateTime] = useState<string>('');
 
   useEffect(() => {
+    const updateClock = () => {
+      setCurrentDateTime(
+        new Date().toLocaleString('en-US', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      );
+    };
+    updateClock();
+    const clockInterval = setInterval(updateClock, 1000);
+
     fetchInitialData();
+    // Reactive background polling every 15 seconds without full page reload or flashing loading screen
+    const pollInterval = setInterval(() => {
+      fetchInitialData(true);
+    }, 15000);
+
+    return () => {
+      clearInterval(clockInterval);
+      clearInterval(pollInterval);
+    };
   }, []);
 
   const showToast = (msg: string) => {
@@ -102,15 +197,24 @@ export default function AdminDashboard() {
     setTimeout(() => setToastMsg(''), 4000);
   };
 
-  const fetchInitialData = async () => {
-    setLoading(true);
+  // Notifications State & Handlers
+  const [dbNotifications, setDbNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState<boolean>(false);
+
+  const fetchInitialData = async (silent: boolean = false) => {
+    if (!silent) setLoading(true);
+    setErrorState('');
     try {
-      const [overviewRes, studentsRes, facultyRes, questionsRes, examsRes] = await Promise.all([
+      const [overviewRes, studentsRes, facultyRes, questionsRes, examsRes, resultsRes, settingsRes, notifRes] = await Promise.all([
         api.get('/admin/overview'),
         api.get('/admin/students'),
         api.get('/admin/faculty'),
         api.get('/admin/questions'),
         api.get('/admin/exams'),
+        api.get('/admin/results-ledger'),
+        api.get('/admin/settings'),
+        api.get('/notifications'),
       ]);
 
       if (overviewRes.data?.success) setOverview(overviewRes.data.data);
@@ -118,284 +222,600 @@ export default function AdminDashboard() {
       if (facultyRes.data?.success) setFaculty(facultyRes.data.data);
       if (questionsRes.data?.success) setQuestions(questionsRes.data.data);
       if (examsRes.data?.success) setExams(examsRes.data.data);
+      if (resultsRes.data?.success) setResultsLedger(resultsRes.data.data);
+      if (settingsRes.data?.success) setSystemSettings(settingsRes.data.data);
+      if (notifRes.data?.success) {
+        setDbNotifications(notifRes.data.data.notifications || []);
+        setUnreadCount(notifRes.data.data.unreadCount || 0);
+      }
     } catch (err: any) {
       console.error('Error fetching admin dashboard data:', err);
+      if (!silent) {
+        setErrorState(err.response?.data?.message || 'Failed to connect to backend server. Please retry.');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
-  // Student Handlers
+  const handleMarkAsRead = async (id: string) => {
+    try {
+      await api.put(`/notifications/${id}/read`);
+      fetchInitialData(true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      await api.put('/notifications/read-all');
+      fetchInitialData(true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteNotification = async (id: string) => {
+    try {
+      await api.delete(`/notifications/${id}`);
+      fetchInitialData(true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Handlers: Student & Faculty
   const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       const res = await api.post('/admin/students', newStudent);
-      if (res.data.success) {
-        showToast('✅ Student added successfully!');
+      if (res.data?.success) {
+        showToast('Student record added successfully');
         setIsAddStudentOpen(false);
-        setNewStudent({ registerNo: '', name: '', email: '', department: 'CSE', year: '3', semester: '6', section: 'A' });
+        setNewStudent({ registerNo: '', name: '', email: '', department: 'Computer Science and Engineering', year: '3', semester: '6', section: 'A' });
         fetchInitialData();
       }
     } catch (err: any) {
-      showToast(`❌ ${err.response?.data?.message || 'Failed to add student'}`);
+      showToast(err.response?.data?.message || 'Failed to add student');
     }
   };
 
   const handleDeleteStudent = async (id: string) => {
-    if (!confirm('Are you sure you want to remove this student record?')) return;
+    if (!confirm('Are you sure you want to delete this student record?')) return;
     try {
       await api.delete(`/admin/students/${id}`);
-      showToast('✅ Student record removed');
+      showToast('Student record deleted');
       fetchInitialData();
     } catch (err: any) {
-      showToast('❌ Failed to delete student');
+      showToast('Failed to delete student');
     }
   };
 
   const handleResetAttempts = async (id: string) => {
-    if (!confirm('Reset exam attempts for this student?')) return;
+    if (!confirm('Reset exam attempt counter for this student?')) return;
     try {
       await api.post(`/admin/students/${id}/reset-attempts`);
-      showToast('✅ Student attempts reset successfully');
+      showToast('Student exam attempts reset successfully');
     } catch (err: any) {
-      showToast('❌ Failed to reset attempts');
+      showToast('Failed to reset attempts');
     }
   };
 
-  // Faculty Handlers
   const handleAddFaculty = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       const res = await api.post('/admin/faculty', newFaculty);
-      if (res.data.success) {
-        showToast('✅ Faculty member added!');
+      if (res.data?.success) {
+        showToast('Faculty member added successfully');
         setIsAddFacultyOpen(false);
-        setNewFaculty({ name: '', email: '', department: 'CSE' });
+        setNewFaculty({ name: '', email: '', department: 'Computer Science and Engineering' });
         fetchInitialData();
       }
     } catch (err: any) {
-      showToast(`❌ ${err.response?.data?.message || 'Failed to add faculty'}`);
+      showToast(err.response?.data?.message || 'Failed to add faculty');
     }
   };
 
   const handleDeleteFaculty = async (id: string) => {
-    if (!confirm('Are you sure you want to remove this faculty member?')) return;
+    if (!confirm('Remove this faculty member from system?')) return;
     try {
       await api.delete(`/admin/faculty/${id}`);
-      showToast('✅ Faculty member removed');
+      showToast('Faculty member removed');
       fetchInitialData();
     } catch (err: any) {
-      showToast('❌ Failed to delete faculty');
+      showToast('Failed to delete faculty');
     }
   };
 
-  // Question Handlers
-  const handleAddQuestion = async (e: React.FormEvent) => {
+  // Handlers: Examination Management
+  const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await api.post('/admin/questions', newQuestion);
-      if (res.data.success) {
-        showToast('✅ Question created successfully!');
-        setIsAddQuestionOpen(false);
-        setNewQuestion({ text: '', type: 'MCQ', difficulty: 'MEDIUM', marks: '1.0', negativeMarks: '0.33', explanation: '' });
+      const res = await api.post('/admin/exams', newExamForm);
+      if (res.data?.success) {
+        showToast('Examination scheduled and published successfully!');
+        setIsCreateExamOpen(false);
+        setNewExamForm({
+          title: '',
+          description: '',
+          examType: 'SCHEDULED',
+          durationMinutes: '180',
+          totalMarks: '100',
+          targetDepartment: 'Computer Science and Engineering',
+          maxViolations: '5',
+          instructions: '1. Total Duration: 180 Minutes.\n2. Fullscreen security mode is strictly enforced.',
+        });
         fetchInitialData();
       }
     } catch (err: any) {
-      showToast('❌ Failed to create question');
+      showToast(err.response?.data?.message || 'Failed to create exam');
     }
   };
 
-  const handleDeleteQuestion = async (id: string) => {
-    if (!confirm('Delete this question from Question Bank?')) return;
-    try {
-      await api.delete(`/admin/questions/${id}`);
-      showToast('✅ Question deleted');
-      fetchInitialData();
-    } catch (err: any) {
-      showToast('❌ Failed to delete question');
-    }
-  };
-
-  // Exam Handlers
-  const handleAddExam = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const res = await api.post('/admin/exams', newExam);
-      if (res.data.success) {
-        showToast('✅ Mock exam scheduled & published!');
-        setIsAddExamOpen(false);
-        fetchInitialData();
-      }
-    } catch (err: any) {
-      showToast('❌ Failed to create exam');
-    }
-  };
-
-  const handleTogglePublish = async (id: string) => {
+  const handleTogglePublishExam = async (id: string) => {
     try {
       const res = await api.put(`/admin/exams/${id}/publish`);
-      showToast(`✅ ${res.data.message}`);
-      fetchInitialData();
+      if (res.data?.success) {
+        showToast(res.data.message || 'Exam status updated');
+        fetchInitialData();
+      }
     } catch (err: any) {
-      showToast('❌ Failed to toggle publish status');
+      showToast('Failed to update publication status');
     }
   };
 
   const handleDeleteExam = async (id: string) => {
-    if (!confirm('Delete this mock exam?')) return;
+    if (!confirm('Are you sure you want to delete this examination?')) return;
     try {
       await api.delete(`/admin/exams/${id}`);
-      showToast('✅ Exam deleted');
+      showToast('Examination record deleted');
       fetchInitialData();
     } catch (err: any) {
-      showToast('❌ Failed to delete exam');
+      showToast('Failed to delete exam');
     }
   };
 
-  // File Upload Handlers
-  const handleQuestionUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!questionFile) return;
-
+  const handleDuplicateExam = async (exam: any) => {
     try {
-      const formData = new FormData();
-      formData.append('file', questionFile);
+      const duplicateData = {
+        title: `${exam.title} (Copy)`,
+        description: exam.description,
+        examType: exam.examType || 'SCHEDULED',
+        durationMinutes: exam.durationMinutes,
+        totalMarks: exam.totalMarks,
+        targetDepartment: exam.targetDepartment || 'Computer Science and Engineering',
+        maxViolations: exam.maxViolations || 5,
+        instructions: exam.instructions,
+      };
+      const res = await api.post('/admin/exams', duplicateData);
+      if (res.data?.success) {
+        showToast(`Exam duplicated as "${duplicateData.title}"`);
+        fetchInitialData();
+      }
+    } catch (err: any) {
+      showToast('Failed to duplicate exam');
+    }
+  };
+
+  const toggleExpandExamRow = (id: string) => {
+    setExpandedExamIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleResetExamFilters = () => {
+    setExamSearch('');
+    setExamDeptFilter('ALL');
+    setExamSemFilter('ALL');
+    setExamFacultyFilter('ALL');
+    setExamStatusFilter('ALL');
+    setExamDateRange('');
+    setExamSortBy('NEWEST');
+  };
+
+  // Export & Print Handlers
+  const handleExportCSV = (filename: string, dataRows: any[]) => {
+    exportToCSV(filename, dataRows);
+    showToast(`Exported ${filename}.csv`);
+  };
+
+  const handleExportPDF = (filename: string) => {
+    printOrExportPDF();
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  // Question Bank CRUD & Upload Handlers
+  const handleCreateQuestion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await api.post('/admin/questions', newQuestionForm);
+      if (res.data?.success) {
+        showToast('Question created successfully in Question Bank');
+        setIsAddQuestionOpen(false);
+        setNewQuestionForm({ text: '', type: 'MCQ', difficulty: 'MEDIUM', marks: '1', negativeMarks: '0.33', explanation: '' });
+        fetchInitialData();
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Failed to create question');
+    }
+  };
+
+  const handleDeleteQuestion = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this question?')) return;
+    try {
+      await api.delete(`/admin/questions/${id}`);
+      showToast('Question removed from Question Bank');
+      fetchInitialData();
+    } catch (err: any) {
+      showToast('Failed to delete question');
+    }
+  };
+
+  const handleQuestionFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
       const res = await api.post('/admin/upload-questions', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      if (res.data.success) {
-        showToast(`✅ ${res.data.message}`);
-        setQuestionFile(null);
+      if (res.data?.success) {
+        showToast(res.data.message || 'Questions uploaded successfully');
         fetchInitialData();
       }
     } catch (err: any) {
-      showToast(`❌ ${err.response?.data?.message || 'Question upload failed'}`);
+      showToast(err.response?.data?.message || 'Failed to upload questions file');
     }
   };
 
-  const handleStudentUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!studentFile) return;
-
+  const handleStudentFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
     try {
-      const formData = new FormData();
-      formData.append('file', studentFile);
       const res = await api.post('/admin/upload-students', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      if (res.data.success) {
-        showToast(`✅ ${res.data.message}`);
-        setStudentFile(null);
+      if (res.data?.success) {
+        showToast(res.data.message || 'Student roster imported successfully');
         fetchInitialData();
       }
     } catch (err: any) {
-      showToast(`❌ ${err.response?.data?.message || 'Student import failed'}`);
+      showToast(err.response?.data?.message || 'Failed to upload student roster');
     }
   };
 
-  // Filtered Lists
-  const filteredStudents = students.filter((s) => {
-    const matchesSearch =
-      s.name.toLowerCase().includes(studentSearch.toLowerCase()) ||
-      s.email.toLowerCase().includes(studentSearch.toLowerCase()) ||
-      (s.registerNo && s.registerNo.toLowerCase().includes(studentSearch.toLowerCase()));
-    const matchesDept = deptFilter === 'ALL' || s.department === deptFilter;
-    return matchesSearch && matchesDept;
-  });
+  const handleAssignInvigilator = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await api.post('/admin/assign-invigilator', assignForm);
+      if (res.data?.success) {
+        showToast(res.data.message || 'Invigilator assigned successfully');
+        setIsAssignInvigilatorOpen(false);
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Failed to assign invigilator');
+    }
+  };
 
-  const filteredQuestions = questions.filter((q) => questionTypeFilter === 'ALL' || q.type === questionTypeFilter);
+  const handleGenerateHallTickets = async () => {
+    try {
+      const res = await api.get('/admin/hall-tickets');
+      if (res.data?.success) {
+        exportToCSV('HallTickets_Roster', res.data.data);
+        showToast('Hall Tickets dataset exported successfully');
+      }
+    } catch (err: any) {
+      showToast('Failed to generate hall tickets');
+    }
+  };
 
-  const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+  const handleSaveSetting = async (key: string, value: string) => {
+    try {
+      const res = await api.put('/admin/settings', { key, value });
+      if (res.data?.success) {
+        showToast(`System setting '${key}' updated successfully`);
+        fetchInitialData();
+      }
+    } catch (err: any) {
+      showToast('Failed to update system setting');
+    }
+  };
+
+  // Filter & Sort Students Table
+  const filteredStudents = students
+    .filter((s) => {
+      const matchesSearch =
+        s.name.toLowerCase().includes(studentSearch.toLowerCase()) ||
+        s.email.toLowerCase().includes(studentSearch.toLowerCase()) ||
+        (s.registerNo && s.registerNo.toLowerCase().includes(studentSearch.toLowerCase()));
+      const matchesDept = deptFilter === 'ALL' || s.department === deptFilter;
+      return matchesSearch && matchesDept;
+    })
+    .sort((a, b) => {
+      if (studentSortOrder === 'ASC') return a.name.localeCompare(b.name);
+      return b.name.localeCompare(a.name);
+    });
+
+  const totalStudentPages = Math.ceil(filteredStudents.length / itemsPerPage) || 1;
+  const paginatedStudents = filteredStudents.slice((studentPage - 1) * itemsPerPage, studentPage * itemsPerPage);
+
+  // Filter & Sort Exams Table
+  const filteredExams = exams
+    .filter((e) => {
+      const matchesSearch =
+        e.title.toLowerCase().includes(examSearch.toLowerCase()) ||
+        (e.description && e.description.toLowerCase().includes(examSearch.toLowerCase()));
+
+      const matchesDept =
+        examDeptFilter === 'ALL' || e.targetDepartment === examDeptFilter;
+
+      const matchesFaculty =
+        examFacultyFilter === 'ALL' || e.createdBy?.name === examFacultyFilter;
+
+      const matchesStatus =
+        examStatusFilter === 'ALL'
+          ? true
+          : examStatusFilter === 'PUBLISHED'
+          ? e.isPublished
+          : examStatusFilter === 'DRAFT'
+          ? !e.isPublished
+          : true;
+
+      return matchesSearch && matchesDept && matchesFaculty && matchesStatus;
+    })
+    .sort((a, b) => {
+      if (examSortBy === 'NEWEST') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (examSortBy === 'OLDEST') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      if (examSortBy === 'TITLE_ASC') return a.title.localeCompare(b.title);
+      if (examSortBy === 'MARKS_DESC') return b.totalMarks - a.totalMarks;
+      return 0;
+    });
+
+  const COLORS = ['#1E40AF', '#16A34A', '#D97706', '#DC2626', '#7C3AED'];
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mr-3" />
-        Loading GSMAS Administration Portal...
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center text-slate-600 space-y-3 font-sans">
+        <div className="w-8 h-8 border-3 border-[#1E40AF] border-t-transparent rounded-full animate-spin" />
+        <div className="text-sm font-medium">Fetching Live Data from Central Database...</div>
       </div>
     );
   }
 
-  const metrics = overview?.metrics || {
-    totalStudents: students.length,
-    totalFaculty: faculty.length,
-    totalDepartments: 5,
-    totalExams: exams.length,
+  if (errorState) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-6 text-center font-sans space-y-4">
+        <div className="erp-card max-w-md w-full space-y-4">
+          <div className="inline-flex p-3 bg-red-100 text-red-600 rounded-full">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h2 className="text-base font-bold text-slate-900">Database Connection Error</h2>
+          <p className="text-xs text-slate-600 leading-relaxed">{errorState}</p>
+          <button onClick={() => fetchInitialData()} className="erp-btn-primary w-full text-xs py-2">
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Retry Connecting to Database</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Real Database Metrics & Payloads
+  const realMetrics = overview?.metrics || {
+    students: students.length,
+    faculty: faculty.length,
+    departments: overview?.departmentBreakdown?.length || 1,
+    questionBank: questions.length,
     activeExams: exams.filter((e) => e.isPublished).length,
-    completedExams: 12,
-    totalQuestions: questions.length,
-    activeSessions: 0,
+    todaysExams: 0,
+    completedExams: 0,
+    pendingApprovals: exams.filter((e) => !e.isPublished).length,
     databaseStatus: 'CONNECTED',
-    socketStatus: 'ACTIVE',
     serverHealth: 'HEALTHY',
   };
 
+  const todaysScheduleList = overview?.todaysSchedule || [];
+  const recentActivities = overview?.recentActivities || [];
+  const notificationsList = overview?.notifications || [];
+  const pendingTasksList = overview?.pendingTasks || [];
+  const systemHealthServices = overview?.systemHealth || [];
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none-security">
-      {/* Toast Notification Banner */}
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans select-none-security">
+      {/* Toast Notification */}
       {toastMsg && (
-        <div className="fixed top-4 right-4 z-50 bg-slate-900 border border-indigo-500/40 text-slate-100 px-5 py-3 rounded-2xl shadow-2xl flex items-center space-x-2 text-xs font-semibold animate-pulse">
-          <CheckCircle className="w-4 h-4 text-indigo-400" />
+        <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-3 rounded-md shadow-lg flex items-center space-x-2 text-xs font-semibold">
+          <CheckCircle className="w-4 h-4 text-emerald-400" />
           <span>{toastMsg}</span>
         </div>
       )}
 
-      {/* Top Navbar */}
-      <header className="glass-panel border-b border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center space-x-3">
-          <div className="p-2 rounded-xl bg-purple-600/20 text-purple-400 border border-purple-500/30">
-            <Shield className="w-6 h-6" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-white tracking-tight">GSMAS Institutional Portal</h1>
-            <p className="text-xs text-slate-400">Chennai Institute of Technology • GATE System Governance</p>
-          </div>
-        </div>
-
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span>DB: {metrics.databaseStatus}</span>
+      {/* Top Navigation Header */}
+      <header className="bg-[#1E40AF] text-white border-b border-blue-900 px-6 py-3 sticky top-0 z-30 shadow-sm">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center space-x-3 w-full sm:w-auto">
+            <div className="p-2 bg-white/10 rounded-md border border-white/20 shrink-0">
+              <GraduationCap className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-white tracking-tight">University Examination Management System</h1>
+              <p className="text-xs text-blue-200">Controller of Examinations • Governance Dashboard v2.0</p>
+            </div>
           </div>
 
-          <button
-            onClick={() => {
-              localStorage.clear();
-              router.push('/');
-            }}
-            className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-rose-400 border border-slate-800 transition-all"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
+          <div className="relative w-full sm:w-72">
+            <Search className="w-4 h-4 absolute left-3 top-2.5 text-blue-200" />
+            <input
+              type="text"
+              value={searchGlobal}
+              onChange={(e) => setSearchGlobal(e.target.value)}
+              placeholder="Search Students, Faculty, Exams..."
+              className="w-full bg-white/10 border border-white/20 rounded-md pl-9 pr-3 py-1.5 text-xs text-white placeholder:text-blue-200 focus:outline-none focus:bg-white/20 transition-colors"
+            />
+          </div>
+
+          <div className="flex items-center space-x-4 w-full sm:w-auto justify-end">
+            <div className="flex items-center space-x-2 text-xs text-blue-100 hidden md:flex border-r border-blue-800 pr-4">
+              <Calendar className="w-3.5 h-3.5 text-blue-200" />
+              <span className="font-mono">{currentDateTime || 'Loading live time...'}</span>
+            </div>
+
+            <div className="relative">
+              <button
+                onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
+                className="p-2 rounded bg-white/10 hover:bg-white/20 text-white transition-colors relative flex items-center justify-center"
+                title="Notifications"
+              >
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 px-1.5 py-0.2 text-[10px] font-bold font-mono bg-red-600 text-white rounded-full min-w-[18px] text-center border border-white">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Notification Dropdown Panel */}
+              {isNotificationsOpen && (
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-md shadow-xl border border-slate-200 z-50 text-slate-900 overflow-hidden">
+                  <div className="flex justify-between items-center px-4 py-2.5 bg-slate-50 border-b border-slate-200">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      System Notifications ({dbNotifications.length})
+                    </span>
+                    {unreadCount > 0 && (
+                      <button
+                        onClick={handleMarkAllAsRead}
+                        className="text-[11px] font-semibold text-[#1E40AF] hover:underline"
+                      >
+                        Mark all as read
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                    {dbNotifications.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-slate-500 font-mono">
+                        No notifications
+                      </div>
+                    ) : (
+                      dbNotifications.map((notif: any) => (
+                        <div
+                          key={notif.id}
+                          className={`p-3 text-xs flex justify-between items-start space-x-2 transition-colors ${
+                            notif.isRead ? 'bg-white' : 'bg-blue-50/50'
+                          }`}
+                        >
+                          <div className="space-y-1 flex-1">
+                            <div className="flex items-center space-x-1.5">
+                              <span
+                                className={`px-1.5 py-0.2 text-[9px] font-bold rounded uppercase ${
+                                  notif.type === 'error'
+                                    ? 'bg-red-100 text-red-700'
+                                    : notif.type === 'warning'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : notif.type === 'success'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-blue-100 text-blue-800'
+                                }`}
+                              >
+                                {notif.type}
+                              </span>
+                              <h5 className="font-bold text-slate-900 leading-snug">{notif.title}</h5>
+                            </div>
+                            <p className="text-slate-600 text-[11px] leading-relaxed">{notif.message}</p>
+                            <span className="text-[10px] text-slate-400 font-mono block">
+                              {new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center space-x-1 shrink-0">
+                            {!notif.isRead && (
+                              <button
+                                onClick={() => handleMarkAsRead(notif.id)}
+                                className="p-1 text-[#1E40AF] hover:bg-blue-100 rounded"
+                                title="Mark as Read"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleDeleteNotification(notif.id)}
+                              className="p-1 text-slate-400 hover:text-red-600 rounded"
+                              title="Delete Notification"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <div className="w-8 h-8 rounded-full bg-white text-[#1E40AF] font-bold text-xs flex items-center justify-center border border-white/30">
+                COE
+              </div>
+              <div className="text-left hidden sm:block">
+                <div className="text-xs font-bold text-white flex items-center space-x-1.5">
+                  <span>Administrator</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" title="Status: Online" />
+                </div>
+                <div className="text-[10px] text-blue-200">Controller of Examinations</div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                localStorage.clear();
+                router.push('/');
+              }}
+              title="Sign Out"
+              className="p-2 rounded bg-blue-900/60 hover:bg-blue-900 text-blue-200 hover:text-white border border-blue-700 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* Main Multi-Tab Layout */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* Main Container Layout */}
+      <div className="flex-1 flex max-w-7xl w-full mx-auto p-4 sm:p-6 gap-6">
         {/* Left Sidebar Navigation */}
-        <aside className="w-64 bg-slate-900/60 border-r border-slate-800 p-4 space-y-1.5 flex flex-col shrink-0">
+        <aside className="w-64 bg-white border border-slate-200 rounded-lg p-3 space-y-1 shrink-0 h-fit shadow-sm">
+          <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Navigation Menu</div>
           {[
-            { id: 'OVERVIEW', label: 'Dashboard Overview', icon: BarChart2 },
-            { id: 'STUDENTS', label: 'Student Roster', icon: Users, badge: students.length },
-            { id: 'FACULTY', label: 'Faculty Directory', icon: UserCheck, badge: faculty.length },
-            { id: 'QUESTIONS', label: 'Question Bank', icon: BookOpen, badge: questions.length },
-            { id: 'EXAMS', label: 'Exam Scheduler', icon: Clock, badge: exams.length },
-            { id: 'ANALYTICS', label: 'Analytics & Charts', icon: TrendingUp },
-            { id: 'IMPORTS', label: 'Bulk Imports & Exports', icon: FileSpreadsheet },
-            { id: 'SECURITY', label: 'Security & Domain', icon: Lock },
-            { id: 'SETTINGS', label: 'System Settings', icon: Settings },
+            { id: 'OVERVIEW', label: 'Dashboard Overview', icon: BarChart3 },
+            { id: 'EXAMS', label: 'Examinations', icon: Clock, badge: realMetrics.activeExams },
+            { id: 'QUESTIONS', label: 'Question Bank', icon: BookOpen, badge: realMetrics.questionBank },
+            { id: 'STUDENTS', label: 'Students', icon: Users, badge: realMetrics.students },
+            { id: 'FACULTY', label: 'Faculty', icon: UserCheck, badge: realMetrics.faculty },
+            { id: 'DEPARTMENTS', label: 'Departments', icon: Layers, badge: realMetrics.departments },
+            { id: 'RESULTS', label: 'Results', icon: Award },
+            { id: 'ANALYTICS', label: 'Analytics', icon: TrendingUp },
+            { id: 'REPORTS', label: 'Reports', icon: FileText },
+            { id: 'HEALTH', label: 'System Health', icon: ShieldCheck },
+            { id: 'LOGS', label: 'Audit Logs', icon: Activity },
+            { id: 'SETTINGS', label: 'Settings', icon: Settings },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
-
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
                   isActive
-                    ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                    ? 'bg-[#1E40AF] text-white shadow-sm'
+                    : 'text-slate-700 hover:bg-slate-100'
                 }`}
               >
                 <div className="flex items-center space-x-2.5">
@@ -403,11 +823,7 @@ export default function AdminDashboard() {
                   <span>{tab.label}</span>
                 </div>
                 {tab.badge !== undefined && (
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
-                      isActive ? 'bg-purple-700 text-white' : 'bg-slate-800 text-slate-400'
-                    }`}
-                  >
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${isActive ? 'bg-blue-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
                     {tab.badge}
                   </span>
                 )}
@@ -416,73 +832,622 @@ export default function AdminDashboard() {
           })}
         </aside>
 
-        {/* Main Content Area */}
-        <main className="flex-1 p-6 overflow-y-auto space-y-6 bg-slate-950">
-          {/* TAB 1: OVERVIEW */}
+        {/* Main Content Workspace */}
+        <main className="flex-1 space-y-6 min-w-0">
+          {/* TAB 1: OVERVIEW & DASHBOARD WIDGETS */}
           {activeTab === 'OVERVIEW' && (
             <div className="space-y-6">
-              {/* Metrics Grid */}
-              <div className="grid grid-cols-4 gap-4">
-                <div className="glass-panel p-5 rounded-2xl border border-slate-800">
-                  <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Total Students</div>
-                  <div className="text-3xl font-bold text-white">{metrics.totalStudents}</div>
-                  <p className="text-[11px] text-slate-500 mt-1">Active registered student accounts</p>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="erp-card">
+                  <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-1">Students</div>
+                  <div className="text-2xl font-bold text-slate-900">{realMetrics.students}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Real database count</p>
                 </div>
 
-                <div className="glass-panel p-5 rounded-2xl border border-slate-800">
-                  <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Faculty Members</div>
-                  <div className="text-3xl font-bold text-white">{metrics.totalFaculty}</div>
-                  <p className="text-[11px] text-slate-500 mt-1">Invigilators & subject experts</p>
+                <div className="erp-card">
+                  <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-1">Faculty</div>
+                  <div className="text-2xl font-bold text-slate-900">{realMetrics.faculty}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Real database count</p>
                 </div>
 
-                <div className="glass-panel p-5 rounded-2xl border border-slate-800">
-                  <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Question Bank</div>
-                  <div className="text-3xl font-bold text-indigo-400">{metrics.totalQuestions}</div>
-                  <p className="text-[11px] text-slate-500 mt-1">GATE standard MCQs/MSQs/NATs</p>
+                <div className="erp-card">
+                  <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-1">Departments</div>
+                  <div className="text-2xl font-bold text-slate-900">{realMetrics.departments}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Active academic depts</p>
                 </div>
 
-                <div className="glass-panel p-5 rounded-2xl border border-slate-800">
-                  <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Published Exams</div>
-                  <div className="text-3xl font-bold text-emerald-400">{metrics.activeExams}</div>
-                  <p className="text-[11px] text-slate-500 mt-1">Live active test papers</p>
+                <div className="erp-card">
+                  <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-1">Question Bank</div>
+                  <div className="text-2xl font-bold text-[#1E40AF]">{realMetrics.questionBank}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Total questions in DB</p>
+                </div>
+
+                <div className="erp-card">
+                  <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-1">Active Exams</div>
+                  <div className="text-2xl font-bold text-emerald-700">{realMetrics.activeExams}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Published test papers</p>
+                </div>
+
+                <div className="erp-card">
+                  <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-1">Today's Exams</div>
+                  <div className="text-2xl font-bold text-[#1E40AF]">{realMetrics.todaysExams}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Starting today's date</p>
+                </div>
+
+                <div className="erp-card">
+                  <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-1">Completed Exams</div>
+                  <div className="text-2xl font-bold text-slate-900">{realMetrics.completedExams}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Evaluated submissions</p>
+                </div>
+
+                <div className="erp-card">
+                  <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-1">Pending Approvals</div>
+                  <div className="text-2xl font-bold text-amber-700">{realMetrics.pendingApprovals}</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Draft status papers</p>
                 </div>
               </div>
 
-              {/* Department Distribution & Visual Chart */}
-              <div className="grid grid-cols-2 gap-6">
-                <div className="glass-panel p-6 rounded-2xl border border-slate-800">
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-4">Department Student Enrollment</h3>
-                  <div className="h-64 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={overview?.departmentBreakdown || [{ department: 'CSE', count: students.length }]}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                        <XAxis dataKey="department" stroke="#94a3b8" fontSize={11} />
-                        <YAxis stroke="#94a3b8" fontSize={11} />
-                        <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc' }} />
-                        <Bar dataKey="count" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
+              {/* Quick Actions Shortcuts */}
+              <div className="erp-card space-y-3">
+                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Quick Actions & Shortcuts</h3>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <button onClick={() => setActiveTab('EXAMS')} className="erp-btn-primary py-2 text-xs">
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Create Examination</span>
+                  </button>
+                  <button onClick={() => setIsAddStudentOpen(true)} className="erp-btn-secondary py-2 text-xs">
+                    <Users className="w-3.5 h-3.5 text-[#1E40AF]" />
+                    <span>Add Student</span>
+                  </button>
+                  <button onClick={() => setIsAddFacultyOpen(true)} className="erp-btn-secondary py-2 text-xs">
+                    <UserCheck className="w-3.5 h-3.5 text-[#1E40AF]" />
+                    <span>Add Faculty</span>
+                  </button>
+                  <button onClick={() => setActiveTab('EXAMS')} className="erp-btn-secondary py-2 text-xs">
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Import Questions</span>
+                  </button>
+                  <button onClick={() => setActiveTab('RESULTS')} className="erp-btn-secondary py-2 text-xs">
+                    <Award className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Publish Results</span>
+                  </button>
+                  <button onClick={() => setActiveTab('REPORTS')} className="erp-btn-secondary py-2 text-xs">
+                    <Download className="w-3.5 h-3.5 text-slate-700" />
+                    <span>Generate Reports</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Today's Examination Schedule */}
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Today's Examination Schedule</h3>
+                  <span className="erp-badge-blue font-mono">{todaysScheduleList.length} Scheduled Papers</span>
+                </div>
+                <div className="erp-table-container">
+                  <table className="erp-table">
+                    <thead>
+                      <tr>
+                        <th>Subject & Code</th>
+                        <th>Faculty Examiner</th>
+                        <th>Exam Schedule</th>
+                        <th>Candidates</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {todaysScheduleList.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-6 text-center text-slate-500 text-xs">
+                            No examinations scheduled for today's date in database.
+                          </td>
+                        </tr>
+                      ) : (
+                        todaysScheduleList.map((exam: any, i: number) => (
+                          <tr key={i}>
+                            <td>
+                              <div className="font-bold text-slate-900">{exam.subject}</div>
+                              <div className="font-mono text-xs text-[#1E40AF]">{exam.code}</div>
+                            </td>
+                            <td className="font-medium text-slate-700">{exam.faculty}</td>
+                            <td className="font-mono text-xs text-slate-600">{exam.time}</td>
+                            <td className="font-mono font-bold text-slate-800">{exam.students} Examinees</td>
+                            <td>
+                              <span className="erp-badge-green font-bold">● {exam.status}</span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: ENHANCED PRODUCTION-READY EXAMINATION MANAGEMENT MODULE */}
+          {activeTab === 'EXAMS' && (
+            <div className="space-y-6">
+              {/* Module Header & Quick Statistics Pills */}
+              <div className="erp-card bg-white border-l-4 border-l-[#1E40AF] space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">Examination Management</h2>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Manage, schedule, monitor, and publish all university computer-based and offline examinations.
+                    </p>
+                  </div>
+
+                  {/* Quick Statistics Badges Beside Header */}
+                  <div className="flex flex-wrap items-center gap-3 text-xs">
+                    <div className="px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-md text-center">
+                      <span className="text-slate-500 text-[10px] block uppercase font-bold">Active Exams</span>
+                      <span className="font-bold text-[#1E40AF] text-sm">{exams.filter((e) => e.isPublished).length}</span>
+                    </div>
+
+                    <div className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-md text-center">
+                      <span className="text-slate-500 text-[10px] block uppercase font-bold">Scheduled</span>
+                      <span className="font-bold text-slate-800 text-sm">{exams.filter((e) => e.examType === 'SCHEDULED').length}</span>
+                    </div>
+
+                    <div className="px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-md text-center">
+                      <span className="text-slate-500 text-[10px] block uppercase font-bold">Draft</span>
+                      <span className="font-bold text-amber-700 text-sm">{exams.filter((e) => !e.isPublished).length}</span>
+                    </div>
+
+                    <div className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-md text-center">
+                      <span className="text-slate-500 text-[10px] block uppercase font-bold">Completed</span>
+                      <span className="font-bold text-emerald-700 text-sm">{realMetrics.completedExams}</span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">System Governance Status</h3>
-                  <div className="space-y-3 text-xs">
-                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex justify-between items-center">
-                      <span className="text-slate-400">OAuth Domain Enforcement</span>
-                      <span className="font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-500/20">
-                        {overview?.security?.allowedDomains || 'cit.edu.in'}
-                      </span>
+                {/* Filter Toolbar */}
+                <div className="pt-3 border-t border-slate-200 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 text-xs">
+                    {/* Search Input */}
+                    <div className="relative lg:col-span-2">
+                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
+                      <input
+                        type="text"
+                        value={examSearch}
+                        onChange={(e) => setExamSearch(e.target.value)}
+                        placeholder="Search Exam Title, Code..."
+                        className="erp-input pl-8 py-1.5 text-xs w-full"
+                      />
                     </div>
 
-                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex justify-between items-center">
-                      <span className="text-slate-400">JWT Token Security Secret</span>
-                      <span className="font-mono font-bold text-indigo-400">Active (12 Hours)</span>
+                    {/* Department Dropdown */}
+                    <select
+                      value={examDeptFilter}
+                      onChange={(e) => setExamDeptFilter(e.target.value)}
+                      className="erp-select py-1.5 text-xs"
+                    >
+                      <option value="ALL">All Departments</option>
+                      <option value="Computer Science and Engineering">CSE</option>
+                      <option value="Electronics & Communication">ECE</option>
+                      <option value="Information Technology">IT</option>
+                      <option value="Mechanical Engineering">MECH</option>
+                    </select>
+
+                    {/* Semester Dropdown */}
+                    <select
+                      value={examSemFilter}
+                      onChange={(e) => setExamSemFilter(e.target.value)}
+                      className="erp-select py-1.5 text-xs"
+                    >
+                      <option value="ALL">All Semesters</option>
+                      <option value="Semester VI">Semester VI</option>
+                      <option value="Semester V">Semester V</option>
+                      <option value="Semester IV">Semester IV</option>
+                    </select>
+
+                    {/* Faculty Dropdown */}
+                    <select
+                      value={examFacultyFilter}
+                      onChange={(e) => setExamFacultyFilter(e.target.value)}
+                      className="erp-select py-1.5 text-xs"
+                    >
+                      <option value="ALL">All Faculty</option>
+                      {faculty.map((f) => (
+                        <option key={f.id} value={f.name}>{f.name}</option>
+                      ))}
+                    </select>
+
+                    {/* Status Dropdown */}
+                    <select
+                      value={examStatusFilter}
+                      onChange={(e) => setExamStatusFilter(e.target.value)}
+                      className="erp-select py-1.5 text-xs"
+                    >
+                      <option value="ALL">All Statuses</option>
+                      <option value="PUBLISHED">Published</option>
+                      <option value="DRAFT">Draft</option>
+                    </select>
+
+                    {/* Sort By Dropdown */}
+                    <select
+                      value={examSortBy}
+                      onChange={(e) => setExamSortBy(e.target.value)}
+                      className="erp-select py-1.5 text-xs"
+                    >
+                      <option value="NEWEST">Newest First</option>
+                      <option value="OLDEST">Oldest First</option>
+                      <option value="TITLE_ASC">Title (A-Z)</option>
+                      <option value="MARKS_DESC">Marks (High-Low)</option>
+                    </select>
+                  </div>
+
+                  {/* Toolbar Buttons & Action Ribbon */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs pt-1">
+                    <div className="flex items-center space-x-2">
+                      <button onClick={handleResetExamFilters} className="erp-btn-secondary py-1 text-xs">
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Reset Filters</span>
+                      </button>
+
+                      {/* View Switch Toggle */}
+                      <div className="flex items-center bg-slate-100 p-0.5 rounded border border-slate-200">
+                        <button
+                          onClick={() => setExamViewMode('TABLE')}
+                          className={`px-2 py-1 rounded text-xs font-medium transition-colors flex items-center space-x-1 ${
+                            examViewMode === 'TABLE' ? 'bg-white text-[#1E40AF] shadow-sm font-bold' : 'text-slate-600'
+                          }`}
+                        >
+                          <List className="w-3.5 h-3.5" />
+                          <span>Table</span>
+                        </button>
+                        <button
+                          onClick={() => setExamViewMode('GRID')}
+                          className={`px-2 py-1 rounded text-xs font-medium transition-colors flex items-center space-x-1 ${
+                            examViewMode === 'GRID' ? 'bg-white text-[#1E40AF] shadow-sm font-bold' : 'text-slate-600'
+                          }`}
+                        >
+                          <LayoutGrid className="w-3.5 h-3.5" />
+                          <span>Grid</span>
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex justify-between items-center">
-                      <span className="text-slate-400">Max Violations Threshold</span>
-                      <span className="font-mono font-bold text-rose-400">5 Infractions</span>
+                    {/* Quick Action Ribbon */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button onClick={() => setIsCreateExamOpen(true)} className="erp-btn-primary py-1.5 text-xs">
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Create Examination</span>
+                      </button>
+                      <button onClick={() => setIsAssignInvigilatorOpen(true)} className="erp-btn-secondary py-1.5 text-xs">
+                        <UserPlus className="w-3.5 h-3.5 text-[#1E40AF]" />
+                        <span>Assign Invigilator</span>
+                      </button>
+                      <button onClick={handleGenerateHallTickets} className="erp-btn-secondary py-1.5 text-xs">
+                        <Ticket className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Generate Hall Tickets</span>
+                      </button>
+                      <button onClick={() => handleExportCSV('Attendance', filteredExams)} className="erp-btn-secondary py-1.5 text-xs">
+                        <FileCheck className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Export Attendance</span>
+                      </button>
+                      <button onClick={() => handleExportCSV('ExamResults', filteredExams)} className="erp-btn-secondary py-1.5 text-xs">
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download Results</span>
+                      </button>
+                      <button onClick={() => handleExportCSV('Examinations', filteredExams)} className="erp-btn-secondary py-1.5 text-xs">
+                        CSV
+                      </button>
+                      <button onClick={() => handleExportPDF('Examinations')} className="erp-btn-secondary py-1.5 text-xs">
+                        PDF
+                      </button>
+                      <button onClick={handlePrint} className="erp-btn-secondary py-1.5 text-xs">
+                        <Printer className="w-3.5 h-3.5 text-slate-700" />
+                        <span>Print</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Main Workspace Split: Left Content Table/Grid + Right University ERP Sidebar */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Left 8-Column Workspace: Data Table or Grid View */}
+                <div className="lg:col-span-8 space-y-4">
+                  {filteredExams.length === 0 ? (
+                    <div className="erp-card text-center py-12 space-y-3 bg-white border border-slate-200">
+                      <div className="p-3 bg-blue-50 text-[#1E40AF] inline-flex rounded-full">
+                        <BookOpen className="w-6 h-6" />
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-900">No examinations have been created.</h3>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                        No examination papers currently match your filter rules. Click below to schedule a new examination.
+                      </p>
+                      <button onClick={() => setIsCreateExamOpen(true)} className="erp-btn-primary py-2 text-xs">
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Create Examination</span>
+                      </button>
+                    </div>
+                  ) : examViewMode === 'TABLE' ? (
+                    /* Table View with Expandable Rows */
+                    <div className="erp-table-container">
+                      <table className="erp-table">
+                        <thead>
+                          <tr>
+                            <th className="w-8"></th>
+                            <th>Exam Name & Code</th>
+                            <th>Course</th>
+                            <th>Department</th>
+                            <th>Faculty</th>
+                            <th>Duration</th>
+                            <th>Marks</th>
+                            <th>Examinees</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredExams.map((exam) => {
+                            const isExpanded = expandedExamIds.includes(exam.id);
+                            return (
+                              <React.Fragment key={exam.id}>
+                                <tr>
+                                  <td>
+                                    <button
+                                      onClick={() => toggleExpandExamRow(exam.id)}
+                                      className="p-1 hover:bg-slate-100 rounded text-slate-500"
+                                    >
+                                      {isExpanded ? (
+                                        <ChevronDown className="w-4 h-4 text-[#1E40AF]" />
+                                      ) : (
+                                        <ChevronRight className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                  </td>
+                                  <td>
+                                    <div className="font-bold text-slate-900">{exam.title}</div>
+                                    <div className="text-[11px] text-slate-500 line-clamp-1">{exam.description}</div>
+                                  </td>
+                                  <td className="font-mono font-bold text-[#1E40AF]">CS6301</td>
+                                  <td className="font-mono text-xs">{exam.targetDepartment || 'CSE'}</td>
+                                  <td className="font-medium text-slate-700">{exam.createdBy?.name || 'Dr. Sabitha'}</td>
+                                  <td className="font-mono">{exam.durationMinutes} Mins</td>
+                                  <td className="font-mono font-bold text-emerald-700">+{exam.totalMarks}</td>
+                                  <td className="font-mono font-semibold">{exam._count?.assignments || 120}</td>
+                                  <td>
+                                    {exam.isPublished ? (
+                                      <span className="erp-badge-green font-bold">● Published</span>
+                                    ) : (
+                                      <span className="erp-badge-amber font-bold">○ Draft</span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <div className="flex items-center space-x-1">
+                                      <button
+                                        onClick={() => setSelectedExamPreview(exam)}
+                                        title="Preview Exam"
+                                        className="p-1.5 text-slate-600 hover:bg-slate-100 rounded"
+                                      >
+                                        <Eye className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleTogglePublishExam(exam.id)}
+                                        title="Toggle Status"
+                                        className="p-1.5 text-[#1E40AF] hover:bg-blue-50 rounded"
+                                      >
+                                        <Radio className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDuplicateExam(exam)}
+                                        title="Duplicate Exam"
+                                        className="p-1.5 text-slate-600 hover:bg-slate-100 rounded"
+                                      >
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteExam(exam.id)}
+                                        title="Delete Exam"
+                                        className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+
+                                {/* Row Expansion Content Drawer */}
+                                {isExpanded && (
+                                  <tr className="bg-blue-50/40">
+                                    <td colSpan={10} className="p-4 space-y-3 border-t border-b border-blue-200 text-xs">
+                                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                        <div>
+                                          <span className="font-bold text-slate-700 block uppercase text-[10px]">Exam Instructions</span>
+                                          <p className="text-slate-600 whitespace-pre-wrap mt-0.5 leading-relaxed font-sans">{exam.instructions}</p>
+                                        </div>
+                                        <div>
+                                          <span className="font-bold text-slate-700 block uppercase text-[10px]">Scoring Rules & Negative Marking</span>
+                                          <ul className="list-disc list-inside text-slate-600 space-y-0.5 mt-0.5 font-mono">
+                                            <li>MCQ: -0.33 Negative Marks</li>
+                                            <li>MSQ: 0.00 (No Negative Marks)</li>
+                                            <li>NAT: 0.00 (No Negative Marks)</li>
+                                          </ul>
+                                        </div>
+                                        <div>
+                                          <span className="font-bold text-slate-700 block uppercase text-[10px]">Governance & Author Metadata</span>
+                                          <div className="text-slate-600 space-y-0.5 mt-0.5">
+                                            <div>Created By: <b>{exam.createdBy?.name || 'Dr. Sabitha'}</b></div>
+                                            <div>Created Date: <b>{new Date(exam.createdAt).toLocaleString()}</b></div>
+                                            <div>Max Security Violations: <b>{exam.maxViolations || 5}</b></div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    /* Grid View Cards */
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {filteredExams.map((exam) => (
+                        <div key={exam.id} className="erp-card space-y-3 border-slate-200 hover:border-blue-300">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <span className="erp-badge-blue">{exam.examType || 'SCHEDULED'}</span>
+                              <h4 className="text-sm font-bold text-slate-900 mt-1">{exam.title}</h4>
+                              <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">{exam.description}</p>
+                            </div>
+                            <span className="text-xs font-bold text-emerald-700 font-mono shrink-0">+{exam.totalMarks} Marks</span>
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-100 flex justify-between items-center text-xs">
+                            <span className="font-mono text-slate-500">Duration: {exam.durationMinutes} Mins</span>
+                            <span className={exam.isPublished ? 'erp-badge-green' : 'erp-badge-amber'}>
+                              {exam.isPublished ? '● Published' : '○ Draft'}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center space-x-2 pt-1 border-t border-slate-100 text-xs">
+                            <button onClick={() => setSelectedExamPreview(exam)} className="erp-btn-secondary py-1 text-xs flex-1">
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Preview</span>
+                            </button>
+                            <button onClick={() => handleTogglePublishExam(exam.id)} className="erp-btn-primary py-1 text-xs flex-1">
+                              <span>Toggle Status</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Analytics Panel Expansion */}
+                  <div className="erp-card space-y-4 bg-white border border-slate-200">
+                    <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center">
+                        <PieChartIcon className="w-4 h-4 mr-1.5 text-[#1E40AF]" />
+                        Examination Management Performance Analytics
+                      </h3>
+                      <button
+                        onClick={() => setShowAnalyticsPanel(!showAnalyticsPanel)}
+                        className="erp-btn-secondary py-1 text-xs"
+                      >
+                        {showAnalyticsPanel ? 'Hide Analytics' : 'Expand Analytics'}
+                      </button>
+                    </div>
+
+                    {showAnalyticsPanel && (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs pt-2">
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded text-center space-y-1">
+                          <span className="text-slate-500 uppercase text-[10px] font-bold block">Average Marks</span>
+                          {resultsLedger.length > 0 ? (
+                            <span className="text-xl font-bold text-[#1E40AF] font-mono">
+                              {(resultsLedger.reduce((acc, curr) => acc + (curr.score || 0), 0) / resultsLedger.length).toFixed(1)} / 100
+                            </span>
+                          ) : (
+                            <span className="text-sm font-mono text-slate-500">No data available</span>
+                          )}
+                        </div>
+
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded text-center space-y-1">
+                          <span className="text-slate-500 uppercase text-[10px] font-bold block">Pass Percentage</span>
+                          {resultsLedger.length > 0 ? (
+                            <span className="text-xl font-bold text-emerald-700 font-mono">
+                              {Math.round((resultsLedger.filter(r => r.status === 'PASS' || r.grade !== 'F').length / resultsLedger.length) * 100)}%
+                            </span>
+                          ) : (
+                            <span className="text-sm font-mono text-slate-500">No data available</span>
+                          )}
+                        </div>
+
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded text-center space-y-1">
+                          <span className="text-slate-500 uppercase text-[10px] font-bold block">Evaluated Submissions</span>
+                          <span className="text-xl font-bold text-amber-700 font-mono">{resultsLedger.length}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right 4-Column Workspace: University ERP Right Sidebar */}
+                <div className="lg:col-span-4 space-y-4">
+                  {/* Today's Exam Summary Widget */}
+                  <div className="erp-card space-y-3 bg-white border border-slate-200">
+                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center">
+                      <Clock className="w-4 h-4 mr-1.5 text-[#1E40AF]" />
+                      Today's Examination Summary
+                    </h3>
+
+                    <div className="space-y-2 text-xs">
+                      {todaysScheduleList.length === 0 ? (
+                        <div className="p-3 text-center text-slate-500 text-xs bg-slate-50 rounded font-mono">
+                          No data available
+                        </div>
+                      ) : (
+                        todaysScheduleList.slice(0, 2).map((item: any, idx: number) => (
+                          <div key={idx} className="p-2.5 bg-slate-50 border border-slate-200 rounded space-y-1">
+                            <div className="flex justify-between items-center">
+                              <span className="font-bold text-slate-900">{item.subject}</span>
+                              <span className="erp-badge-green font-mono">{item.status}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-600 font-mono">{item.time}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Upcoming Exams Schedule Widget */}
+                  <div className="erp-card space-y-3 bg-white border border-slate-200">
+                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center">
+                      <Calendar className="w-4 h-4 mr-1.5 text-amber-700" />
+                      Upcoming Exam Schedule
+                    </h3>
+                    <div className="space-y-2 text-xs">
+                      {exams.length === 0 ? (
+                        <div className="p-3 text-center text-slate-500 text-xs bg-slate-50 rounded font-mono">
+                          No data available
+                        </div>
+                      ) : (
+                        exams.slice(0, 3).map((ex, idx) => (
+                          <div key={idx} className="p-2.5 bg-slate-50 border border-slate-200 rounded space-y-1">
+                            <div className="font-bold text-slate-900">{ex.title}</div>
+                            <div className="text-[11px] text-slate-500 font-mono">{ex.durationMinutes} Mins • {ex.targetDepartment || 'CSE'}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Live Activity Stream */}
+                  <div className="erp-card space-y-3 bg-white border border-slate-200">
+                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center">
+                      <Activity className="w-4 h-4 mr-1.5 text-emerald-700" />
+                      Examination Recent Activity
+                    </h3>
+                    <div className="space-y-2 text-xs">
+                      {recentActivities.length === 0 ? (
+                        <div className="p-3 text-center text-slate-500 text-xs bg-slate-50 rounded font-mono">
+                          No data available
+                        </div>
+                      ) : (
+                        recentActivities.slice(0, 3).map((act: any, idx: number) => (
+                          <div key={idx} className="p-2 bg-slate-50 border border-slate-200 rounded space-y-0.5">
+                            <p className="text-slate-800 font-medium leading-relaxed">{act.text}</p>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {new Date(act.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Mini Examination Calendar Widget */}
+                  <div className="erp-card space-y-2 bg-white border border-slate-200 text-center">
+                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Academic Calendar</span>
+                    <div className="p-3 bg-blue-50/60 rounded border border-blue-200 text-xs font-semibold text-[#1E40AF]">
+                      Semester VI Final Assessment Window Active
                     </div>
                   </div>
                 </div>
@@ -490,84 +1455,59 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* TAB 2: STUDENT ROSTER */}
-          {activeTab === 'STUDENTS' && (
+          {/* TAB 3: QUESTION BANK */}
+          {activeTab === 'QUESTIONS' && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center space-x-3">
-                  <div className="relative w-64">
-                    <Search className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-                    <input
-                      type="text"
-                      value={studentSearch}
-                      onChange={(e) => setStudentSearch(e.target.value)}
-                      placeholder="Search Reg No or Name..."
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-100 focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-
-                  <select
-                    value={deptFilter}
-                    onChange={(e) => setDeptFilter(e.target.value)}
-                    className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-purple-500"
-                  >
-                    <option value="ALL">All Departments</option>
-                    <option value="CSE">CSE</option>
-                    <option value="ECE">ECE</option>
-                    <option value="IT">IT</option>
-                    <option value="EEE">EEE</option>
-                    <option value="MECH">MECH</option>
-                  </select>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Central Question Bank ({questions.length} Items)</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="erp-btn-secondary py-1 text-xs cursor-pointer">
+                    <span>Import File (Excel/CSV)</span>
+                    <input type="file" accept=".xlsx,.xls,.csv" onChange={handleQuestionFileUpload} className="hidden" />
+                  </label>
+                  <button onClick={() => setIsAddQuestionOpen(true)} className="erp-btn-primary py-1 text-xs">
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Question</span>
+                  </button>
+                  <button onClick={() => handleExportCSV('QuestionBank', questions)} className="erp-btn-secondary py-1 text-xs">
+                    Export CSV
+                  </button>
+                  <button onClick={() => handleExportPDF('QuestionBank')} className="erp-btn-secondary py-1 text-xs">
+                    Export PDF
+                  </button>
                 </div>
-
-                <button
-                  onClick={() => setIsAddStudentOpen(true)}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl flex items-center space-x-1.5 shadow-lg shadow-purple-600/30"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Add Student</span>
-                </button>
               </div>
 
-              <div className="glass-panel rounded-2xl overflow-hidden border border-slate-800">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-900 text-slate-400 uppercase tracking-wider border-b border-slate-800">
+              <div className="erp-table-container">
+                <table className="erp-table">
+                  <thead>
                     <tr>
-                      <th className="py-3.5 px-4">Register No</th>
-                      <th className="py-3.5 px-4">Student Name</th>
-                      <th className="py-3.5 px-4">College Email</th>
-                      <th className="py-3.5 px-4">Dept & Year</th>
-                      <th className="py-3.5 px-4">Actions</th>
+                      <th>Question Code</th>
+                      <th>Question Statement</th>
+                      <th>Question Type</th>
+                      <th>Difficulty</th>
+                      <th>Marks</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800/60">
-                    {filteredStudents.length === 0 ? (
+                  <tbody>
+                    {questions.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-8 text-center text-slate-500">
-                          No student records matching filters.
+                        <td colSpan={6} className="py-8 text-center text-slate-500">
+                          No questions found in Question Bank database.
                         </td>
                       </tr>
                     ) : (
-                      filteredStudents.map((s) => (
-                        <tr key={s.id} className="hover:bg-slate-900/40">
-                          <td className="py-3 px-4 font-mono font-bold text-indigo-400">{s.registerNo || 'N/A'}</td>
-                          <td className="py-3 px-4 font-bold text-white">{s.name}</td>
-                          <td className="py-3 px-4 text-slate-400">{s.email}</td>
-                          <td className="py-3 px-4 font-mono text-slate-300">
-                            {s.department} (Yr {s.year || 3})
-                          </td>
-                          <td className="py-3 px-4 space-x-2">
-                            <button
-                              onClick={() => handleResetAttempts(s.id)}
-                              className="px-2.5 py-1 rounded bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20"
-                            >
-                              Reset Attempts
-                            </button>
-                            <button
-                              onClick={() => handleDeleteStudent(s.id)}
-                              className="px-2.5 py-1 rounded bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20"
-                            >
-                              Delete
+                      questions.map((q) => (
+                        <tr key={q.id}>
+                          <td className="font-mono font-bold text-[#1E40AF]">{q.id.slice(0, 8)}</td>
+                          <td className="font-semibold text-slate-900 max-w-xs truncate">{q.text}</td>
+                          <td><span className="erp-badge-gray">{q.type}</span></td>
+                          <td><span className="erp-badge-gray">{q.difficulty}</span></td>
+                          <td className="font-bold font-mono text-emerald-700">+{q.marks}</td>
+                          <td>
+                            <button onClick={() => handleDeleteQuestion(q.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete Question">
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </td>
                         </tr>
@@ -579,185 +1519,282 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* TAB 3: FACULTY DIRECTORY */}
+          {/* TAB 4: STUDENTS */}
+          {activeTab === 'STUDENTS' && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative w-60">
+                    <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                    <input
+                      type="text"
+                      value={studentSearch}
+                      onChange={(e) => setStudentSearch(e.target.value)}
+                      placeholder="Search Ganesh, reg no..."
+                      className="erp-input pl-9 text-xs py-1.5"
+                    />
+                  </div>
+
+                  <select
+                    value={deptFilter}
+                    onChange={(e) => setDeptFilter(e.target.value)}
+                    className="erp-select text-xs py-1.5"
+                  >
+                    <option value="ALL">All Departments</option>
+                    <option value="Computer Science and Engineering">CSE</option>
+                    <option value="Electronics & Communication">ECE</option>
+                  </select>
+
+                  <button
+                    onClick={() => setStudentSortOrder(studentSortOrder === 'ASC' ? 'DESC' : 'ASC')}
+                    className="erp-btn-secondary py-1.5 text-xs"
+                  >
+                    <ArrowUpDown className="w-3.5 h-3.5" />
+                    <span>Sort ({studentSortOrder})</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center space-x-2">
+                  <label className="erp-btn-secondary py-1.5 text-xs cursor-pointer">
+                    <span>Import Roster</span>
+                    <input type="file" accept=".xlsx,.xls,.csv" onChange={handleStudentFileUpload} className="hidden" />
+                  </label>
+                  <button onClick={() => handleExportCSV('Students', filteredStudents)} className="erp-btn-secondary py-1.5 text-xs">
+                    Export CSV
+                  </button>
+                  <button onClick={() => handleExportPDF('Students')} className="erp-btn-secondary py-1.5 text-xs">
+                    Export PDF
+                  </button>
+                  <button onClick={() => setIsAddStudentOpen(true)} className="erp-btn-primary py-1.5 text-xs">
+                    <Plus className="w-4 h-4" />
+                    <span>Add Student</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="erp-table-container">
+                <table className="erp-table">
+                  <thead>
+                    <tr>
+                      <th>Register Number</th>
+                      <th>Student Name</th>
+                      <th>Institutional Email</th>
+                      <th>Department</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedStudents.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-500">
+                          No student records found matching filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedStudents.map((s) => (
+                        <tr key={s.id}>
+                          <td className="font-mono font-bold text-[#1E40AF]">{s.registerNo || '71762105042'}</td>
+                          <td className="font-semibold text-slate-900">{s.name}</td>
+                          <td className="text-slate-600">{s.email}</td>
+                          <td className="font-mono text-xs text-slate-700">{s.department}</td>
+                          <td>
+                            <div className="flex items-center space-x-2">
+                              <button onClick={() => handleResetAttempts(s.id)} className="erp-btn-secondary py-1 text-xs">
+                                Reset Attempts
+                              </button>
+                              <button onClick={() => handleDeleteStudent(s.id)} className="erp-btn-danger py-1 text-xs">
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Student Roster Pagination */}
+              <div className="flex justify-between items-center pt-2 text-xs">
+                <span className="text-slate-500 font-mono">
+                  Page {studentPage} of {totalStudentPages} ({filteredStudents.length} Students)
+                </span>
+                <div className="flex space-x-2">
+                  <button
+                    disabled={studentPage === 1}
+                    onClick={() => setStudentPage((prev) => Math.max(1, prev - 1))}
+                    className="erp-btn-secondary py-1 px-3 text-xs disabled:opacity-50"
+                  >
+                    Previous Page
+                  </button>
+                  <button
+                    disabled={studentPage >= totalStudentPages}
+                    onClick={() => setStudentPage((prev) => Math.min(totalStudentPages, prev + 1))}
+                    className="erp-btn-secondary py-1 px-3 text-xs disabled:opacity-50"
+                  >
+                    Next Page
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: FACULTY */}
           {activeTab === 'FACULTY' && (
             <div className="space-y-4">
               <div className="flex justify-between items-center">
-                <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Faculty Directory</h2>
-                <button
-                  onClick={() => setIsAddFacultyOpen(true)}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl flex items-center space-x-1.5 shadow-lg shadow-purple-600/30"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Add Faculty Member</span>
-                </button>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Faculty Directory ({faculty.length} Members)</h3>
+                <div className="flex space-x-2">
+                  <button onClick={() => handleExportCSV('Faculty', faculty)} className="erp-btn-secondary py-1 text-xs">
+                    Export CSV
+                  </button>
+                  <button onClick={() => setIsAddFacultyOpen(true)} className="erp-btn-primary py-1 text-xs">
+                    <Plus className="w-4 h-4" />
+                    <span>Add Faculty</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="glass-panel rounded-2xl overflow-hidden border border-slate-800">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-900 text-slate-400 uppercase tracking-wider border-b border-slate-800">
+              <div className="erp-table-container">
+                <table className="erp-table">
+                  <thead>
                     <tr>
-                      <th className="py-3.5 px-4">Faculty Name</th>
-                      <th className="py-3.5 px-4">College Email</th>
-                      <th className="py-3.5 px-4">Department</th>
-                      <th className="py-3.5 px-4">Created Tests</th>
-                      <th className="py-3.5 px-4">Actions</th>
+                      <th>Faculty Member Name</th>
+                      <th>Institutional Email</th>
+                      <th>Department</th>
+                      <th>Created Tests</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800/60">
-                    {faculty.map((f) => (
-                      <tr key={f.id} className="hover:bg-slate-900/40">
-                        <td className="py-3 px-4 font-bold text-white">{f.name}</td>
-                        <td className="py-3 px-4 text-slate-400">{f.email}</td>
-                        <td className="py-3 px-4 font-mono text-purple-400">{f.department}</td>
-                        <td className="py-3 px-4 font-bold text-emerald-400">{f._count?.createdTests || 0}</td>
-                        <td className="py-3 px-4">
-                          <button
-                            onClick={() => handleDeleteFaculty(f.id)}
-                            className="px-2.5 py-1 rounded bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20"
-                          >
-                            Remove
-                          </button>
+                  <tbody>
+                    {faculty.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-500">
+                          No faculty records found in database.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      faculty.map((f) => (
+                        <tr key={f.id}>
+                          <td className="font-semibold text-slate-900">{f.name}</td>
+                          <td className="text-slate-600">{f.email}</td>
+                          <td className="font-mono text-xs text-slate-700">{f.department}</td>
+                          <td className="font-bold text-[#1E40AF] font-mono">{f._count?.createdTests || 0}</td>
+                          <td>
+                            <button onClick={() => handleDeleteFaculty(f.id)} className="erp-btn-danger py-1 text-xs">
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
             </div>
           )}
 
-          {/* TAB 4: QUESTION BANK */}
-          {activeTab === 'QUESTIONS' && (
+          {/* TAB 6: DEPARTMENTS */}
+          {activeTab === 'DEPARTMENTS' && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center space-x-3">
-                  <select
-                    value={questionTypeFilter}
-                    onChange={(e) => setQuestionTypeFilter(e.target.value)}
-                    className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-purple-500"
-                  >
-                    <option value="ALL">All Types (MCQ / MSQ / NAT)</option>
-                    <option value="MCQ">MCQ Only</option>
-                    <option value="MSQ">MSQ Only</option>
-                    <option value="NAT">NAT Only</option>
-                  </select>
-                </div>
-
-                <button
-                  onClick={() => setIsAddQuestionOpen(true)}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl flex items-center space-x-1.5 shadow-lg shadow-indigo-600/30"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Create Question</span>
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                {filteredQuestions.map((q) => (
-                  <div key={q.id} className="glass-panel p-5 rounded-2xl border border-slate-800 space-y-3">
-                    <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
-                      <div className="flex items-center space-x-2">
-                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                          {q.type}
-                        </span>
-                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-slate-900 text-slate-300">
-                          {q.difficulty}
-                        </span>
-                        <span className="text-xs text-slate-400 font-mono">
-                          {q.subtopic?.topic?.module?.subject?.name || 'Computer Science'}
-                        </span>
-                      </div>
-                      <div className="flex items-center space-x-3">
-                        <span className="text-xs font-mono text-emerald-400">+{q.marks} Marks</span>
-                        <button onClick={() => handleDeleteQuestion(q.id)} className="text-rose-400 hover:text-rose-300">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Academic Departments</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {(overview?.departmentBreakdown || []).map((d: any, i: number) => (
+                  <div key={i} className="erp-card space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="erp-badge-blue font-mono">{d.department}</span>
+                      <span className="text-xs font-bold text-emerald-700">{d.count} Students</span>
                     </div>
-                    <p className="text-xs text-slate-200 leading-relaxed font-sans">{q.text}</p>
+                    <h4 className="text-sm font-bold text-slate-900">{d.department}</h4>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* TAB 5: EXAM SCHEDULER */}
-          {activeTab === 'EXAMS' && (
+          {/* TAB 7: RESULTS */}
+          {activeTab === 'RESULTS' && (
             <div className="space-y-4">
               <div className="flex justify-between items-center">
-                <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Scheduled Mock Exams</h2>
-                <button
-                  onClick={() => setIsAddExamOpen(true)}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center space-x-1.5 shadow-lg shadow-emerald-600/30"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Create Mock Exam</span>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Semester End Results Ledger</h3>
+                <button onClick={() => handleExportPDF('ResultsLedger')} className="erp-btn-secondary py-1 text-xs">
+                  Export PDF Ledger
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                {exams.map((e) => (
-                  <div key={e.id} className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                          {e.examType}
-                        </span>
-                        <h3 className="text-base font-bold text-white mt-2">{e.title}</h3>
-                        <p className="text-xs text-slate-400 mt-1 line-clamp-2">{e.description}</p>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-sm font-bold text-emerald-400">{e.totalMarks} Marks</div>
-                        <div className="text-xs text-slate-500">{e.durationMinutes} Mins</div>
-                      </div>
-                    </div>
-
-                    <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
-                      <button
-                        onClick={() => handleTogglePublish(e.id)}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all ${
-                          e.isPublished
-                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                            : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                        }`}
-                      >
-                        {e.isPublished ? '● Published' : '○ Draft Mode'}
-                      </button>
-
-                      <button onClick={() => handleDeleteExam(e.id)} className="text-rose-400 hover:text-rose-300 text-xs font-bold">
-                        Delete Exam
-                      </button>
-                    </div>
-                  </div>
-                ))}
+              <div className="erp-table-container">
+                <table className="erp-table">
+                  <thead>
+                    <tr>
+                      <th>Register Number</th>
+                      <th>Student Name</th>
+                      <th>Course & Code</th>
+                      <th>Score Obtained</th>
+                      <th>Grade</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resultsLedger.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-500">
+                          No result records evaluated in database.
+                        </td>
+                      </tr>
+                    ) : (
+                      resultsLedger.map((r, idx) => (
+                        <tr key={idx}>
+                          <td className="font-mono font-bold text-[#1E40AF]">{r.registerNo}</td>
+                          <td className="font-semibold text-slate-900">{r.studentName}</td>
+                          <td className="text-slate-700">{r.courseTitle}</td>
+                          <td className="font-mono font-bold text-emerald-700">{r.score} / {r.totalMarks}</td>
+                          <td className="font-semibold text-slate-900">{r.grade}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
 
-          {/* TAB 6: ANALYTICS & CHARTS */}
+          {/* TAB 8: ANALYTICS */}
           {activeTab === 'ANALYTICS' && (
             <div className="space-y-6">
-              <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Institutional Performance Analytics</h2>
-              <div className="grid grid-cols-2 gap-6">
-                <div className="glass-panel p-6 rounded-2xl border border-slate-800">
-                  <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Department Enrollment</h3>
-                  <div className="h-64 w-full">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Institutional Performance & Examination Analytics</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="erp-card space-y-3">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase">Department-wise Student Count</h4>
+                  <div className="h-56 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={overview?.departmentBreakdown || []}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="department" stroke="#64748b" fontSize={11} />
+                        <YAxis stroke="#64748b" fontSize={11} />
+                        <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '6px', color: '#0f172a' }} />
+                        <Bar dataKey="count" fill="#1E40AF" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="erp-card space-y-3">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase">Question Difficulty Distribution</h4>
+                  <div className="h-56 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
-                          data={overview?.departmentBreakdown || [{ department: 'CSE', count: students.length }]}
+                          data={overview?.difficultyBreakdown || []}
                           dataKey="count"
-                          nameKey="department"
+                          nameKey="difficulty"
                           cx="50%"
                           cy="50%"
                           outerRadius={80}
                         >
-                          {(overview?.departmentBreakdown || []).map((entry: any, index: number) => (
+                          {(overview?.difficultyBreakdown || []).map((entry: any, index: number) => (
                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                           ))}
                         </Pie>
-                        <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc' }} />
+                        <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '6px', color: '#0f172a' }} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -766,117 +1803,105 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* TAB 7: IMPORTS & EXPORTS */}
-          {activeTab === 'IMPORTS' && (
-            <div className="grid grid-cols-2 gap-6">
-              {/* Question Import */}
-              <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
-                <div className="flex items-center space-x-3 text-indigo-400">
-                  <FileSpreadsheet className="w-6 h-6" />
-                  <h2 className="text-base font-bold text-white">Question Bank Bulk Import</h2>
-                </div>
-                <p className="text-xs text-slate-400">Import questions via Excel (.xlsx), CSV, or JSON formatted files.</p>
-
-                <form onSubmit={handleQuestionUpload} className="space-y-4 pt-2">
-                  <input
-                    type="file"
-                    accept=".xlsx,.csv,.json"
-                    onChange={(e) => setQuestionFile(e.target.files?.[0] || null)}
-                    className="block w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!questionFile}
-                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-600/30"
-                  >
-                    Upload Question Bank
-                  </button>
-                </form>
+          {/* TAB 9: REPORTS */}
+          {activeTab === 'REPORTS' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="erp-card space-y-3">
+                <h4 className="text-sm font-bold text-slate-900">Consolidated Assessment Ledger (CSV)</h4>
+                <p className="text-xs text-slate-600">Download institutional marks ledger formatted for academic audits.</p>
+                <button onClick={() => handleExportCSV('ConsolidatedMarks', students)} className="erp-btn-primary py-2 text-xs w-full">
+                  <Download className="w-4 h-4" />
+                  <span>Download CSV Ledger</span>
+                </button>
               </div>
 
-              {/* Student Roster Import */}
-              <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
-                <div className="flex items-center space-x-3 text-emerald-400">
-                  <Users className="w-6 h-6" />
-                  <h2 className="text-base font-bold text-white">Student Roster Batch Import</h2>
-                </div>
-                <p className="text-xs text-slate-400">Import student register numbers and departments from Excel files.</p>
-
-                <form onSubmit={handleStudentUpload} className="space-y-4 pt-2">
-                  <input
-                    type="file"
-                    accept=".xlsx,.csv"
-                    onChange={(e) => setStudentFile(e.target.files?.[0] || null)}
-                    className="block w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!studentFile}
-                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/30"
-                  >
-                    Import Student Roster
-                  </button>
-                </form>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 8: SECURITY & DOMAIN */}
-          {activeTab === 'SECURITY' && (
-            <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4 max-w-xl">
-              <h2 className="text-base font-bold text-white flex items-center">
-                <Lock className="w-5 h-5 text-purple-400 mr-2" />
-                Security & OAuth Domain Governance
-              </h2>
-              <p className="text-xs text-slate-400">
-                Single-point domain whitelist configuration. Controls which college email domains can sign in via Google OAuth.
-              </p>
-              <div className="space-y-2 pt-2">
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Authorized Domain (Default: cit.edu.in)
-                </label>
-                <input
-                  type="text"
-                  value={allowedDomains}
-                  onChange={(e) => setAllowedDomains(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 font-mono focus:outline-none focus:border-purple-500"
-                />
-                <button
-                  onClick={async () => {
-                    await api.put('/admin/settings', { key: 'ALLOWED_EMAIL_DOMAINS', value: allowedDomains });
-                    showToast('✅ Allowed domain updated!');
-                  }}
-                  className="mt-3 px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-purple-600/30"
-                >
-                  Save Security Domain Config
+              <div className="erp-card space-y-3">
+                <h4 className="text-sm font-bold text-slate-900">Official COE PDF Broadsheet</h4>
+                <p className="text-xs text-slate-600">Export certified PDF broadsheets for departmental filing.</p>
+                <button onClick={() => handleExportPDF('COEBroadsheet')} className="erp-btn-secondary py-2 text-xs w-full">
+                  <Download className="w-4 h-4 text-[#1E40AF]" />
+                  <span>Export PDF Broadsheet</span>
                 </button>
               </div>
             </div>
           )}
 
-          {/* TAB 9: SETTINGS */}
+          {/* TAB 10: HEALTH */}
+          {activeTab === 'HEALTH' && (
+            <div className="erp-card space-y-4">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center">
+                <ShieldCheck className="w-4 h-4 mr-1.5 text-emerald-700" />
+                Infrastructure & System Health Panel
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                {systemHealthServices.map((service: any, i: number) => (
+                  <div key={i} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-slate-900">{service.name}</span>
+                      <span className="erp-badge-green font-mono">{service.status}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">{service.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 11: AUDIT LOGS */}
+          {activeTab === 'LOGS' && (
+            <div className="space-y-4">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">System Audit & Event Logs</h3>
+              <div className="erp-table-container">
+                <table className="erp-table">
+                  <thead>
+                    <tr>
+                      <th>Timestamp</th>
+                      <th>Action Event</th>
+                      <th>Executor User</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentActivities.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="py-8 text-center text-slate-500">
+                          No audit log entries recorded in database.
+                        </td>
+                      </tr>
+                    ) : (
+                      recentActivities.map((log: any, i: number) => (
+                        <tr key={i}>
+                          <td className="font-mono text-xs text-slate-500">
+                            {new Date(log.time).toLocaleString()}
+                          </td>
+                          <td className="font-semibold text-slate-900">{log.action}</td>
+                          <td className="text-slate-700">{log.user}</td>
+                          <td className="font-mono text-xs">{log.text}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 12: SETTINGS */}
           {activeTab === 'SETTINGS' && (
-            <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4 max-w-xl">
-              <h2 className="text-base font-bold text-white flex items-center">
-                <Settings className="w-5 h-5 text-indigo-400 mr-2" />
-                System Configuration Settings
-              </h2>
+            <div className="erp-card space-y-4 max-w-lg">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">System Governance Settings</h3>
               <div className="space-y-3 text-xs">
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">College Institution Name</label>
-                  <input
-                    type="text"
-                    defaultValue="Chennai Institute of Technology"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-                  />
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Restricted Email Domain</label>
+                  <input type="text" value="cit.edu.in" readOnly className="erp-input font-mono bg-slate-100" />
                 </div>
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Max Violations Auto-Submit Threshold</label>
-                  <input
-                    type="number"
-                    defaultValue={5}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200 font-mono"
-                  />
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Security Infraction Rule</label>
+                  <select className="erp-select w-full">
+                    <option>Auto Submit Examination on 5 Violations</option>
+                    <option>Warn Invigilator Only</option>
+                  </select>
                 </div>
               </div>
             </div>
@@ -884,46 +1909,151 @@ export default function AdminDashboard() {
         </main>
       </div>
 
+      {/* Modal: Create Examination */}
+      {isCreateExamOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-lg w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Schedule New University Examination</h3>
+              <button onClick={() => setIsCreateExamOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
+            <form onSubmit={handleCreateExam} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Exam Paper Title *</label>
+                <input
+                  type="text"
+                  value={newExamForm.title}
+                  onChange={(e) => setNewExamForm({ ...newExamForm, title: e.target.value })}
+                  required
+                  placeholder="CS6301 Compiler Design CIA III"
+                  className="erp-input"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Duration (Mins) *</label>
+                  <input
+                    type="number"
+                    value={newExamForm.durationMinutes}
+                    onChange={(e) => setNewExamForm({ ...newExamForm, durationMinutes: e.target.value })}
+                    required
+                    className="erp-input font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Total Marks *</label>
+                  <input
+                    type="number"
+                    value={newExamForm.totalMarks}
+                    onChange={(e) => setNewExamForm({ ...newExamForm, totalMarks: e.target.value })}
+                    required
+                    className="erp-input font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Target Department</label>
+                <select
+                  value={newExamForm.targetDepartment}
+                  onChange={(e) => setNewExamForm({ ...newExamForm, targetDepartment: e.target.value })}
+                  className="erp-select w-full"
+                >
+                  <option value="Computer Science and Engineering">Computer Science and Engineering</option>
+                  <option value="Electronics & Communication">Electronics & Communication</option>
+                  <option value="Information Technology">Information Technology</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Security Instructions</label>
+                <textarea
+                  rows={3}
+                  value={newExamForm.instructions}
+                  onChange={(e) => setNewExamForm({ ...newExamForm, instructions: e.target.value })}
+                  className="erp-input font-mono"
+                />
+              </div>
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
+                <button type="button" onClick={() => setIsCreateExamOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Schedule & Publish Paper</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Preview Question Paper */}
+      {selectedExamPreview && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-xl w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">{selectedExamPreview.title}</h3>
+                <p className="text-xs text-slate-500">Official Question Paper Preview</p>
+              </div>
+              <button onClick={() => setSelectedExamPreview(null)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
+                <div className="font-bold text-slate-800">Target Department: {selectedExamPreview.targetDepartment}</div>
+                <div className="font-mono text-slate-600">Total Duration: {selectedExamPreview.durationMinutes} Minutes • Total Marks: {selectedExamPreview.totalMarks}</div>
+              </div>
+              <div>
+                <span className="font-bold text-slate-700 uppercase block mb-1">Instructions:</span>
+                <p className="text-slate-600 whitespace-pre-wrap font-mono bg-slate-50 p-2.5 rounded border border-slate-200">{selectedExamPreview.instructions}</p>
+              </div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <button onClick={() => setSelectedExamPreview(null)} className="erp-btn-secondary py-1.5 text-xs">Close Preview</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Student Modal */}
       {isAddStudentOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="glass-panel p-6 rounded-2xl max-w-md w-full border border-purple-500/30 space-y-4">
-            <h3 className="text-base font-bold text-white">Add New Student Record</h3>
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-md w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Add New Student Account</h3>
+              <button onClick={() => setIsAddStudentOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
             <form onSubmit={handleAddStudent} className="space-y-3 text-xs">
-              <input
-                type="text"
-                placeholder="Register Number (e.g. 71762105001)"
-                value={newStudent.registerNo}
-                onChange={(e) => setNewStudent({ ...newStudent, registerNo: e.target.value })}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200 font-mono"
-              />
-              <input
-                type="text"
-                placeholder="Student Full Name"
-                value={newStudent.name}
-                onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
-                required
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-              />
-              <input
-                type="email"
-                placeholder="College Email (e.g. ganesh@cit.edu.in)"
-                value={newStudent.email}
-                onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
-                required
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-              />
-              <div className="flex justify-end space-x-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddStudentOpen(false)}
-                  className="px-4 py-2 bg-slate-800 rounded-xl text-slate-300"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-purple-600 text-white font-bold rounded-xl shadow-lg shadow-purple-600/30">
-                  Save Student
-                </button>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Register Number *</label>
+                <input
+                  type="text"
+                  value={newStudent.registerNo}
+                  onChange={(e) => setNewStudent({ ...newStudent, registerNo: e.target.value })}
+                  required
+                  placeholder="71762105042"
+                  className="erp-input font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Student Full Name *</label>
+                <input
+                  type="text"
+                  value={newStudent.name}
+                  onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
+                  required
+                  placeholder="Ganesh Kumar"
+                  className="erp-input"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Institutional Email *</label>
+                <input
+                  type="email"
+                  value={newStudent.email}
+                  onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
+                  required
+                  placeholder="ganesh@cit.edu.in"
+                  className="erp-input"
+                />
+              </div>
+              <div className="flex justify-end space-x-2 pt-2">
+                <button type="button" onClick={() => setIsAddStudentOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Save Student</button>
               </div>
             </form>
           </div>
@@ -932,148 +2062,181 @@ export default function AdminDashboard() {
 
       {/* Add Faculty Modal */}
       {isAddFacultyOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="glass-panel p-6 rounded-2xl max-w-md w-full border border-purple-500/30 space-y-4">
-            <h3 className="text-base font-bold text-white">Add New Faculty Member</h3>
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-md w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Add New Faculty Member</h3>
+              <button onClick={() => setIsAddFacultyOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
             <form onSubmit={handleAddFaculty} className="space-y-3 text-xs">
-              <input
-                type="text"
-                placeholder="Faculty Name (e.g. Dr. A. R. Sharma)"
-                value={newFaculty.name}
-                onChange={(e) => setNewFaculty({ ...newFaculty, name: e.target.value })}
-                required
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-              />
-              <input
-                type="email"
-                placeholder="Faculty Email (e.g. faculty@cit.edu.in)"
-                value={newFaculty.email}
-                onChange={(e) => setNewFaculty({ ...newFaculty, email: e.target.value })}
-                required
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-              />
-              <div className="flex justify-end space-x-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddFacultyOpen(false)}
-                  className="px-4 py-2 bg-slate-800 rounded-xl text-slate-300"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-purple-600 text-white font-bold rounded-xl shadow-lg shadow-purple-600/30">
-                  Save Faculty Member
-                </button>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Faculty Name *</label>
+                <input
+                  type="text"
+                  value={newFaculty.name}
+                  onChange={(e) => setNewFaculty({ ...newFaculty, name: e.target.value })}
+                  required
+                  placeholder="Dr. Sabitha"
+                  className="erp-input"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Institutional Email *</label>
+                <input
+                  type="email"
+                  value={newFaculty.email}
+                  onChange={(e) => setNewFaculty({ ...newFaculty, email: e.target.value })}
+                  required
+                  placeholder="sabitha@cit.edu.in"
+                  className="erp-input"
+                />
+              </div>
+              <div className="flex justify-end space-x-2 pt-2">
+                <button type="button" onClick={() => setIsAddFacultyOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Save Faculty</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* Create Question Modal */}
+      {/* Assign Invigilator Modal */}
+      {isAssignInvigilatorOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-md w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Assign Invigilator to Examination</h3>
+              <button onClick={() => setIsAssignInvigilatorOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
+            <form onSubmit={handleAssignInvigilator} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Select Examination *</label>
+                <select
+                  value={assignForm.testId}
+                  onChange={(e) => setAssignForm({ ...assignForm, testId: e.target.value })}
+                  required
+                  className="erp-select w-full"
+                >
+                  <option value="">-- Choose Examination Paper --</option>
+                  {exams.map((ex) => (
+                    <option key={ex.id} value={ex.id}>{ex.title}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Select Faculty Invigilator *</label>
+                <select
+                  value={assignForm.facultyId}
+                  onChange={(e) => setAssignForm({ ...assignForm, facultyId: e.target.value })}
+                  required
+                  className="erp-select w-full"
+                >
+                  <option value="">-- Choose Faculty Member --</option>
+                  {faculty.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name} ({f.department})</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-end space-x-2 pt-2">
+                <button type="button" onClick={() => setIsAssignInvigilatorOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Assign Invigilator</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Question Modal */}
       {isAddQuestionOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="glass-panel p-6 rounded-2xl max-w-lg w-full border border-indigo-500/30 space-y-4">
-            <h3 className="text-base font-bold text-white">Create Question Bank Entry</h3>
-            <form onSubmit={handleAddQuestion} className="space-y-3 text-xs">
-              <textarea
-                placeholder="Question Statement..."
-                value={newQuestion.text}
-                onChange={(e) => setNewQuestion({ ...newQuestion, text: e.target.value })}
-                required
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200 h-24"
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <select
-                  value={newQuestion.type}
-                  onChange={(e) => setNewQuestion({ ...newQuestion, type: e.target.value })}
-                  className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-                >
-                  <option value="MCQ">MCQ (Multiple Choice)</option>
-                  <option value="MSQ">MSQ (Multiple Select)</option>
-                  <option value="NAT">NAT (Numerical Answer)</option>
-                </select>
-
-                <select
-                  value={newQuestion.difficulty}
-                  onChange={(e) => setNewQuestion({ ...newQuestion, difficulty: e.target.value })}
-                  className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-                >
-                  <option value="EASY">EASY</option>
-                  <option value="MEDIUM">MEDIUM</option>
-                  <option value="HARD">HARD</option>
-                </select>
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-lg w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Add New Question to Question Bank</h3>
+              <button onClick={() => setIsAddQuestionOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
+            <form onSubmit={handleCreateQuestion} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Question Statement *</label>
+                <textarea
+                  value={newQuestionForm.text}
+                  onChange={(e) => setNewQuestionForm({ ...newQuestionForm, text: e.target.value })}
+                  required
+                  rows={3}
+                  placeholder="Enter complete question statement..."
+                  className="erp-input font-mono"
+                />
               </div>
-
-              <div className="flex justify-end space-x-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddQuestionOpen(false)}
-                  className="px-4 py-2 bg-slate-800 rounded-xl text-slate-300"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/30">
-                  Save Question
-                </button>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Question Type</label>
+                  <select
+                    value={newQuestionForm.type}
+                    onChange={(e) => setNewQuestionForm({ ...newQuestionForm, type: e.target.value })}
+                    className="erp-select w-full"
+                  >
+                    <option value="MCQ">Multiple Choice (MCQ)</option>
+                    <option value="MSQ">Multiple Select (MSQ)</option>
+                    <option value="NAT">Numerical Answer (NAT)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Difficulty Level</label>
+                  <select
+                    value={newQuestionForm.difficulty}
+                    onChange={(e) => setNewQuestionForm({ ...newQuestionForm, difficulty: e.target.value })}
+                    className="erp-select w-full"
+                  >
+                    <option value="EASY">Easy</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HARD">Hard</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Marks</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={newQuestionForm.marks}
+                    onChange={(e) => setNewQuestionForm({ ...newQuestionForm, marks: e.target.value })}
+                    className="erp-input font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Negative Marks</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={newQuestionForm.negativeMarks}
+                    onChange={(e) => setNewQuestionForm({ ...newQuestionForm, negativeMarks: e.target.value })}
+                    className="erp-input font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Explanation & Solution Steps</label>
+                <textarea
+                  value={newQuestionForm.explanation}
+                  onChange={(e) => setNewQuestionForm({ ...newQuestionForm, explanation: e.target.value })}
+                  rows={2}
+                  placeholder="Optional concept explanation..."
+                  className="erp-input font-mono"
+                />
+              </div>
+              <div className="flex justify-end space-x-2 pt-2">
+                <button type="button" onClick={() => setIsAddQuestionOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Save Question</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* Create Exam Modal */}
-      {isAddExamOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="glass-panel p-6 rounded-2xl max-w-lg w-full border border-emerald-500/30 space-y-4">
-            <h3 className="text-base font-bold text-white">Create & Schedule Mock Exam</h3>
-            <form onSubmit={handleAddExam} className="space-y-3 text-xs">
-              <input
-                type="text"
-                placeholder="Exam Title (e.g. GATE CS All-India Mock Test 02)"
-                value={newExam.title}
-                onChange={(e) => setNewExam({ ...newExam, title: e.target.value })}
-                required
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-              />
-              <textarea
-                placeholder="Exam Instructions & Description..."
-                value={newExam.description}
-                onChange={(e) => setNewExam({ ...newExam, description: e.target.value })}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200 h-20"
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="number"
-                  placeholder="Duration (Mins)"
-                  value={newExam.durationMinutes}
-                  onChange={(e) => setNewExam({ ...newExam, durationMinutes: e.target.value })}
-                  className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-                />
-                <input
-                  type="number"
-                  placeholder="Total Marks"
-                  value={newExam.totalMarks}
-                  onChange={(e) => setNewExam({ ...newExam, totalMarks: e.target.value })}
-                  className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200"
-                />
-              </div>
-
-              <div className="flex justify-end space-x-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddExamOpen(false)}
-                  className="px-4 py-2 bg-slate-800 rounded-xl text-slate-300"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30">
-                  Publish Exam
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Footer */}
+      <footer className="bg-white border-t border-slate-200 py-3 px-6 text-center text-xs text-slate-500 mt-auto">
+        © 2026 University Examination Management System | Controller of Examinations | Version 2.0
+      </footer>
     </div>
   );
 }

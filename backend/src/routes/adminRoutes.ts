@@ -45,4 +45,9 @@ router.get('/export-report/:testId', requireRoles(Role.FACULTY, Role.ADMIN), Adm
 router.get('/settings', requireRoles(Role.ADMIN), AdminController.getSystemSettings);
 router.put('/settings', requireRoles(Role.ADMIN), AdminController.updateSystemSetting);
 
+// Additional Governance Routes
+router.get('/results-ledger', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getResultsLedger);
+router.post('/assign-invigilator', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.assignInvigilator);
+router.get('/hall-tickets', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getHallTickets);
+
 export default router;

@@ -2,13 +2,13 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Shield, BookOpen, UserCheck, AlertCircle, ArrowRight, Lock } from 'lucide-react';
+import { GraduationCap, ShieldCheck, Lock, AlertCircle, ArrowRight, CheckCircle2, UserCheck, BookOpen } from 'lucide-react';
 import api from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('ganesh@cit.edu.in');
-  const [registerNo, setRegisterNo] = useState('71762105001');
+  const [registerNo, setRegisterNo] = useState('71762105042');
   const [role, setRole] = useState<'STUDENT' | 'FACULTY' | 'ADMIN'>('STUDENT');
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,17 +16,29 @@ export default function LoginPage() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+
+    // Inline Validation
+    if (!email.trim() || !email.includes('@')) {
+      setErrorMsg('Please enter a valid institutional email address.');
+      return;
+    }
+
+    if (role === 'STUDENT' && !registerNo.trim()) {
+      setErrorMsg('Register Number is mandatory for student authentication.');
+      return;
+    }
+
     setLoading(true);
 
     try {
       const response = await api.post('/auth/google', {
-        email,
-        registerNo,
+        email: email.trim(),
+        registerNo: registerNo.trim(),
         role,
-        department: 'CSE',
+        department: 'Computer Science & Engineering',
       });
 
-      if (response.data.success) {
+      if (response.data?.success) {
         const token = response.data.token || response.data.data?.token;
         const userObj = response.data.user || response.data.data?.user;
 
@@ -40,121 +52,168 @@ export default function LoginPage() {
         } else {
           router.push('/admin/dashboard');
         }
+      } else {
+        setErrorMsg(response.data?.message || 'Authentication failed. Please verify credentials.');
       }
     } catch (err: any) {
-      setErrorMsg(err.response?.data?.message || 'Authentication failed. Please use your official college domain (@cit.edu.in).');
+      setErrorMsg(
+        err.response?.data?.message || 'Authentication failed. Please use your official university domain account (@cit.edu.in).'
+      );
     } finally {
       setLoading(false);
     }
   };
 
+  const handleRoleSwitch = (selectedRole: 'STUDENT' | 'FACULTY' | 'ADMIN') => {
+    setRole(selectedRole);
+    setErrorMsg('');
+    if (selectedRole === 'FACULTY') {
+      setEmail('faculty@cit.edu.in');
+    } else if (selectedRole === 'ADMIN') {
+      setEmail('admin@cit.edu.in');
+    } else {
+      setEmail('ganesh@cit.edu.in');
+      setRegisterNo('71762105042');
+    }
+  };
+
   return (
-    <div className="min-h-screen relative flex items-center justify-center p-4 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-950 via-slate-950 to-slate-950 overflow-hidden">
-      {/* Background Decorative Glow */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
-
-      <div className="w-full max-w-md glass-panel p-8 rounded-3xl border border-slate-800 shadow-2xl z-10 space-y-6">
-        {/* Brand Header */}
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 mb-2">
-            <Shield className="w-7 h-7" />
-          </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">GSMAS Examination Portal</h1>
-          <p className="text-xs text-slate-400">
-            GATE Secure Mock Test & Institutional Analytics Platform
-          </p>
-        </div>
-
-        {/* Allowed Domain Info Badge */}
-        <div className="bg-indigo-950/50 border border-indigo-500/20 rounded-xl p-3 text-xs text-indigo-300 flex items-center space-x-2">
-          <Lock className="w-4 h-4 text-indigo-400 shrink-0" />
-          <span>Restricted Access: Google College Account Only (e.g. <b>@cit.edu.in</b>)</span>
-        </div>
-
-        {errorMsg && (
-          <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-3 text-xs text-rose-400 flex items-center space-x-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-              College Email Address
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              placeholder="student@cit.edu.in"
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition-all"
-            />
-          </div>
-
-          {role === 'STUDENT' && (
+    <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-between font-sans">
+      {/* Top University Branding Bar */}
+      <header className="bg-[#1E40AF] text-white border-b border-blue-900 px-6 py-4 shadow-sm">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 bg-white/10 rounded-md border border-white/20">
+              <GraduationCap className="w-6 h-6 text-white" />
+            </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                Register Number
-              </label>
-              <input
-                type="text"
-                value={registerNo}
-                onChange={e => setRegisterNo(e.target.value)}
-                placeholder="71762105001"
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 font-mono focus:outline-none focus:border-indigo-500 transition-all"
-              />
+              <h1 className="text-lg font-bold tracking-tight text-white">Central University Examination Management System</h1>
+              <p className="text-xs text-blue-200">Office of the Controller of Examinations • Academic Portal</p>
+            </div>
+          </div>
+          <div className="hidden md:flex items-center space-x-4 text-xs text-blue-100">
+            <span className="flex items-center space-x-1">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>Secure Examination Gateway</span>
+            </span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Login Card Container */}
+      <main className="flex-1 flex items-center justify-center p-4 sm:p-6 my-8">
+        <div className="w-full max-w-md bg-white border border-slate-200 rounded-lg shadow-sm p-6 sm:p-8 space-y-6">
+          {/* Institutional Header */}
+          <div className="text-center space-y-1">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-50 text-[#1E40AF] mb-2 border border-blue-100">
+              <Lock className="w-5 h-5" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900 tracking-tight">Institutional Login</h2>
+            <p className="text-xs text-slate-500">Sign in to access examination services and records</p>
+          </div>
+
+          {/* Institutional Domain Restriction Notice */}
+          <div className="bg-amber-50 border border-amber-200 rounded-md p-3 text-xs text-amber-900 flex items-start space-x-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold">Restricted Access Notice:</span> Only authorized institutional domain accounts (e.g. <b>@cit.edu.in</b>) are permitted to sign in.
+            </div>
+          </div>
+
+          {/* Error Message Box */}
+          {errorMsg && (
+            <div className="bg-red-50 border border-red-200 rounded-md p-3 text-xs text-red-800 flex items-start space-x-2.5">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              <span>{errorMsg}</span>
             </div>
           )}
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-              Role Selection
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {(['STUDENT', 'FACULTY', 'ADMIN'] as const).map(r => (
-                <button
-                  type="button"
-                  key={r}
-                  onClick={() => {
-                    setRole(r);
-                    if (r === 'FACULTY') setEmail('faculty@cit.edu.in');
-                    else if (r === 'ADMIN') setEmail('admin@cit.edu.in');
-                    else setEmail('ganesh@cit.edu.in');
-                  }}
-                  className={`py-2 text-xs font-bold rounded-lg border transition-all ${
-                    role === r
-                      ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/30'
-                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800'
-                  }`}
-                >
-                  {r}
-                </button>
-              ))}
+          <form onSubmit={handleLogin} className="space-y-4">
+            {/* Role Switcher */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                Portal Role Selection
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['STUDENT', 'FACULTY', 'ADMIN'] as const).map((r) => (
+                  <button
+                    type="button"
+                    key={r}
+                    onClick={() => handleRoleSwitch(r)}
+                    className={`py-2 px-3 text-xs font-semibold rounded-md border transition-colors ${
+                      role === r
+                        ? 'bg-[#1E40AF] text-white border-[#1E40AF] shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {r === 'STUDENT' ? 'Student' : r === 'FACULTY' ? 'Faculty' : 'Administrator'}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 font-bold text-white text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center space-x-2"
-          >
-            {loading ? (
-              <span>Authenticating Google OAuth...</span>
-            ) : (
-              <>
-                <span>Sign In with College Account</span>
-                <ArrowRight className="w-4 h-4" />
-              </>
+            {/* Email Field */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                Institutional Email Address <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                placeholder="ananya.sharma@cit.edu.in"
+                className="erp-input"
+              />
+            </div>
+
+            {/* Register Number Field for Student */}
+            {role === 'STUDENT' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                  University Register Number <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={registerNo}
+                  onChange={(e) => setRegisterNo(e.target.value)}
+                  required
+                  placeholder="71762105042"
+                  className="erp-input font-mono"
+                />
+              </div>
             )}
-          </button>
-        </form>
 
-        <div className="pt-4 border-t border-slate-800 text-center text-xs text-slate-500">
-          Supervised Institutional Examination Engine • GSMAS v1.0
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="erp-btn-primary w-full py-2.5 text-sm"
+            >
+              {loading ? (
+                <div className="flex items-center space-x-2">
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Authenticating Credentials...</span>
+                </div>
+              ) : (
+                <>
+                  <span>Sign In to Examination Portal</span>
+                  <ArrowRight className="w-4 h-4 ml-1" />
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="pt-4 border-t border-slate-200 text-center text-[11px] text-slate-500">
+            Automated Evaluation & Continuous Assessment Gateway • EMS v4.2
+          </div>
         </div>
-      </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="bg-white border-t border-slate-200 py-3 px-6 text-center text-xs text-slate-500">
+        © 2026 Central University Office of the Controller of Examinations. All Rights Reserved.
+      </footer>
     </div>
   );
 }

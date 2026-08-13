@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import { prisma } from '../config/prisma';
 import { GateScoringService } from '../services/gateScoringService';
+import { AuditLogger } from '../services/auditLogger';
 
 export class ExamController {
   /**
@@ -44,7 +45,6 @@ export class ExamController {
       });
 
       if (!assignment) {
-        // Auto assign if student qualifies target department
         assignment = await prisma.testAssignment.create({
           data: {
             testId,
@@ -59,6 +59,15 @@ export class ExamController {
           data: { status: 'IN_PROGRESS', startedAt: new Date() },
         });
       }
+
+      // Audit Log for Exam Start
+      await AuditLogger.log({
+        userId: studentId,
+        action: 'EXAM_STARTED',
+        resource: 'TestAssignment',
+        details: `Student started examination (Assignment ID: ${assignment.id})`,
+        ipAddress: req.ip,
+      });
 
       // Fetch test details & question paper
       const test = await prisma.mockTest.findUnique({
@@ -153,7 +162,7 @@ export class ExamController {
   }
 
   /**
-   * Multi-trigger Autosave Endpoint (Option click, question change, 5s ticker, blur, reconnect)
+   * Multi-trigger Autosave Endpoint
    */
   public static async autoSaveResponse(req: AuthRequest, res: Response) {
     try {
@@ -222,7 +231,6 @@ export class ExamController {
       const responseMap = new Map();
       assignment.responses.forEach(r => responseMap.set(r.questionId, r));
 
-      // Evaluate each question using GATE official scoring service
       for (const tq of assignment.test.testQuestions) {
         const q = tq.question;
         const studentResp = responseMap.get(q.id);
@@ -244,7 +252,6 @@ export class ExamController {
           totalScore += evaluation.marksObtained;
           if (evaluation.isCorrect) totalCorrect++;
 
-          // Update QuestionResponse evaluation in DB
           if (studentResp) {
             await prisma.questionResponse.update({
               where: { id: studentResp.id },
@@ -261,7 +268,7 @@ export class ExamController {
       const accuracy = totalAttempted > 0 ? (totalCorrect / totalAttempted) * 100 : 0;
       const timeTakenSec = Math.floor((Date.now() - new Date(assignment.startedAt || Date.now()).getTime()) / 1000);
 
-      const updatedAssignment = await prisma.testAssignment.update({
+      await prisma.testAssignment.update({
         where: { id: assignmentId },
         data: {
           status: 'COMPLETED',
@@ -271,6 +278,14 @@ export class ExamController {
           timeTakenSec,
           submittedAt: new Date(),
         },
+      });
+
+      await AuditLogger.log({
+        userId: req.user?.id,
+        action: 'EXAM_SUBMITTED',
+        resource: 'TestAssignment',
+        details: `Exam submitted. Score: ${finalScore}/${assignment.test.totalMarks}`,
+        ipAddress: req.ip,
       });
 
       return res.status(200).json({
@@ -293,7 +308,7 @@ export class ExamController {
   }
 
   /**
-   * Solution Review Endpoint (Respects Faculty Configurable Solution Visibility)
+   * Solution Review Endpoint
    */
   public static async getSolutionReview(req: AuthRequest, res: Response) {
     try {
@@ -337,18 +352,10 @@ export class ExamController {
         return res.status(404).json({ success: false, message: 'Assignment not found' });
       }
 
-      // Detailed logging for development diagnostic tracking
-      console.log({
-        loggedInUserId: studentId,
-        requestParam: assignmentId,
-        solutionOwnerId: assignment.studentId,
-      });
-
-      // Enforce Privacy Check
       if (req.user!.role === 'STUDENT' && assignment.studentId !== studentId) {
         return res.status(403).json({
           success: false,
-          message: '403 Forbidden: Student Privacy Policy strictly prohibits viewing other students metrics, rank lists, or answer sheets.',
+          message: '403 Forbidden: Student Privacy Policy strictly prohibits viewing other students metrics.',
         });
       }
 

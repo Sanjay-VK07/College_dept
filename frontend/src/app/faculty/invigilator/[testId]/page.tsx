@@ -2,7 +2,27 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { Shield, Radio, AlertTriangle, CheckCircle2, Download, LogOut } from 'lucide-react';
+import {
+  GraduationCap,
+  Radio,
+  AlertTriangle,
+  CheckCircle2,
+  Download,
+  LogOut,
+  Plus,
+  Search,
+  Filter,
+  Users,
+  BookOpen,
+  Clock,
+  Award,
+  FileSpreadsheet,
+  Trash2,
+  RotateCcw,
+  CheckCircle,
+  AlertCircle,
+  FileText,
+} from 'lucide-react';
 import io from 'socket.io-client';
 import api from '@/lib/api';
 import { RiskTierTable, LiveStudent } from '@/components/invigilator/RiskTierTable';
@@ -13,9 +33,67 @@ export default function InvigilatorDashboard() {
   const testId = (params.testId as string) || 'test-demo-123';
 
   const [students, setStudents] = useState<LiveStudent[]>([]);
-  const [testTitle, setTestTitle] = useState('GATE CS All-India Mock Test');
+  const [testTitle, setTestTitle] = useState('CS8601 Database Management Systems - Mid-Semester CBT Assessment');
   const [socketConnected, setSocketConnected] = useState(false);
+  const [activeTab, setActiveTab] = useState<
+    'LIVE' | 'CREATE_EXAM' | 'QUESTION_BANK' | 'STUDENT_ROSTER' | 'ATTENDANCE' | 'RESULTS' | 'REPORTS'
+  >('LIVE');
+
   const socketRef = useRef<any>(null);
+
+  // Form State: Create Exam
+  const [newExam, setNewExam] = useState({
+    title: '',
+    code: '',
+    department: 'Computer Science & Engineering',
+    durationMinutes: '180',
+    totalMarks: '100',
+    maxViolations: '5',
+  });
+  const [createSuccess, setCreateSuccess] = useState('');
+  const [createError, setCreateError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Question Bank Mock List & Filter
+  const [questionSearch, setQuestionSearch] = useState('');
+  const [questionTypeFilter, setQuestionTypeFilter] = useState('ALL');
+  const [questionsList, setQuestionsList] = useState([
+    {
+      id: 'q1',
+      code: 'CS8601-01',
+      type: 'MCQ',
+      text: 'Which normal form eliminates transitive functional dependency in relational database design?',
+      marks: 2,
+      difficulty: 'MEDIUM',
+      subject: 'Database Management Systems',
+    },
+    {
+      id: 'q2',
+      code: 'CS8601-02',
+      text: 'Calculate the total number of block transfers required for B+ tree search with node capacity 100.',
+      type: 'NAT',
+      marks: 2,
+      difficulty: 'HARD',
+      subject: 'Database Management Systems',
+    },
+    {
+      id: 'q3',
+      code: 'CS8601-03',
+      text: 'Select all ACID properties guaranteed by transaction processing systems.',
+      type: 'MSQ',
+      marks: 2,
+      difficulty: 'EASY',
+      subject: 'Database Management Systems',
+    },
+  ]);
+
+  // Attendance Register Dataset
+  const [attendanceList, setAttendanceList] = useState([
+    { registerNo: '71762105042', name: 'Ananya Sharma', department: 'CSE', status: 'PRESENT', checkInTime: '09:15 AM' },
+    { registerNo: '71762105018', name: 'Rajesh Kumar', department: 'CSE', status: 'PRESENT', checkInTime: '09:18 AM' },
+    { registerNo: '71762105029', name: 'Kavitha Sundaram', department: 'ECE', status: 'ABSENT', checkInTime: '-' },
+    { registerNo: '71762105035', name: 'Praveen Venkatesh', department: 'IT', status: 'PRESENT', checkInTime: '09:22 AM' },
+  ]);
 
   useEffect(() => {
     const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
@@ -23,21 +101,17 @@ export default function InvigilatorDashboard() {
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      console.log(`🔌 [Faculty Socket] Connected to server socket: ${socket.id}`);
       setSocketConnected(true);
-      console.log(`👨‍🏫 [Faculty Socket] Emitting join_faculty_room for testId: ${testId}`);
       socket.emit('join_faculty_room', { testId });
     });
 
     socket.on('live_students_snapshot', (snapshot: LiveStudent[]) => {
-      console.log(`📸 [Faculty Socket] Received live_students_snapshot (${snapshot.length} students):`, snapshot);
       setStudents(snapshot);
     });
 
     socket.on('student_status_changed', (student: LiveStudent) => {
-      console.log(`🔄 [Faculty Socket] Received student_status_changed:`, student);
-      setStudents(prev => {
-        const idx = prev.findIndex(s => s.assignmentId === student.assignmentId);
+      setStudents((prev) => {
+        const idx = prev.findIndex((s) => s.assignmentId === student.assignmentId);
         if (idx >= 0) {
           const copy = [...prev];
           copy[idx] = student;
@@ -48,9 +122,8 @@ export default function InvigilatorDashboard() {
     });
 
     socket.on('student_progress_updated', (data: any) => {
-      console.log(`⏱️ [Faculty Socket] Received student_progress_updated:`, data);
-      setStudents(prev =>
-        prev.map(s =>
+      setStudents((prev) =>
+        prev.map((s) =>
           s.assignmentId === data.assignmentId
             ? { ...s, currentQuestion: data.currentQuestion, remainingSec: data.remainingSec, status: data.status }
             : s
@@ -59,9 +132,8 @@ export default function InvigilatorDashboard() {
     });
 
     socket.on('student_violation_logged', (vData: any) => {
-      console.warn(`🚨 [Faculty Socket] Received student_violation_logged:`, vData);
-      setStudents(prev =>
-        prev.map(s =>
+      setStudents((prev) =>
+        prev.map((s) =>
           s.assignmentId === vData.assignmentId
             ? { ...s, violationCount: vData.violationCount, riskLevel: vData.riskLevel }
             : s
@@ -81,11 +153,11 @@ export default function InvigilatorDashboard() {
   };
 
   const handleForceSubmit = (assignmentId: string) => {
-    if (confirm('Are you sure you want to remotely terminate and submit this student exam?')) {
+    if (confirm('Are you sure you want to remotely terminate and submit this student examination paper?')) {
       if (socketRef.current) {
         socketRef.current.emit('faculty_force_submit', {
           assignmentId,
-          reason: 'Invigilator issued manual termination due to security risk.',
+          reason: 'Invigilator issued manual termination due to security infraction.',
         });
       }
     }
@@ -97,61 +169,529 @@ export default function InvigilatorDashboard() {
     window.open(`${apiUrl}/admin/export-report/${testId}?format=${format}&token=${token}`, '_blank');
   };
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      {/* Top Invigilator Navbar */}
-      <header className="glass-panel border-b border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center space-x-3">
-          <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse">
-            <Radio className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h1 className="text-lg font-bold text-white tracking-tight">{testTitle}</h1>
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                {socketConnected ? '● Live Socket Gateway Connected' : 'Connecting...'}
-              </span>
-            </div>
-            <p className="text-xs text-slate-400">Faculty Live Invigilation & Security Monitor</p>
-          </div>
-        </div>
+  const [dbStudents, setDbStudents] = useState<any[]>([]);
+  const [dbResults, setDbResults] = useState<any[]>([]);
 
-        {/* Action Controls & Export */}
-        <div className="flex items-center space-x-4">
-          <div className="flex space-x-2">
+  useEffect(() => {
+    fetchFacultyData();
+  }, []);
+
+  const fetchFacultyData = async () => {
+    try {
+      const [qRes, sRes, rRes] = await Promise.all([
+        api.get('/admin/questions'),
+        api.get('/admin/students'),
+        api.get('/admin/results-ledger'),
+      ]);
+      if (qRes.data?.success) setQuestionsList(qRes.data.data);
+      if (sRes.data?.success) {
+        setDbStudents(sRes.data.data);
+        setAttendanceList(
+          sRes.data.data.map((st: any) => ({
+            registerNo: st.registerNo || '71762105042',
+            name: st.name,
+            department: st.department,
+            status: 'PRESENT',
+            checkInTime: '09:15 AM',
+          }))
+        );
+      }
+      if (rRes.data?.success) setDbResults(rRes.data.data);
+    } catch (e) {
+      console.error('Error loading faculty datasets:', e);
+    }
+  };
+
+  const handleCreateExamSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateSuccess('');
+    setCreateError('');
+
+    if (!newExam.title.trim() || !newExam.code.trim()) {
+      setCreateError('Please complete all mandatory examination fields.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const res = await api.post('/admin/exams', {
+        title: `${newExam.code} ${newExam.title}`,
+        description: `Examination paper for ${newExam.department}`,
+        examType: 'SCHEDULED',
+        durationMinutes: Number(newExam.durationMinutes) || 180,
+        totalMarks: Number(newExam.totalMarks) || 100,
+        targetDepartment: newExam.department,
+        maxViolations: Number(newExam.maxViolations) || 5,
+        instructions: '1. Duration: 180 Minutes.\n2. Fullscreen mode enforced.',
+      });
+
+      if (res.data?.success) {
+        setCreateSuccess('Examination paper created and scheduled successfully in Controller of Examinations database.');
+        setNewExam({
+          title: '',
+          code: '',
+          department: 'Computer Science & Engineering',
+          durationMinutes: '180',
+          totalMarks: '100',
+          maxViolations: '5',
+        });
+      }
+    } catch (err: any) {
+      setCreateError(err.response?.data?.message || 'Failed to create examination paper.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const toggleAttendanceStatus = (registerNo: string) => {
+    setAttendanceList((prev) =>
+      prev.map((item) =>
+        item.registerNo === registerNo
+          ? {
+              ...item,
+              status: item.status === 'PRESENT' ? 'ABSENT' : 'PRESENT',
+              checkInTime: item.status === 'PRESENT' ? '-' : '09:30 AM',
+            }
+          : item
+      )
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans">
+      {/* Top Invigilator Navbar */}
+      <header className="bg-[#1E40AF] text-white border-b border-blue-900 px-6 py-3.5 sticky top-0 z-30 shadow-sm">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 bg-white/10 rounded-md border border-white/20">
+              <GraduationCap className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h1 className="text-base font-bold text-white tracking-tight">{testTitle}</h1>
+                <span className="erp-badge-green font-mono text-[11px]">
+                  {socketConnected ? '● Live Gateway Connected' : 'Connecting...'}
+                </span>
+              </div>
+              <p className="text-xs text-blue-200">Faculty Invigilation & Assessment Governance Portal</p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-3">
             <button
               onClick={() => handleExportReport('excel')}
-              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-xs font-semibold rounded-lg flex items-center space-x-1"
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded border border-white/20 flex items-center space-x-1 transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Export Excel</span>
+              <span>Export Report</span>
             </button>
+
             <button
-              onClick={() => handleExportReport('pdf')}
-              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-xs font-semibold rounded-lg flex items-center space-x-1"
+              onClick={() => router.push('/')}
+              title="Sign Out"
+              className="p-2 rounded bg-blue-900/60 hover:bg-blue-900 text-blue-200 hover:text-white border border-blue-700 transition-colors"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>Export PDF</span>
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
-
-          <button
-            onClick={() => router.push('/')}
-            className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-rose-400 border border-slate-800"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
         </div>
       </header>
 
-      {/* Main Invigilator Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
-        <RiskTierTable
-          students={students}
-          onSendWarning={handleSendWarning}
-          onForceSubmit={handleForceSubmit}
-        />
+      {/* Main Container */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
+        {/* Navigation Tabs */}
+        <div className="flex overflow-x-auto border-b border-slate-200 space-x-1 pb-1">
+          {[
+            { id: 'LIVE', label: 'Live Invigilation Monitor', icon: Radio, badge: students.length },
+            { id: 'CREATE_EXAM', label: 'Create Examination', icon: Plus },
+            { id: 'QUESTION_BANK', label: 'Question Bank', icon: BookOpen, badge: questionsList.length },
+            { id: 'STUDENT_ROSTER', label: 'Candidate Roster', icon: Users },
+            { id: 'ATTENDANCE', label: 'Attendance Register', icon: CheckCircle2 },
+            { id: 'RESULTS', label: 'Results & Evaluation', icon: Award },
+            { id: 'REPORTS', label: 'Reports & Analytics', icon: FileText },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`px-3.5 py-2 text-xs font-semibold rounded-t-md transition-colors flex items-center space-x-2 whitespace-nowrap border-b-2 ${
+                  isActive
+                    ? 'border-[#1E40AF] text-[#1E40AF] bg-blue-50/50'
+                    : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{tab.label}</span>
+                {tab.badge !== undefined && tab.badge > 0 && (
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${isActive ? 'bg-[#1E40AF] text-white' : 'bg-slate-200 text-slate-700'}`}>
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* TAB 1: LIVE INVIGILATION MONITOR */}
+        {activeTab === 'LIVE' && (
+          <RiskTierTable
+            students={students}
+            onSendWarning={handleSendWarning}
+            onForceSubmit={handleForceSubmit}
+          />
+        )}
+
+        {/* TAB 2: CREATE EXAMINATION */}
+        {activeTab === 'CREATE_EXAM' && (
+          <div className="max-w-2xl mx-auto erp-card space-y-6">
+            <div className="border-b border-slate-200 pb-3">
+              <h3 className="text-base font-bold text-slate-900">Schedule & Create Examination Paper</h3>
+              <p className="text-xs text-slate-500">Configure course codes, duration, target departments, and security threshold rules.</p>
+            </div>
+
+            {createSuccess && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-md p-3 text-xs text-emerald-800 flex items-center space-x-2">
+                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{createSuccess}</span>
+              </div>
+            )}
+
+            {createError && (
+              <div className="bg-red-50 border border-red-200 rounded-md p-3 text-xs text-red-800 flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{createError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleCreateExamSubmit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Course Code <span className="text-red-500">*</span></label>
+                  <input
+                    type="text"
+                    value={newExam.code}
+                    onChange={(e) => setNewExam({ ...newExam, code: e.target.value })}
+                    required
+                    placeholder="e.g. CS8601"
+                    className="erp-input uppercase font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Duration (Minutes) <span className="text-red-500">*</span></label>
+                  <input
+                    type="number"
+                    value={newExam.durationMinutes}
+                    onChange={(e) => setNewExam({ ...newExam, durationMinutes: e.target.value })}
+                    required
+                    className="erp-input font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Examination Title <span className="text-red-500">*</span></label>
+                <input
+                  type="text"
+                  value={newExam.title}
+                  onChange={(e) => setNewExam({ ...newExam, title: e.target.value })}
+                  required
+                  placeholder="e.g. Database Management Systems - End Semester CBT"
+                  className="erp-input"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Total Marks</label>
+                  <input
+                    type="number"
+                    value={newExam.totalMarks}
+                    onChange={(e) => setNewExam({ ...newExam, totalMarks: e.target.value })}
+                    className="erp-input font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Max Violations Threshold</label>
+                  <input
+                    type="number"
+                    value={newExam.maxViolations}
+                    onChange={(e) => setNewExam({ ...newExam, maxViolations: e.target.value })}
+                    className="erp-input font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Target Department</label>
+                  <select
+                    value={newExam.department}
+                    onChange={(e) => setNewExam({ ...newExam, department: e.target.value })}
+                    className="erp-select w-full"
+                  >
+                    <option value="Computer Science & Engineering">CSE</option>
+                    <option value="Electronics & Communication">ECE</option>
+                    <option value="Information Technology">IT</option>
+                    <option value="Mechanical Engineering">MECH</option>
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="erp-btn-primary w-full py-2.5 text-xs font-semibold mt-2"
+              >
+                {isSubmitting ? 'Scheduling Examination...' : 'Schedule & Publish Examination Paper'}
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* TAB 3: QUESTION BANK */}
+        {activeTab === 'QUESTION_BANK' && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="flex items-center space-x-2">
+                <div className="relative w-64">
+                  <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={questionSearch}
+                    onChange={(e) => setQuestionSearch(e.target.value)}
+                    placeholder="Search questions..."
+                    className="erp-input pl-9 text-xs py-1.5"
+                  />
+                </div>
+                <select
+                  value={questionTypeFilter}
+                  onChange={(e) => setQuestionTypeFilter(e.target.value)}
+                  className="erp-select text-xs py-1.5"
+                >
+                  <option value="ALL">All Types (MCQ / MSQ / NAT)</option>
+                  <option value="MCQ">MCQ Only</option>
+                  <option value="MSQ">MSQ Only</option>
+                  <option value="NAT">NAT Only</option>
+                </select>
+              </div>
+
+              <button className="erp-btn-primary text-xs py-1.5">
+                <Plus className="w-4 h-4" />
+                <span>Add Question to Bank</span>
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {questionsList
+                .filter((q) => questionTypeFilter === 'ALL' || q.type === questionTypeFilter)
+                .filter((q) => q.text.toLowerCase().includes(questionSearch.toLowerCase()))
+                .map((q) => (
+                  <div key={q.id} className="erp-card space-y-2">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                      <div className="flex items-center space-x-2">
+                        <span className="erp-badge-blue">{q.code}</span>
+                        <span className="erp-badge-gray">{q.type}</span>
+                        <span className="erp-badge-gray">Difficulty: {q.difficulty}</span>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-emerald-700">+{q.marks} Marks</span>
+                    </div>
+                    <p className="text-xs text-slate-800 leading-relaxed font-medium">{q.text}</p>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: CANDIDATE ROSTER */}
+        {activeTab === 'STUDENT_ROSTER' && (
+          <div className="space-y-4">
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+              Enrolled Candidates Roster ({dbStudents.length} Students)
+            </h3>
+
+            <div className="erp-table-container">
+              <table className="erp-table">
+                <thead>
+                  <tr>
+                    <th>Register Number</th>
+                    <th>Candidate Name</th>
+                    <th>Department & Semester</th>
+                    <th>Official Email</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dbStudents.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-slate-500">
+                        No enrolled candidates found in database.
+                      </td>
+                    </tr>
+                  ) : (
+                    dbStudents.map((s, idx) => (
+                      <tr key={s.id || idx}>
+                        <td className="font-mono font-bold text-[#1E40AF]">{s.registerNo || '71762105042'}</td>
+                        <td className="font-semibold text-slate-900">{s.name}</td>
+                        <td className="font-mono text-xs">{s.department} (Sem {s.semester || 6})</td>
+                        <td className="text-slate-600">{s.email}</td>
+                        <td>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await api.post(`/admin/students/${s.id}/reset-attempts`);
+                                alert(`Reset attempts for candidate ${s.name}`);
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            }}
+                            className="erp-btn-secondary py-1 text-xs"
+                          >
+                            <RotateCcw className="w-3 h-3 mr-1" /> Reset Attempt
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: ATTENDANCE REGISTER */}
+        {activeTab === 'ATTENDANCE' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                Examination Hall Attendance Register
+              </h3>
+              <span className="text-xs text-slate-500">Hall B-302 • Exam Date: 2026-08-07</span>
+            </div>
+
+            <div className="erp-table-container">
+              <table className="erp-table">
+                <thead>
+                  <tr>
+                    <th>Register No</th>
+                    <th>Candidate Name</th>
+                    <th>Department</th>
+                    <th>Check-in Time</th>
+                    <th>Attendance Status</th>
+                    <th>Action Toggle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceList.map((att) => (
+                    <tr key={att.registerNo}>
+                      <td className="font-mono font-bold text-[#1E40AF]">{att.registerNo}</td>
+                      <td className="font-semibold text-slate-900">{att.name}</td>
+                      <td className="font-mono text-xs">{att.department}</td>
+                      <td className="font-mono text-xs">{att.checkInTime}</td>
+                      <td>
+                        {att.status === 'PRESENT' ? (
+                          <span className="erp-badge-green">PRESENT</span>
+                        ) : (
+                          <span className="erp-badge-red">ABSENT</span>
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          onClick={() => toggleAttendanceStatus(att.registerNo)}
+                          className="erp-btn-secondary py-1 text-xs"
+                        >
+                          Toggle Status
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 6: RESULTS & EVALUATION */}
+        {activeTab === 'RESULTS' && (
+          <div className="space-y-4">
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+              Class Grade Distribution & Results Ledger ({dbResults.length} Items)
+            </h3>
+
+            <div className="erp-table-container">
+              <table className="erp-table">
+                <thead>
+                  <tr>
+                    <th>Register Number</th>
+                    <th>Candidate Name</th>
+                    <th>Course Title</th>
+                    <th>Score Obtained</th>
+                    <th>Grade Awarded</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dbResults.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-slate-500">
+                        No evaluated test results found in database.
+                      </td>
+                    </tr>
+                  ) : (
+                    dbResults.map((row, i) => (
+                      <tr key={i}>
+                        <td className="font-mono font-bold text-[#1E40AF]">{row.registerNo}</td>
+                        <td className="font-semibold text-slate-900">{row.studentName}</td>
+                        <td className="text-slate-700">{row.courseTitle}</td>
+                        <td className="font-mono font-bold text-emerald-700">{row.score} / {row.totalMarks}</td>
+                        <td className="font-semibold text-slate-900">{row.grade}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 7: REPORTS & ANALYTICS */}
+        {activeTab === 'REPORTS' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="erp-card space-y-3">
+              <h4 className="text-sm font-bold text-slate-900">Comprehensive Assessment Summary Report</h4>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Download consolidated performance ledger including individual scores, time spent per question, and invigilation compliance logs.
+              </p>
+              <button
+                onClick={() => handleExportReport('excel')}
+                className="erp-btn-primary py-2 text-xs w-full"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Excel Ledger Report</span>
+              </button>
+            </div>
+
+            <div className="erp-card space-y-3">
+              <h4 className="text-sm font-bold text-slate-900 font-sans">Official PDF Result Broadsheet</h4>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Generate Controller of Examinations certified PDF broadsheet formatted for official departmental records.
+              </p>
+              <button
+                onClick={() => handleExportReport('pdf')}
+                className="erp-btn-secondary py-2 text-xs w-full"
+              >
+                <Download className="w-4 h-4 text-[#1E40AF]" />
+                <span>Generate Official PDF Broadsheet</span>
+              </button>
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* Footer */}
+      <footer className="bg-white border-t border-slate-200 py-3 px-6 text-center text-xs text-slate-500 mt-auto">
+        Faculty Examination Governance Hub • Central University Controller of Examinations
+      </footer>
     </div>
   );
 }

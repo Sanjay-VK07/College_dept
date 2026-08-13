@@ -21,82 +21,86 @@ export const QuestionPalette: React.FC<QuestionPaletteProps> = ({
   onSelectQuestion,
   onSubmitExam,
 }) => {
-  // Count status summaries
-  const answeredCount = questions.filter(q => q.status === 'ANSWERED').length;
-  const notAnsweredCount = questions.filter(q => q.status === 'VISITED' || q.status === 'SKIPPED').length;
-  const notVisitedCount = questions.filter(q => q.status === 'NOT_VISITED').length;
-  const markedReviewCount = questions.filter(q => q.status === 'MARKED_FOR_REVIEW').length;
-  const answeredMarkedCount = questions.filter(q => q.status === 'ANSWERED_AND_MARKED').length;
+  // Status Counts
+  const answeredCount = questions.filter((q) => q.status === 'ANSWERED').length;
+  const notAnsweredCount = questions.filter((q) => q.status === 'VISITED' || q.status === 'SKIPPED').length;
+  const notVisitedCount = questions.filter((q) => q.status === 'NOT_VISITED').length;
+  const markedReviewCount = questions.filter((q) => q.status === 'MARKED_FOR_REVIEW').length;
+  const answeredMarkedCount = questions.filter((q) => q.status === 'ANSWERED_AND_MARKED').length;
 
-  const getStatusColor = (status: string, isCurrent: boolean) => {
-    let baseColor = 'bg-slate-700 text-slate-300';
-    if (status === 'ANSWERED') baseColor = 'bg-emerald-600 text-white';
-    else if (status === 'VISITED' || status === 'SKIPPED') baseColor = 'bg-rose-600 text-white';
-    else if (status === 'MARKED_FOR_REVIEW') baseColor = 'bg-purple-600 text-white';
-    else if (status === 'ANSWERED_AND_MARKED') baseColor = 'bg-purple-600 text-white relative';
+  const getStatusStyle = (status: string, isCurrent: boolean) => {
+    let base = 'bg-slate-100 text-slate-700 border border-slate-300';
+    if (status === 'ANSWERED') base = 'bg-[#16A34A] text-white border-[#16A34A] font-bold';
+    else if (status === 'VISITED' || status === 'SKIPPED') base = 'bg-[#DC2626] text-white border-[#DC2626] font-bold';
+    else if (status === 'MARKED_FOR_REVIEW') base = 'bg-[#7C3AED] text-white border-[#7C3AED] font-bold';
+    else if (status === 'ANSWERED_AND_MARKED') base = 'bg-[#7C3AED] text-white border-[#7C3AED] font-bold relative';
 
-    return `${baseColor} ${isCurrent ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 font-bold scale-105' : ''}`;
+    return `${base} ${isCurrent ? 'ring-2 ring-[#1E40AF] ring-offset-2 font-bold scale-105' : ''}`;
   };
 
   return (
-    <div className="w-80 glass-panel border-l border-slate-800 flex flex-col h-full select-none-security">
-      {/* Profile & Legend Header */}
-      <div className="p-4 border-b border-slate-800 bg-slate-900/60">
-        <h3 className="text-sm font-semibold text-slate-200 mb-3 uppercase tracking-wider">Question Palette</h3>
+    <div className="w-80 bg-white border-l border-slate-200 flex flex-col h-full select-none-security font-sans shadow-sm">
+      {/* Legend Header */}
+      <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-3">
+        <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Question Palette & Status</h3>
 
-        {/* GATE Status Legend */}
+        {/* Legend Status Counters Grid */}
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="flex items-center space-x-2">
-            <span className="w-5 h-5 rounded bg-emerald-600 flex items-center justify-center font-bold text-[10px] text-white">
+            <span className="w-5 h-5 rounded bg-[#16A34A] text-white font-bold text-[10px] flex items-center justify-center">
               {answeredCount}
             </span>
-            <span className="text-slate-400">Answered</span>
+            <span className="text-slate-600">Answered</span>
           </div>
+
           <div className="flex items-center space-x-2">
-            <span className="w-5 h-5 rounded bg-rose-600 flex items-center justify-center font-bold text-[10px] text-white">
+            <span className="w-5 h-5 rounded bg-[#DC2626] text-white font-bold text-[10px] flex items-center justify-center">
               {notAnsweredCount}
             </span>
-            <span className="text-slate-400">Not Answered</span>
+            <span className="text-slate-600">Not Answered</span>
           </div>
+
           <div className="flex items-center space-x-2">
-            <span className="w-5 h-5 rounded bg-slate-700 flex items-center justify-center font-bold text-[10px] text-slate-300">
+            <span className="w-5 h-5 rounded bg-slate-200 text-slate-700 font-bold text-[10px] flex items-center justify-center border border-slate-300">
               {notVisitedCount}
             </span>
-            <span className="text-slate-400">Not Visited</span>
+            <span className="text-slate-600">Not Visited</span>
           </div>
+
           <div className="flex items-center space-x-2">
-            <span className="w-5 h-5 rounded bg-purple-600 flex items-center justify-center font-bold text-[10px] text-white">
+            <span className="w-5 h-5 rounded bg-[#7C3AED] text-white font-bold text-[10px] flex items-center justify-center">
               {markedReviewCount}
             </span>
-            <span className="text-slate-400">Marked for Review</span>
+            <span className="text-slate-600">Marked Review</span>
           </div>
+
           <div className="col-span-2 flex items-center space-x-2">
-            <span className="w-5 h-5 rounded bg-purple-600 relative flex items-center justify-center font-bold text-[10px] text-white">
+            <span className="w-5 h-5 rounded bg-[#7C3AED] text-white font-bold text-[10px] flex items-center justify-center relative">
               {answeredMarkedCount}
-              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-400" />
+              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 border border-white" />
             </span>
-            <span className="text-slate-400">Ans & Marked for Review</span>
+            <span className="text-slate-600">Ans & Marked for Review</span>
           </div>
         </div>
       </div>
 
-      {/* Grid Palette Buttons */}
+      {/* Question Number Buttons Grid */}
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="grid grid-cols-4 gap-2.5">
+        <div className="grid grid-cols-4 gap-2">
           {questions.map((q, idx) => {
             const isCurrent = idx === currentIndex;
             return (
               <button
                 key={q.id}
                 onClick={() => onSelectQuestion(idx)}
-                className={`w-12 h-10 rounded-md font-medium text-xs flex items-center justify-center transition-all ${getStatusColor(
+                className={`w-12 h-10 rounded text-xs flex items-center justify-center transition-colors ${getStatusStyle(
                   q.status,
                   isCurrent
                 )}`}
               >
                 {q.order}
                 {q.status === 'ANSWERED_AND_MARKED' && (
-                  <span className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-blue-400" />
+                  <span className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-400 border border-white" />
                 )}
               </button>
             );
@@ -104,13 +108,13 @@ export const QuestionPalette: React.FC<QuestionPaletteProps> = ({
         </div>
       </div>
 
-      {/* Submit Action */}
-      <div className="p-4 border-t border-slate-800 bg-slate-900/80">
+      {/* Submit Action Footer */}
+      <div className="p-4 border-t border-slate-200 bg-slate-50">
         <button
           onClick={onSubmitExam}
-          className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 font-bold text-white text-sm rounded-lg shadow-lg shadow-emerald-600/30 transition-all uppercase tracking-wider"
+          className="erp-btn-success w-full py-2.5 font-bold uppercase tracking-wider text-xs"
         >
-          Submit Final Exam
+          Submit Final Examination
         </button>
       </div>
     </div>

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { Calculator, ShieldAlert, Clock, ArrowRight, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { Calculator, ShieldAlert, Clock, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle } from 'lucide-react';
 import api from '@/lib/api';
 import io from 'socket.io-client';
 import { SecurityGuard } from '@/components/exam/SecurityGuard';
@@ -46,7 +46,7 @@ export default function ExamPage() {
   useEffect(() => {
     if (remainingSec <= 0) return;
     const interval = setInterval(() => {
-      setRemainingSec(prev => {
+      setRemainingSec((prev) => {
         if (prev <= 1) {
           handleFinalSubmit();
           return 0;
@@ -58,13 +58,12 @@ export default function ExamPage() {
     return () => clearInterval(interval);
   }, [remainingSec]);
 
-  // Periodic Socket Progress Heartbeat Ticker (every 5s)
+  // Socket Progress Heartbeat Ticker
   useEffect(() => {
     if (!examData?.assignmentId || !socketRef.current) return;
 
     const heartbeatInterval = setInterval(() => {
       if (socketRef.current) {
-        console.log(`💓 [Socket.IO] Emitting heartbeat: Q${currentIndex + 1}, ${remainingSec}s remaining`);
         socketRef.current.emit('student_heartbeat', {
           assignmentId: examData.assignmentId,
           currentQuestion: currentIndex + 1,
@@ -80,7 +79,7 @@ export default function ExamPage() {
     try {
       const response = await api.post(`/exam/start/${testId}`, {});
 
-      if (response.data.success) {
+      if (response.data?.success) {
         const data = response.data.data;
         setExamData(data);
         setQuestions(data.questions);
@@ -95,7 +94,7 @@ export default function ExamPage() {
         });
         setSelectedAnswers(initialAnswers);
 
-        // Connect Socket.IO for invigilator live monitoring
+        // Socket connection
         const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
         const socket = io(socketUrl);
         socketRef.current = socket;
@@ -109,15 +108,13 @@ export default function ExamPage() {
           department: userData.department,
         });
 
-        // Listen for forced auto submit from invigilator
         socket.on('force_auto_submit', (payload: any) => {
-          alert(`Auto Submit Triggered: ${payload.reason}`);
+          alert(`Automated Termination: ${payload.reason}`);
           handleFinalSubmit();
         });
 
-        // Listen for remote faculty warning message
         socket.on('faculty_warning_received', (payload: any) => {
-          alert(`⚠️ INVIGILATOR WARNING:\n\n${payload.message}`);
+          alert(`⚠️ INVIGILATOR OFFICIAL NOTICE:\n\n${payload.message}`);
         });
       }
     } catch (err: any) {
@@ -136,19 +133,19 @@ export default function ExamPage() {
     } else if (q.type === 'MSQ') {
       const existing = (selectedAnswers[q.id] as number[]) || [];
       if (existing.includes(optionIndex)) {
-        newAns = existing.filter(i => i !== optionIndex);
+        newAns = existing.filter((i) => i !== optionIndex);
       } else {
         newAns = [...existing, optionIndex];
       }
     }
 
-    setSelectedAnswers(prev => ({ ...prev, [q.id]: newAns }));
+    setSelectedAnswers((prev) => ({ ...prev, [q.id]: newAns }));
     autoSave(q.id, newAns, 'ANSWERED');
   };
 
   const handleNATChange = (val: string) => {
     const q = questions[currentIndex];
-    setSelectedAnswers(prev => ({ ...prev, [q.id]: val }));
+    setSelectedAnswers((prev) => ({ ...prev, [q.id]: val }));
     autoSave(q.id, val, 'ANSWERED');
   };
 
@@ -162,7 +159,6 @@ export default function ExamPage() {
         timeSpentSec: 5,
       });
 
-      // Emit Heartbeat to Socket
       if (socketRef.current) {
         socketRef.current.emit('student_heartbeat', {
           assignmentId: examData.assignmentId,
@@ -176,7 +172,7 @@ export default function ExamPage() {
   };
 
   const handleSecurityViolation = (type: string, details?: string) => {
-    setCurrentViolations(prev => {
+    setCurrentViolations((prev) => {
       const updated = prev + 1;
       if (socketRef.current && examData) {
         socketRef.current.emit('security_violation_event', {
@@ -195,7 +191,7 @@ export default function ExamPage() {
     const statusStr = ans !== undefined && ans !== null && ans !== '' ? 'ANSWERED' : 'SKIPPED';
 
     updateQuestionStatus(q.id, statusStr);
-    if (currentIndex < questions.length - 1) setCurrentIndex(prev => prev + 1);
+    if (currentIndex < questions.length - 1) setCurrentIndex((prev) => prev + 1);
   };
 
   const handleMarkForReviewAndNext = () => {
@@ -204,13 +200,12 @@ export default function ExamPage() {
     const statusStr = ans !== undefined && ans !== null && ans !== '' ? 'ANSWERED_AND_MARKED' : 'MARKED_FOR_REVIEW';
 
     updateQuestionStatus(q.id, statusStr);
-    if (currentIndex < questions.length - 1) setCurrentIndex(prev => prev + 1);
+    if (currentIndex < questions.length - 1) setCurrentIndex((prev) => prev + 1);
   };
 
   const handleClearResponse = () => {
     const q = questions[currentIndex];
-    const newAns = undefined;
-    setSelectedAnswers(prev => {
+    setSelectedAnswers((prev) => {
       const copy = { ...prev };
       delete copy[q.id];
       return copy;
@@ -221,18 +216,21 @@ export default function ExamPage() {
   };
 
   const updateQuestionStatus = (questionId: string, newStatus: any) => {
-    setQuestions(prev =>
-      prev.map(q => (q.id === questionId ? { ...q, status: newStatus } : q))
+    setQuestions((prev) =>
+      prev.map((q) => (q.id === questionId ? { ...q, status: newStatus } : q))
     );
   };
 
   const handleFinalSubmit = async () => {
+    if (!confirm('Are you sure you want to submit your examination paper? This action is final.')) {
+      return;
+    }
     try {
       const res = await api.post('/exam/submit', {
         assignmentId: examData.assignmentId,
       });
 
-      if (res.data.success) {
+      if (res.data?.success) {
         if (socketRef.current) socketRef.current.disconnect();
         router.push(`/student/solution/${examData.assignmentId}`);
       }
@@ -243,9 +241,9 @@ export default function ExamPage() {
 
   if (loading || !examData) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mr-3" />
-        Securing GATE Examination Environment...
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center text-slate-600 space-y-3 font-sans">
+        <div className="w-8 h-8 border-3 border-[#1E40AF] border-t-transparent rounded-full animate-spin" />
+        <div className="text-sm font-medium">Securing CBT Examination Environment...</div>
       </div>
     );
   }
@@ -258,87 +256,83 @@ export default function ExamPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden select-none-security">
-      {/* Browser Security Guard */}
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col h-screen overflow-hidden select-none-security font-sans">
+      {/* Security Monitoring Engine */}
       <SecurityGuard
         onViolation={handleSecurityViolation}
         maxViolations={examData.test.maxViolations || 5}
         currentViolations={currentViolations}
       />
 
-      {/* Official GATE Scientific Calculator Modal */}
+      {/* Scientific Calculator Modal */}
       <GateScientificCalculator isOpen={isCalcOpen} onClose={() => setIsCalcOpen(false)} />
 
-      {/* Top Examination Header */}
-      <header className="bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between z-20">
-        <div className="flex items-center space-x-4">
+      {/* CBT Examination Navbar */}
+      <header className="bg-[#1E40AF] text-white border-b border-blue-900 px-6 py-2.5 flex items-center justify-between z-20 shadow-sm">
+        <div className="flex items-center space-x-3">
           <div className="font-bold text-white text-base">{examData.test.title}</div>
-          <span className="px-2.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-xs font-mono">
+          <span className="erp-badge-blue bg-white/10 text-white border-white/20">
             {currentQ.subject}
           </span>
         </div>
 
-        {/* Student Reg & Timer & Calculator Button */}
-        <div className="flex items-center space-x-6">
+        {/* Controls & Candidate Profile */}
+        <div className="flex items-center space-x-5">
           <button
             onClick={() => setIsCalcOpen(!isCalcOpen)}
-            className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-semibold"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-white text-xs font-semibold border border-white/20 transition-colors"
           >
-            <Calculator className="w-4 h-4" />
+            <Calculator className="w-4 h-4 text-blue-200" />
             <span>Scientific Calculator</span>
           </button>
 
-          <div className="flex items-center space-x-2 px-4 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-emerald-400 font-mono text-sm font-bold">
-            <Clock className="w-4 h-4" />
+          <div className="flex items-center space-x-2 px-3.5 py-1 rounded bg-white text-[#1E40AF] font-mono text-sm font-bold border border-blue-200 shadow-inner">
+            <Clock className="w-4 h-4 text-[#1E40AF]" />
             <span>Time Left: {formatTimer(remainingSec)}</span>
           </div>
 
-          <div className="text-right border-l border-slate-800 pl-4">
-            <div className="text-xs font-bold text-slate-200">{user.name}</div>
-            <div className="text-[10px] text-slate-400 font-mono">Reg: {user.registerNo}</div>
+          <div className="text-right border-l border-blue-800 pl-4 hidden sm:block">
+            <div className="text-xs font-bold text-white">{user.name}</div>
+            <div className="text-[10px] text-blue-200 font-mono">Reg: {user.registerNo}</div>
           </div>
         </div>
       </header>
 
-      {/* Middle Exam Section */}
+      {/* Main CBT Work Area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Question & Options Area */}
-        <div className="flex-1 flex flex-col p-6 overflow-y-auto bg-slate-950">
-          {/* Question Header Meta */}
-          <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-6">
+        {/* Left Question Reading & Answer Panel */}
+        <div className="flex-1 flex flex-col p-6 overflow-y-auto bg-white">
+          {/* Question Header Metadata */}
+          <div className="flex justify-between items-center pb-3 border-b border-slate-200 mb-6">
             <div className="flex items-center space-x-3">
-              <span className="text-lg font-bold text-indigo-400">Question {currentQ.order}</span>
-              <span className="px-2.5 py-0.5 rounded text-xs font-bold bg-slate-800 text-slate-300">
-                {currentQ.type}
-              </span>
-              <span className="px-2.5 py-0.5 rounded text-xs font-bold bg-slate-800 text-slate-300">
-                Difficulty: {currentQ.difficulty}
-              </span>
+              <span className="text-lg font-bold text-[#1E40AF]">Question {currentQ.order}</span>
+              <span className="erp-badge-gray">{currentQ.type}</span>
+              <span className="erp-badge-gray">Difficulty: {currentQ.difficulty}</span>
             </div>
-            <div className="text-xs font-mono text-slate-400">
-              Marks: <b className="text-emerald-400">+{currentQ.marks}</b> | Negative: <b className="text-rose-400">-{currentQ.negativeMarks}</b>
+            <div className="text-xs font-mono text-slate-600">
+              Marks: <b className="text-emerald-700">+{currentQ.marks}</b> | Negative: <b className="text-red-700">-{currentQ.negativeMarks}</b>
             </div>
           </div>
 
           {/* Question Statement */}
-          <div className="text-slate-100 text-base leading-relaxed mb-8 font-sans whitespace-pre-wrap">
+          <div className="text-slate-900 text-base leading-relaxed mb-6 whitespace-pre-wrap font-medium">
             {currentQ.text}
           </div>
 
-          {/* Options Display (MCQ / MSQ / NAT) */}
+          {/* Options Display */}
           <div className="space-y-3 flex-1">
             {currentQ.type === 'NAT' ? (
               <div className="max-w-xs space-y-2">
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Numerical Answer Input:
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Numerical Answer Entry:
                 </label>
                 <input
                   type="number"
                   step="any"
                   value={selectedAnswers[currentQ.id] || ''}
-                  onChange={e => handleNATChange(e.target.value)}
-                  placeholder="Enter numerical answer"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-emerald-400 font-mono focus:outline-none focus:border-indigo-500"
+                  onChange={(e) => handleNATChange(e.target.value)}
+                  placeholder="Enter calculated numerical answer"
+                  className="erp-input font-mono font-bold text-emerald-700"
                 />
               </div>
             ) : (
@@ -352,55 +346,55 @@ export default function ExamPage() {
                   <button
                     key={optIdx}
                     onClick={() => handleOptionSelect(optIdx)}
-                    className={`w-full text-left p-4 rounded-xl border transition-all flex items-center space-x-4 ${
+                    className={`w-full text-left p-3.5 rounded-md border transition-colors flex items-center space-x-3.5 ${
                       isSelected
-                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-md'
-                        : 'glass-card border-slate-800 text-slate-300 hover:bg-slate-900'
+                        ? 'bg-blue-50/80 border-[#1E40AF] text-slate-900 shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-800 hover:bg-slate-50'
                     }`}
                   >
                     <div
-                      className={`w-7 h-7 rounded-lg flex items-center justify-center font-mono font-bold text-xs shrink-0 ${
-                        isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400'
+                      className={`w-7 h-7 rounded flex items-center justify-center font-mono font-bold text-xs shrink-0 ${
+                        isSelected ? 'bg-[#1E40AF] text-white' : 'bg-slate-100 text-slate-700 border border-slate-300'
                       }`}
                     >
                       {String.fromCharCode(65 + optIdx)}
                     </div>
-                    <span className="text-sm">{opt.text}</span>
+                    <span className="text-sm font-medium">{opt.text}</span>
                   </button>
                 );
               })
             )}
           </div>
 
-          {/* Bottom Control Bar */}
-          <div className="pt-6 border-t border-slate-800 flex justify-between items-center mt-auto">
-            <div className="space-x-3">
+          {/* Bottom Controls Bar */}
+          <div className="pt-4 border-t border-slate-200 flex justify-between items-center mt-auto">
+            <div className="space-x-2">
               <button
                 onClick={handleMarkForReviewAndNext}
-                className="px-4 py-2.5 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 text-xs font-bold rounded-xl"
+                className="erp-btn-secondary py-2 text-xs"
               >
                 Mark for Review & Next
               </button>
               <button
                 onClick={handleClearResponse}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-bold rounded-xl"
+                className="erp-btn-secondary py-2 text-xs text-slate-600"
               >
                 Clear Response
               </button>
             </div>
 
-            <div className="space-x-3 flex items-center">
+            <div className="space-x-2 flex items-center">
               <button
                 disabled={currentIndex === 0}
-                onClick={() => setCurrentIndex(prev => prev - 1)}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 text-xs font-bold rounded-xl flex items-center space-x-1"
+                onClick={() => setCurrentIndex((prev) => prev - 1)}
+                className="erp-btn-secondary py-2 text-xs"
               >
                 <ArrowLeft className="w-4 h-4" />
                 <span>Previous</span>
               </button>
               <button
                 onClick={handleSaveAndNext}
-                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-indigo-600/30 flex items-center space-x-1"
+                className="erp-btn-primary py-2 text-xs"
               >
                 <span>Save & Next</span>
                 <ArrowRight className="w-4 h-4" />
@@ -409,11 +403,11 @@ export default function ExamPage() {
           </div>
         </div>
 
-        {/* Right Sidebar: TCS Question Palette */}
+        {/* TCS iON Style Right Question Palette */}
         <QuestionPalette
           questions={questions}
           currentIndex={currentIndex}
-          onSelectQuestion={idx => setCurrentIndex(idx)}
+          onSelectQuestion={(idx) => setCurrentIndex(idx)}
           onSubmitExam={handleFinalSubmit}
         />
       </div>
