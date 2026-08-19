@@ -7,6 +7,7 @@ import questionRoutes from './routes/questionRoutes';
 import analyticsRoutes from './routes/analyticsRoutes';
 import adminRoutes from './routes/adminRoutes';
 import notificationRoutes from './routes/notificationRoutes';
+import aiRoutes from './modules/ai/routes/aiRoutes';
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use('/api/questions', questionRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

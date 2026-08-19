@@ -4,7 +4,11 @@
 
 @layer base {
   body {
-    @apply bg-[#F8FAFC] text-slate-900 font-sans antialiased selection:bg-blue-600 selection:text-white;
+    @apply bg-[#F8FAFC] text-slate-900 font-sans antialiased;
+  }
+
+  ::selection {
+    @apply bg-blue-600 text-white;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -14,7 +18,12 @@
 
 /* ERP Layout Component Helpers */
 .erp-card {
-  @apply bg-white border border-slate-200 rounded-lg shadow-sm p-4 sm:p-6 transition-all;
+  @apply bg-white border border-slate-200 rounded-lg shadow-sm p-4 transition-all;
+}
+@media (min-width: 640px) {
+  .erp-card {
+    @apply p-6;
+  }
 }
 
 .erp-card-header {
@@ -34,7 +43,12 @@
 }
 
 .erp-table td {
-  @apply px-4 py-3 border-b border-slate-100 text-slate-800 text-xs sm:text-sm;
+  @apply px-4 py-3 border-b border-slate-100 text-slate-800 text-xs;
+}
+@media (min-width: 640px) {
+  .erp-table td {
+    @apply text-sm;
+  }
 }
 
 .erp-table tr:last-child td {
@@ -46,27 +60,60 @@
 }
 
 .erp-input {
-  @apply w-full bg-white border border-slate-300 rounded-md px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition-colors disabled:bg-slate-100 disabled:text-slate-500;
+  @apply w-full bg-white border border-slate-300 rounded-md px-3.5 py-2 text-sm text-slate-900 transition-colors;
+}
+.erp-input::placeholder {
+  @apply text-slate-400;
+}
+.erp-input:focus {
+  @apply outline-none ring-2 ring-blue-600 border-blue-600;
+}
+.erp-input:disabled {
+  @apply bg-slate-100 text-slate-500;
 }
 
 .erp-select {
-  @apply bg-white border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 transition-colors;
+  @apply bg-white border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 transition-colors;
+}
+.erp-select:focus {
+  @apply outline-none ring-2 ring-blue-600 border-blue-600;
 }
 
 .erp-btn-primary {
-  @apply bg-[#1E40AF] hover:bg-[#1D4ED8] disabled:opacity-50 text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+  @apply bg-[#1E40AF] text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+}
+.erp-btn-primary:hover {
+  @apply bg-[#1D4ED8];
+}
+.erp-btn-primary:disabled {
+  @apply opacity-50;
 }
 
 .erp-btn-secondary {
-  @apply bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+  @apply bg-white border border-slate-300 text-slate-700 font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+}
+.erp-btn-secondary:hover {
+  @apply bg-slate-50;
 }
 
 .erp-btn-danger {
-  @apply bg-[#DC2626] hover:bg-red-700 disabled:opacity-50 text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+  @apply bg-[#DC2626] text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+}
+.erp-btn-danger:hover {
+  @apply bg-red-700;
+}
+.erp-btn-danger:disabled {
+  @apply opacity-50;
 }
 
 .erp-btn-success {
-  @apply bg-[#16A34A] hover:bg-emerald-700 disabled:opacity-50 text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+  @apply bg-[#16A34A] text-white font-medium text-sm px-4 py-2 rounded-md shadow-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer;
+}
+.erp-btn-success:hover {
+  @apply bg-emerald-700;
+}
+.erp-btn-success:disabled {
+  @apply opacity-50;
 }
 
 .erp-badge-blue {

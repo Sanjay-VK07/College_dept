@@ -5,6 +5,7 @@ import { Target, Zap, Award, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
 interface TopicStat {
+  id: string;
   topic: string;
   subject: string;
   accuracy: number;
@@ -20,9 +21,10 @@ interface AttemptHistory {
 }
 
 interface StudentAnalyticsData {
-  overallAccuracy: number;
-  avgTimePerQuestion: number;
+  overallAccuracy: number | null;
+  avgTimePerQuestion: number | null;
   totalExamsCompleted: number;
+  analyticsEligibleExams?: number;
   strongTopics: TopicStat[];
   weakTopics: TopicStat[];
   topicAccuracy: TopicStat[];
@@ -30,13 +32,44 @@ interface StudentAnalyticsData {
 }
 
 export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({ data }) => {
-  if (!data || data.totalExamsCompleted === 0) {
+  const hasNoData =
+    !data ||
+    data.totalExamsCompleted === 0 ||
+    (data.overallAccuracy === null &&
+      data.avgTimePerQuestion === null &&
+      (!data.strongTopics || data.strongTopics.length === 0) &&
+      (!data.weakTopics || data.weakTopics.length === 0) &&
+      (!data.topicAccuracy || data.topicAccuracy.length === 0));
+
+  if (hasNoData) {
     return (
       <div className="erp-card text-center py-12 text-slate-500 text-xs font-mono">
         No data available
       </div>
     );
   }
+
+  // Rule 11: Strict Null Handling
+  const overallAccuracyDisplay =
+    data.overallAccuracy !== null &&
+    data.overallAccuracy !== undefined &&
+    Number.isFinite(data.overallAccuracy)
+      ? `${data.overallAccuracy}%`
+      : '--';
+
+  const avgSpeedDisplay =
+    data.avgTimePerQuestion !== null &&
+    data.avgTimePerQuestion !== undefined &&
+    Number.isFinite(data.avgTimePerQuestion)
+      ? `${data.avgTimePerQuestion} sec`
+      : '--';
+
+  const completedCountDisplay =
+    data.totalExamsCompleted !== null &&
+    data.totalExamsCompleted !== undefined &&
+    Number.isFinite(data.totalExamsCompleted)
+      ? data.totalExamsCompleted
+      : '--';
 
   return (
     <div className="space-y-6 font-sans">
@@ -47,8 +80,8 @@ export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({
             <Target className="w-5 h-5" />
             <span className="text-xs uppercase tracking-wider font-semibold text-slate-500">Overall Accuracy</span>
           </div>
-          <div className="text-3xl font-bold text-slate-900">{data.overallAccuracy}%</div>
-          <p className="text-xs text-slate-500 mt-1">University target benchmark: &gt;75%</p>
+          <div className="text-3xl font-bold text-slate-900">{overallAccuracyDisplay}</div>
+          <p className="text-xs text-slate-500 mt-1">Evaluated performance accuracy</p>
         </div>
 
         <div className="erp-card">
@@ -56,8 +89,8 @@ export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({
             <Zap className="w-5 h-5" />
             <span className="text-xs uppercase tracking-wider font-semibold text-slate-500">Avg Speed per Qn</span>
           </div>
-          <div className="text-3xl font-bold text-slate-900">{data.avgTimePerQuestion} sec</div>
-          <p className="text-xs text-slate-500 mt-1">Recommended speed: 120 - 180 sec</p>
+          <div className="text-3xl font-bold text-slate-900">{avgSpeedDisplay}</div>
+          <p className="text-xs text-slate-500 mt-1">Evaluated speed per question</p>
         </div>
 
         <div className="erp-card">
@@ -65,7 +98,7 @@ export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({
             <Award className="w-5 h-5" />
             <span className="text-xs uppercase tracking-wider font-semibold text-slate-500">Completed Assessments</span>
           </div>
-          <div className="text-3xl font-bold text-slate-900">{data.totalExamsCompleted}</div>
+          <div className="text-3xl font-bold text-slate-900">{completedCountDisplay}</div>
           <p className="text-xs text-slate-500 mt-1">Verified examination records</p>
         </div>
       </div>
@@ -84,8 +117,8 @@ export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({
                 No data available
               </div>
             ) : (
-              data.strongTopics.map((t, idx) => (
-                <div key={idx} className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 text-xs">
+              data.strongTopics.map((t) => (
+                <div key={t.id || t.topic} className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 text-xs">
                   <div>
                     <div className="font-semibold text-slate-900">{t.topic}</div>
                     <div className="text-slate-500 text-[11px]">{t.subject}</div>
@@ -109,8 +142,8 @@ export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({
                 No data available
               </div>
             ) : (
-              data.weakTopics.map((t, idx) => (
-                <div key={idx} className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 text-xs">
+              data.weakTopics.map((t) => (
+                <div key={t.id || t.topic} className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 text-xs">
                   <div>
                     <div className="font-semibold text-slate-900">{t.topic}</div>
                     <div className="text-slate-500 text-[11px]">{t.subject}</div>

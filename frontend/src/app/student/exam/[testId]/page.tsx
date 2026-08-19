@@ -44,7 +44,8 @@ export default function ExamPage() {
 
   // Timer Countdown Ticker
   useEffect(() => {
-    if (remainingSec <= 0) return;
+    if (loading || !examData) return;
+
     const interval = setInterval(() => {
       setRemainingSec((prev) => {
         if (prev <= 1) {
@@ -56,7 +57,7 @@ export default function ExamPage() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [remainingSec]);
+  }, [loading, examData]);
 
   // Socket Progress Heartbeat Ticker
   useEffect(() => {

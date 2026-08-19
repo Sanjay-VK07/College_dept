@@ -19,7 +19,7 @@ import {
 import api from '@/lib/api';
 import { StudentAnalyticsView } from '@/components/analytics/StudentAnalyticsView';
 
-// Strict Helper for profile text fields (uses "N/A" for missing profile info)
+// Strict Helper for profile text fields (uses "N/A" for missing text fields)
 function displayProfileField<T>(value: T | null | undefined, fallback = 'N/A'): string {
   if (value === null || value === undefined || value === '') return fallback;
   return String(value);
@@ -107,7 +107,7 @@ export default function StudentDashboard() {
       if (profileRes.data?.success && profileRes.data?.data) {
         setUser(profileRes.data.data);
       }
-      if (testRes.data?.success) setTests(testRes.data.data);
+      if (testRes.data?.success) setTests(testRes.data.data || []);
       if (analyticsRes.data?.success) setAnalyticsData(analyticsRes.data.data);
       if (notifRes.data?.success) setDbNotifications(notifRes.data.data.notifications || []);
     } catch (err: any) {
@@ -132,9 +132,14 @@ export default function StudentDashboard() {
     );
   }
 
-  // Dynamic Datasets derived strictly from DB state
-  const activeExams = tests.filter((t) => t.status !== 'COMPLETED');
-  const completedExams = tests.filter((t) => t.status === 'COMPLETED');
+  // Dynamic Datasets derived strictly from student assignment status
+  const completedExams = tests.filter(
+    (assignment) => assignment.status === 'COMPLETED' || assignment.status === 'AUTO_SUBMITTED'
+  );
+
+  const upcomingExams = tests.filter(
+    (assignment) => assignment.status === 'SCHEDULED' || assignment.status === 'IN_PROGRESS'
+  );
 
   const studentProfile = {
     name: displayProfileField(user.name, 'N/A'),
@@ -149,7 +154,7 @@ export default function StudentDashboard() {
     cgpa: '--',
   };
 
-  const upcomingExamsList = activeExams.map((item: any) => {
+  const upcomingExamsList = upcomingExams.map((item: any) => {
     const startTimeDate = item.test?.startTime ? new Date(item.test.startTime) : null;
     const formattedDate = startTimeDate
       ? startTimeDate.toISOString().split('T')[0]
@@ -158,52 +163,35 @@ export default function StudentDashboard() {
       ? startTimeDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
       : '--';
 
-    const titleStr = item.test?.title || 'Assessment Paper';
-    const titleParts = titleStr.split(' ');
+    const titleStr = item.test?.title || '--';
+    const titleParts = titleStr !== '--' ? titleStr.split(' ') : [];
     const courseCode = titleParts[0] && /^[A-Z0-9]+$/i.test(titleParts[0]) ? titleParts[0] : '--';
+    const duration = item.test?.durationMinutes !== undefined && item.test?.durationMinutes !== null ? item.test.durationMinutes : '--';
 
     return {
       id: item.test?.id || item.id,
       code: courseCode,
       title: titleStr,
       date: formattedDate,
-      time: startTimeDate ? `${formattedTime} (${item.test?.durationMinutes || 0} Mins)` : '--',
+      time: startTimeDate ? `${formattedTime} (${duration} Mins)` : '--',
       hall: item.test?.targetSection ? `Exam Hall (${item.test.targetSection})` : 'Online CBT Portal',
-      duration: `${item.test?.durationMinutes || 0} Mins`,
-      status: item.status || 'SCHEDULED',
+      duration: `${duration} Mins`,
+      status: item.status || '--',
     };
   });
 
   const recentResultsList = completedExams.map((item: any) => {
-    const titleStr = item.test?.title || 'Assessment Paper';
-    const code = titleStr.split(' ')[0] && /^[A-Z0-9]+$/i.test(titleStr.split(' ')[0]) ? titleStr.split(' ')[0] : '--';
-    const score = item.score !== null && item.score !== undefined ? item.score : 0;
-    const totalMarks = item.test?.totalMarks || 100;
-    const pct = totalMarks > 0 ? (score / totalMarks) * 100 : 0;
-
-    const ciaMarks = Math.round(score * 0.4);
-    const eseMarks = Math.round(score);
-
-    let grade = 'F (Fail)';
-    let status = 'FAIL';
-    if (pct >= 90) { grade = 'O (Outstanding)'; status = 'PASS'; }
-    else if (pct >= 80) { grade = 'A+ (Excellent)'; status = 'PASS'; }
-    else if (pct >= 70) { grade = 'A (Very Good)'; status = 'PASS'; }
-    else if (pct >= 60) { grade = 'B+ (Good)'; status = 'PASS'; }
-    else if (pct >= 50) { grade = 'B (Above Average)'; status = 'PASS'; }
-    else if (pct >= 40) { grade = 'C (Pass)'; status = 'PASS'; }
+    const titleStr = item.test?.title || '--';
+    const code = titleStr !== '--' && titleStr.split(' ')[0] && /^[A-Z0-9]+$/i.test(titleStr.split(' ')[0]) ? titleStr.split(' ')[0] : '--';
+    const score = item.score !== null && item.score !== undefined ? item.score : '--';
+    const totalMarks = item.test?.totalMarks !== null && item.test?.totalMarks !== undefined ? item.test.totalMarks : '--';
 
     return {
       code,
       subject: titleStr,
-      ciaMarks,
-      maxCia: 50,
-      eseMarks,
-      maxEse: totalMarks,
-      total: score,
-      grade,
-      status,
-      percentage: pct,
+      score,
+      totalMarks,
+      status: item.status || 'EVALUATED',
     };
   });
 
@@ -213,7 +201,7 @@ export default function StudentDashboard() {
     id: n.id,
     title: n.title,
     date: new Date(n.createdAt).toISOString().split('T')[0],
-    author: 'Office of Controller of Examinations',
+    author: n.role ? `Target: ${n.role}` : 'System',
     badge: (n.type || 'INFO').toUpperCase(),
     content: n.message,
   }));
@@ -339,54 +327,78 @@ export default function StudentDashboard() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {tests.map((assignment: any) => (
-                    <div
-                      key={assignment.id}
-                      className="erp-card flex flex-col justify-between border-slate-200 hover:border-blue-300 space-y-4"
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <span className="erp-badge-blue mb-1">
-                            {assignment.test?.examType || 'SCHEDULED'}
-                          </span>
-                          <h4 className="text-base font-bold text-slate-900 mt-1">{assignment.test?.title || 'Assessment Paper'}</h4>
-                          <p className="text-xs text-slate-600 line-clamp-2 mt-1">{assignment.test?.description || ''}</p>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <div className="text-sm font-bold text-emerald-700">{assignment.test?.totalMarks || 0} Marks</div>
-                          <div className="text-xs text-slate-500 font-mono">{assignment.test?.durationMinutes || 0} Minutes</div>
-                        </div>
-                      </div>
+                  {tests.map((assignment: any) => {
+                    const status = assignment.status || 'SCHEDULED';
+                    const isCompleted = status === 'COMPLETED' || status === 'AUTO_SUBMITTED';
+                    const isInProgress = status === 'IN_PROGRESS';
 
-                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-                        <div className="text-xs text-slate-500 font-mono">
-                          Max Security Violations: <b>{assignment.test?.maxViolations || 5}</b>
-                        </div>
+                    const testTitle = assignment.test?.title || '--';
+                    const testDesc = assignment.test?.description || '';
+                    const examCategory = assignment.test?.examType || '--';
+                    const totalMarksStr = assignment.test?.totalMarks !== undefined && assignment.test?.totalMarks !== null ? `${assignment.test.totalMarks} Marks` : '--';
+                    const durationStr = assignment.test?.durationMinutes !== undefined && assignment.test?.durationMinutes !== null ? `${assignment.test.durationMinutes} Minutes` : '--';
+                    const maxViolationsStr = assignment.test?.maxViolations !== undefined && assignment.test?.maxViolations !== null ? assignment.test.maxViolations : '--';
 
-                        {assignment.status === 'COMPLETED' ? (
-                          <div className="flex items-center space-x-2">
-                            <span className="erp-badge-green">
-                              Score: {assignment.score}/{assignment.test?.totalMarks}
-                            </span>
-                            <button
-                              onClick={() => router.push(`/student/solution/${assignment.id}`)}
-                              className="erp-btn-secondary py-1.5 text-xs"
-                            >
-                              Review Solutions
-                            </button>
+                    return (
+                      <div
+                        key={assignment.id}
+                        className="erp-card flex flex-col justify-between border-slate-200 hover:border-blue-300 space-y-4"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <div className="flex items-center space-x-2 mb-1">
+                              <span className={isCompleted ? 'erp-badge-green' : isInProgress ? 'erp-badge-amber' : 'erp-badge-blue'}>
+                                {status}
+                              </span>
+                              <span className="erp-badge-gray">{examCategory}</span>
+                            </div>
+                            <h4 className="text-base font-bold text-slate-900 mt-1">{testTitle}</h4>
+                            {testDesc && <p className="text-xs text-slate-600 line-clamp-2 mt-1">{testDesc}</p>}
                           </div>
-                        ) : (
-                          <button
-                            onClick={() => router.push(`/student/exam/${assignment.test?.id || assignment.testId}`)}
-                            className="erp-btn-primary py-2 text-xs font-semibold"
-                          >
-                            <Play className="w-3.5 h-3.5 fill-current" />
-                            <span>Launch CBT Exam</span>
-                          </button>
-                        )}
+                          <div className="text-right shrink-0">
+                            <div className="text-sm font-bold text-emerald-700">{totalMarksStr}</div>
+                            <div className="text-xs text-slate-500 font-mono">{durationStr}</div>
+                          </div>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                          <div className="text-xs text-slate-500 font-mono">
+                            Max Security Violations: <b>{maxViolationsStr}</b>
+                          </div>
+
+                          {isCompleted ? (
+                            <div className="flex items-center space-x-2">
+                              <span className="erp-badge-green">
+                                Score: {assignment.score !== null && assignment.score !== undefined ? assignment.score : '--'}/{assignment.test?.totalMarks !== null && assignment.test?.totalMarks !== undefined ? assignment.test.totalMarks : '--'}
+                              </span>
+                              <button
+                                onClick={() => router.push(`/student/solution/${assignment.id}`)}
+                                className="erp-btn-secondary py-1.5 text-xs"
+                              >
+                                Review Solutions
+                              </button>
+                            </div>
+                          ) : isInProgress ? (
+                            <button
+                              onClick={() => router.push(`/student/exam/${assignment.test?.id || assignment.testId}`)}
+                              className="erp-btn-primary py-2 text-xs font-semibold"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>Resume CBT Exam</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => router.push(`/student/exam/${assignment.test?.id || assignment.testId}`)}
+                              className="erp-btn-primary py-2 text-xs font-semibold"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>Launch CBT Exam</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -416,7 +428,7 @@ export default function StudentDashboard() {
                   <span className="text-xs font-semibold uppercase tracking-wider">Upcoming Exams</span>
                   <Calendar className="w-4 h-4 text-amber-600" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900">{upcomingExamsList.length}</div>
+                <div className="text-2xl font-bold text-slate-900">{upcomingExams.length}</div>
                 <p className="text-xs text-slate-500 mt-1">Scheduled Assessments</p>
               </div>
             </div>
@@ -503,7 +515,7 @@ export default function StudentDashboard() {
                     <th>Subject Name</th>
                     <th>CIA Marks (50)</th>
                     <th>ESE Marks (100)</th>
-                    <th>Total Grade Points</th>
+                    <th>Total Score</th>
                     <th>Letter Grade</th>
                     <th>Result Status</th>
                   </tr>
@@ -520,10 +532,10 @@ export default function StudentDashboard() {
                       <tr key={idx}>
                         <td className="font-mono font-bold text-[#1E40AF]">{res.code}</td>
                         <td className="font-semibold text-slate-900">{res.subject}</td>
-                        <td className="font-mono text-slate-700">{res.ciaMarks} / 50</td>
-                        <td className="font-mono text-slate-700">{res.eseMarks} / 100</td>
-                        <td className="font-mono font-bold text-[#1E40AF]">{res.total} / 100</td>
-                        <td className="font-semibold text-slate-900">{res.grade}</td>
+                        <td className="font-mono text-slate-700">--</td>
+                        <td className="font-mono text-slate-700">--</td>
+                        <td className="font-mono font-bold text-[#1E40AF]">{res.score} / {res.totalMarks}</td>
+                        <td className="font-semibold text-slate-900">--</td>
                         <td>
                           <span className="erp-badge-green">{res.status}</span>
                         </td>
@@ -543,7 +555,7 @@ export default function StudentDashboard() {
               <div>
                 <h4 className="text-sm font-bold text-slate-800">Overall Attendance Compliance</h4>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Minimum mandatory requirement for exam eligibility: <b>75.0%</b>
+                  Minimum mandatory requirement for exam eligibility: <b>{user?.minAttendanceRequirement ? `${user.minAttendanceRequirement}%` : '--'}</b>
                 </p>
               </div>
               <div className="text-slate-700 font-bold text-2xl font-mono">{studentProfile.attendancePercent}</div>
@@ -577,7 +589,7 @@ export default function StudentDashboard() {
                         <td className="font-mono text-emerald-700 font-bold">{att.attended}</td>
                         <td className="font-mono font-bold">{att.percent}%</td>
                         <td>
-                          {att.percent >= 75 ? (
+                          {att.percent >= (user?.minAttendanceRequirement ? Number(user.minAttendanceRequirement) : 100) ? (
                             <span className="erp-badge-green">ELIGIBLE</span>
                           ) : (
                             <span className="erp-badge-red">SHORTAGE</span>
@@ -595,7 +607,17 @@ export default function StudentDashboard() {
         {/* TAB 5: PERFORMANCE ANALYTICS */}
         {activeTab === 'ANALYTICS' && (
           <div className="space-y-4">
-            {analyticsData && analyticsData.totalExamsCompleted > 0 ? (
+            {fetchError ? (
+              <div className="erp-card bg-red-50 border border-red-200 text-red-800 p-4 text-xs flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>Unable to load performance analytics.</span>
+                </div>
+                <button onClick={() => fetchDashboardData()} className="erp-btn-secondary py-1 text-xs">
+                  Retry
+                </button>
+              </div>
+            ) : analyticsData ? (
               <StudentAnalyticsView data={analyticsData} />
             ) : (
               <div className="erp-card text-center py-12 text-slate-500 text-xs font-mono">
@@ -682,11 +704,11 @@ export default function StudentDashboard() {
                       .map((item: any) => (
                         <tr key={item.id}>
                           <td className="font-bold text-slate-900">{item.test?.title}</td>
-                          <td className="font-mono text-xs">{item.test?.examType || 'SCHEDULED'}</td>
+                          <td className="font-mono text-xs">{item.test?.examType || '--'}</td>
                           <td className="font-mono font-bold text-emerald-700">{item.score}</td>
                           <td className="font-mono text-slate-600">{item.test?.totalMarks}</td>
                           <td>
-                            <span className="erp-badge-green">EVALUATED</span>
+                            <span className="erp-badge-green">{item.status}</span>
                           </td>
                           <td>
                             <button

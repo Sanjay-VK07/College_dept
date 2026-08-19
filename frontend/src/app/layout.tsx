@@ -1,5 +1,6 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { AIAssistant } from '@/components/ai/AIAssistant';
 
 export const metadata: Metadata = {
   title: 'University Examination Management System (EMS)',
@@ -15,6 +16,7 @@ export default function RootLayout({
     <html lang="en">
       <body className="min-h-screen bg-[#F8FAFC] text-slate-900 antialiased font-sans">
         {children}
+        <AIAssistant />
       </body>
     </html>
   );

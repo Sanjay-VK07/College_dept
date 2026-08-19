@@ -138,7 +138,18 @@ export class AuthController {
           createdAt: true,
         },
       });
-      return res.status(200).json({ success: true, data: user });
+
+      const attendanceSetting = await prisma.systemSetting.findUnique({
+        where: { key: 'MIN_ATTENDANCE_REQUIREMENT' },
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          ...user,
+          minAttendanceRequirement: attendanceSetting ? attendanceSetting.value : null,
+        },
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }

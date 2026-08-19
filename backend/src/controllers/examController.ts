@@ -403,6 +403,13 @@ export class ExamController {
         });
       }
 
+      if (assignment.status !== 'COMPLETED' && assignment.status !== 'AUTO_SUBMITTED') {
+        return res.status(403).json({
+          success: false,
+          message: 'Solution review is only available after completing or submitting the examination.',
+        });
+      }
+
       const responseMap = new Map();
       assignment.responses.forEach(r => responseMap.set(r.questionId, r));
 
