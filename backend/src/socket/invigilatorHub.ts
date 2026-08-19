@@ -28,35 +28,22 @@ export function setupInvigilatorHub(io: Server) {
 
     // Join Faculty Invigilator Room
     socket.on('join_faculty_room', async (data: { testId: string }) => {
-      const requestedTestId = data?.testId || 'test-demo-123';
+      const requestedTestId = data?.testId;
+      if (!requestedTestId) return;
 
       socket.join(`faculty_${requestedTestId}`);
-      socket.join(`faculty_test-demo-123`);
-      socket.join(`faculty_all`);
 
       console.log(`👨‍🏫 [Socket.IO] Faculty joined monitoring room: faculty_${requestedTestId}`);
 
       try {
-        // Query DB for test assignments
-        let assignments = await prisma.testAssignment.findMany({
-          where: requestedTestId !== 'test-demo-123' && requestedTestId !== 'all'
-            ? { testId: requestedTestId }
-            : {},
+        // Query DB for test assignments strictly filtered by examination ID
+        const assignments = await prisma.testAssignment.findMany({
+          where: requestedTestId !== 'all' ? { testId: requestedTestId } : {},
           include: {
             student: true,
             test: true,
           },
         });
-
-        // If no assignments found for specific testId, fetch all test assignments
-        if (assignments.length === 0) {
-          assignments = await prisma.testAssignment.findMany({
-            include: {
-              student: true,
-              test: true,
-            },
-          });
-        }
 
         // Merge DB records with active live socket connections
         const snapshot: ConnectedStudent[] = assignments.map((a) => {
@@ -136,10 +123,8 @@ export function setupInvigilatorHub(io: Server) {
 
           activeStudents.set(data.assignmentId, currentStudent);
 
-          // Broadcast status change to faculty rooms
+          // Broadcast status change to faculty room
           io.to(`faculty_${data.testId}`).emit('student_status_changed', currentStudent);
-          io.to(`faculty_test-demo-123`).emit('student_status_changed', currentStudent);
-          io.to(`faculty_all`).emit('student_status_changed', currentStudent);
         } catch (error: any) {
           console.error('❌ [Socket.IO] Error handling student_join_exam:', error.message);
         }
@@ -165,8 +150,6 @@ export function setupInvigilatorHub(io: Server) {
           };
 
           io.to(`faculty_${student.testId}`).emit('student_progress_updated', updatePayload);
-          io.to(`faculty_test-demo-123`).emit('student_progress_updated', updatePayload);
-          io.to(`faculty_all`).emit('student_progress_updated', updatePayload);
         }
       }
     );
@@ -218,10 +201,9 @@ export function setupInvigilatorHub(io: Server) {
             timestamp: new Date(),
           };
 
-          const targetTestId = student?.testId || 'test-demo-123';
-          io.to(`faculty_${targetTestId}`).emit('student_violation_logged', violationPayload);
-          io.to(`faculty_test-demo-123`).emit('student_violation_logged', violationPayload);
-          io.to(`faculty_all`).emit('student_violation_logged', violationPayload);
+          if (student?.testId) {
+            io.to(`faculty_${student.testId}`).emit('student_violation_logged', violationPayload);
+          }
 
           if (violationCount >= maxViolations) {
             console.error(`⛔ [Socket.IO] Max violations reached (${violationCount}/${maxViolations}). Triggering auto submit.`);
@@ -242,8 +224,6 @@ export function setupInvigilatorHub(io: Server) {
       if (student) {
         student.status = 'DISCONNECTED';
         io.to(`faculty_${student.testId}`).emit('student_status_changed', student);
-        io.to(`faculty_test-demo-123`).emit('student_status_changed', student);
-        io.to(`faculty_all`).emit('student_status_changed', student);
       }
     });
 
@@ -270,8 +250,6 @@ export function setupInvigilatorHub(io: Server) {
         if (student.socketId === socket.id) {
           student.status = 'DISCONNECTED';
           io.to(`faculty_${student.testId}`).emit('student_status_changed', student);
-          io.to(`faculty_test-demo-123`).emit('student_status_changed', student);
-          io.to(`faculty_all`).emit('student_status_changed', student);
           break;
         }
       }

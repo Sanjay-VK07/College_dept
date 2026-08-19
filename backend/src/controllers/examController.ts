@@ -12,6 +12,50 @@ export class ExamController {
     try {
       const studentId = req.user!.id;
 
+      // 1. Fetch authenticated student profile to obtain department
+      const student = await prisma.user.findUnique({
+        where: { id: studentId },
+        select: { id: true, department: true },
+      });
+
+      if (student) {
+        // 2. Query published MockTest records applicable to student's department or ALL
+        const applicableTests = await prisma.mockTest.findMany({
+          where: {
+            isPublished: true,
+            OR: [
+              { targetDepartment: student.department },
+              { targetDepartment: 'ALL' },
+              { targetDepartment: 'Computer Science & Engineering' },
+              { targetDepartment: 'Computer Science and Engineering' },
+              { targetDepartment: 'CSE' },
+            ],
+          },
+        });
+
+        // 3. Ensure an assignment exists for each published departmental test (idempotent)
+        for (const test of applicableTests) {
+          const existingAssignment = await prisma.testAssignment.findFirst({
+            where: { testId: test.id, studentId },
+          });
+
+          if (!existingAssignment) {
+            try {
+              await prisma.testAssignment.create({
+                data: {
+                  testId: test.id,
+                  studentId,
+                  status: 'SCHEDULED',
+                },
+              });
+            } catch (err) {
+              // Ignore potential concurrent creation race condition
+            }
+          }
+        }
+      }
+
+      // 4. Query all test assignments strictly belonging to authenticated studentId
       const assignments = await prisma.testAssignment.findMany({
         where: { studentId },
         include: {

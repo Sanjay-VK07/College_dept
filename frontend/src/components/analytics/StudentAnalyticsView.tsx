@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Target, Zap, Award, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, LineChart, Line } from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
 interface TopicStat {
   topic: string;
@@ -30,6 +30,14 @@ interface StudentAnalyticsData {
 }
 
 export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({ data }) => {
+  if (!data || data.totalExamsCompleted === 0) {
+    return (
+      <div className="erp-card text-center py-12 text-slate-500 text-xs font-mono">
+        No data available
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 font-sans">
       {/* Top Metrics Cards */}
@@ -71,15 +79,21 @@ export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({
             Strong Performance Topics
           </h3>
           <div className="space-y-2">
-            {data.strongTopics.map((t, idx) => (
-              <div key={idx} className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 text-xs">
-                <div>
-                  <div className="font-semibold text-slate-900">{t.topic}</div>
-                  <div className="text-slate-500 text-[11px]">{t.subject}</div>
-                </div>
-                <span className="erp-badge-green font-mono">{t.accuracy}%</span>
+            {!data.strongTopics || data.strongTopics.length === 0 ? (
+              <div className="text-xs text-slate-500 font-mono py-4 text-center">
+                No data available
               </div>
-            ))}
+            ) : (
+              data.strongTopics.map((t, idx) => (
+                <div key={idx} className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 text-xs">
+                  <div>
+                    <div className="font-semibold text-slate-900">{t.topic}</div>
+                    <div className="text-slate-500 text-[11px]">{t.subject}</div>
+                  </div>
+                  <span className="erp-badge-green font-mono">{t.accuracy}%</span>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
@@ -90,15 +104,21 @@ export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({
             Topics Needing Review
           </h3>
           <div className="space-y-2">
-            {data.weakTopics.map((t, idx) => (
-              <div key={idx} className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 text-xs">
-                <div>
-                  <div className="font-semibold text-slate-900">{t.topic}</div>
-                  <div className="text-slate-500 text-[11px]">{t.subject}</div>
-                </div>
-                <span className="erp-badge-red font-mono">{t.accuracy}%</span>
+            {!data.weakTopics || data.weakTopics.length === 0 ? (
+              <div className="text-xs text-slate-500 font-mono py-4 text-center">
+                No data available
               </div>
-            ))}
+            ) : (
+              data.weakTopics.map((t, idx) => (
+                <div key={idx} className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 text-xs">
+                  <div>
+                    <div className="font-semibold text-slate-900">{t.topic}</div>
+                    <div className="text-slate-500 text-[11px]">{t.subject}</div>
+                  </div>
+                  <span className="erp-badge-red font-mono">{t.accuracy}%</span>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -107,15 +127,21 @@ export const StudentAnalyticsView: React.FC<{ data: StudentAnalyticsData }> = ({
       <div className="erp-card space-y-4">
         <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Subject & Topic Accuracy Breakdown</h3>
         <div className="h-60 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data.topicAccuracy}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="topic" stroke="#64748b" fontSize={11} />
-              <YAxis stroke="#64748b" fontSize={11} domain={[0, 100]} />
-              <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '6px', color: '#0f172a' }} />
-              <Bar dataKey="accuracy" fill="#1E40AF" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          {!data.topicAccuracy || data.topicAccuracy.length === 0 ? (
+            <div className="text-xs text-slate-500 font-mono flex items-center justify-center h-full">
+              No data available
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data.topicAccuracy}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="topic" stroke="#64748b" fontSize={11} />
+                <YAxis stroke="#64748b" fontSize={11} domain={[0, 100]} />
+                <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '6px', color: '#0f172a' }} />
+                <Bar dataKey="accuracy" fill="#1E40AF" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
     </div>

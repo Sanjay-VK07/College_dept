@@ -204,11 +204,19 @@ async function main() {
     },
   });
 
-  // 5. Mock Test
-  const mockTest = await prisma.mockTest.create({
-    data: {
-      title: 'GATE Computer Science All-India Mock Test 01',
-      description: 'Comprehensive GATE CS Mock Exam covering Operating Systems, Algorithms, and Data Structures.',
+  // 5. Mock Test (test-demo-123)
+  const mockTest = await prisma.mockTest.upsert({
+    where: { id: 'test-demo-123' },
+    update: {
+      title: 'CS8601 Database Management Systems - Mid-Semester CBT Assessment',
+      description: 'Comprehensive CBT Exam covering Operating Systems, Database Systems, Algorithms, and Data Structures.',
+      targetDepartment: 'CSE',
+      isPublished: true,
+    },
+    create: {
+      id: 'test-demo-123',
+      title: 'CS8601 Database Management Systems - Mid-Semester CBT Assessment',
+      description: 'Comprehensive CBT Exam covering Operating Systems, Database Systems, Algorithms, and Data Structures.',
       examType: ExamType.SCHEDULED,
       durationMinutes: 180,
       totalMarks: 5.0,
@@ -228,6 +236,7 @@ async function main() {
     },
   });
 
+  await prisma.mockTestQuestion.deleteMany({ where: { mockTestId: mockTest.id } });
   await prisma.mockTestQuestion.createMany({
     data: [
       { mockTestId: mockTest.id, questionId: q1.id, order: 1 },
@@ -237,11 +246,13 @@ async function main() {
   });
 
   // 6. Test Assignments
+  await prisma.testAssignment.deleteMany({ where: { testId: mockTest.id } });
   await prisma.testAssignment.create({
     data: {
       testId: mockTest.id,
       studentId: student1.id,
-      status: 'SCHEDULED',
+      status: 'IN_PROGRESS',
+      startedAt: new Date(Date.now() - 15 * 60 * 1000),
       riskLevel: RiskLevel.SAFE,
       violationCount: 0,
     },

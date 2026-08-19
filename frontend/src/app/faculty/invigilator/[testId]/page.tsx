@@ -87,13 +87,10 @@ export default function InvigilatorDashboard() {
     },
   ]);
 
-  // Attendance Register Dataset
-  const [attendanceList, setAttendanceList] = useState([
-    { registerNo: '71762105042', name: 'Ananya Sharma', department: 'CSE', status: 'PRESENT', checkInTime: '09:15 AM' },
-    { registerNo: '71762105018', name: 'Rajesh Kumar', department: 'CSE', status: 'PRESENT', checkInTime: '09:18 AM' },
-    { registerNo: '71762105029', name: 'Kavitha Sundaram', department: 'ECE', status: 'ABSENT', checkInTime: '-' },
-    { registerNo: '71762105035', name: 'Praveen Venkatesh', department: 'IT', status: 'PRESENT', checkInTime: '09:22 AM' },
-  ]);
+  // Attendance Register Dataset (strictly scoped to testId)
+  const [attendanceList, setAttendanceList] = useState<any[]>([]);
+  const [examMeta, setExamMeta] = useState<any>(null);
+  const [examNotFound, setExamNotFound] = useState(false);
 
   useEffect(() => {
     const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
@@ -174,7 +171,34 @@ export default function InvigilatorDashboard() {
 
   useEffect(() => {
     fetchFacultyData();
-  }, []);
+    fetchAttendanceData();
+  }, [testId]);
+
+  const fetchAttendanceData = async () => {
+    if (!testId) return;
+    setExamNotFound(false);
+    try {
+      const res = await api.get(`/admin/attendance/${testId}`);
+      if (res.data?.success && res.data?.data) {
+        setAttendanceList(res.data.data.attendance || []);
+        if (res.data.data.exam) {
+          setExamMeta(res.data.data.exam);
+          if (res.data.data.exam.title) {
+            setTestTitle(res.data.data.exam.title);
+          }
+        }
+      } else {
+        setAttendanceList([]);
+        setExamNotFound(true);
+      }
+    } catch (err: any) {
+      console.error('Error loading attendance for exam:', testId, err);
+      setAttendanceList([]);
+      if (err.response?.status === 404) {
+        setExamNotFound(true);
+      }
+    }
+  };
 
   const fetchFacultyData = async () => {
     try {
@@ -184,18 +208,7 @@ export default function InvigilatorDashboard() {
         api.get('/admin/results-ledger'),
       ]);
       if (qRes.data?.success) setQuestionsList(qRes.data.data);
-      if (sRes.data?.success) {
-        setDbStudents(sRes.data.data);
-        setAttendanceList(
-          sRes.data.data.map((st: any) => ({
-            registerNo: st.registerNo || '71762105042',
-            name: st.name,
-            department: st.department,
-            status: 'PRESENT',
-            checkInTime: '09:15 AM',
-          }))
-        );
-      }
+      if (sRes.data?.success) setDbStudents(sRes.data.data);
       if (rRes.data?.success) setDbResults(rRes.data.data);
     } catch (e) {
       console.error('Error loading faculty datasets:', e);
@@ -299,6 +312,18 @@ export default function InvigilatorDashboard() {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
+        {examNotFound && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-md p-4 text-xs flex items-center space-x-3">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <span className="font-bold text-sm block text-amber-900">Examination Not Found</span>
+              <span>
+                No examination record matching ID <code className="font-mono bg-amber-100 px-1.5 py-0.5 rounded text-amber-900">{testId}</code> was found in the database.
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Navigation Tabs */}
         <div className="flex overflow-x-auto border-b border-slate-200 space-x-1 pb-1">
           {[
@@ -567,7 +592,9 @@ export default function InvigilatorDashboard() {
               <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
                 Examination Hall Attendance Register
               </h3>
-              <span className="text-xs text-slate-500">Hall B-302 • Exam Date: 2026-08-07</span>
+              <span className="text-xs text-slate-500">
+                {examMeta?.examHall || 'Hall B-302'} • Exam Date: {examMeta?.examDate || 'N/A'}
+              </span>
             </div>
 
             <div className="erp-table-container">
@@ -583,29 +610,49 @@ export default function InvigilatorDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {attendanceList.map((att) => (
-                    <tr key={att.registerNo}>
-                      <td className="font-mono font-bold text-[#1E40AF]">{att.registerNo}</td>
-                      <td className="font-semibold text-slate-900">{att.name}</td>
-                      <td className="font-mono text-xs">{att.department}</td>
-                      <td className="font-mono text-xs">{att.checkInTime}</td>
-                      <td>
-                        {att.status === 'PRESENT' ? (
-                          <span className="erp-badge-green">PRESENT</span>
-                        ) : (
-                          <span className="erp-badge-red">ABSENT</span>
-                        )}
-                      </td>
-                      <td>
-                        <button
-                          onClick={() => toggleAttendanceStatus(att.registerNo)}
-                          className="erp-btn-secondary py-1 text-xs"
-                        >
-                          Toggle Status
-                        </button>
+                  {examNotFound ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-500">
+                        <div className="flex flex-col items-center justify-center space-y-1">
+                          <AlertCircle className="w-6 h-6 text-amber-500" />
+                          <p className="font-semibold text-slate-800">Examination Not Found</p>
+                          <p className="text-xs text-slate-500">
+                            No attendance records exist for invalid examination ID "{testId}".
+                          </p>
+                        </div>
                       </td>
                     </tr>
-                  ))}
+                  ) : attendanceList.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-500">
+                        No candidate attendance records found for examination "{testId}".
+                      </td>
+                    </tr>
+                  ) : (
+                    attendanceList.map((att, idx) => (
+                      <tr key={att.registerNo || idx}>
+                        <td className="font-mono font-bold text-[#1E40AF]">{att.registerNo}</td>
+                        <td className="font-semibold text-slate-900">{att.name}</td>
+                        <td className="font-mono text-xs">{att.department}</td>
+                        <td className="font-mono text-xs">{att.checkInTime}</td>
+                        <td>
+                          {att.status === 'PRESENT' ? (
+                            <span className="erp-badge-green">PRESENT</span>
+                          ) : (
+                            <span className="erp-badge-red">ABSENT</span>
+                          )}
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => toggleAttendanceStatus(att.registerNo)}
+                            className="erp-btn-secondary py-1 text-xs"
+                          >
+                            Toggle Status
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

@@ -970,5 +970,95 @@ export class AdminController {
       return res.status(500).json({ success: false, message: error.message });
     }
   }
+
+  /**
+   * Examination-Scoped Attendance Register
+   */
+  public static async getAttendanceByTestId(req: AuthRequest, res: Response) {
+    try {
+      const { testId } = req.params;
+
+      if (!testId) {
+        return res.status(400).json({ success: false, message: 'Examination ID is required' });
+      }
+
+      const exam = await prisma.mockTest.findUnique({
+        where: { id: testId },
+      });
+
+      if (!exam) {
+        return res.status(404).json({ success: false, message: 'Examination not found' });
+      }
+
+      // Query test assignments strictly filtered by examination_id (testId)
+      const assignments = await prisma.testAssignment.findMany({
+        where: { testId },
+        include: {
+          student: {
+            select: {
+              id: true,
+              registerNo: true,
+              name: true,
+              department: true,
+              email: true,
+            },
+          },
+        },
+        orderBy: { student: { registerNo: 'asc' } },
+      });
+
+      const attendanceList = assignments.map((a) => {
+        const isPresent = Boolean(
+          a.startedAt ||
+          a.status === 'IN_PROGRESS' ||
+          a.status === 'COMPLETED' ||
+          a.status === 'AUTO_SUBMITTED'
+        );
+
+        let checkInTimeStr = '-';
+        if (a.startedAt) {
+          checkInTimeStr = new Date(a.startedAt).toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+          });
+        }
+
+        return {
+          assignmentId: a.id,
+          studentId: a.studentId,
+          registerNo: a.student?.registerNo || 'N/A',
+          name: a.student?.name || 'Candidate',
+          department: a.student?.department || exam.targetDepartment || 'N/A',
+          status: isPresent ? 'PRESENT' : 'ABSENT',
+          checkInTime: checkInTimeStr,
+          rawStatus: a.status,
+          startedAt: a.startedAt,
+          submittedAt: a.submittedAt,
+        };
+      });
+
+      const examMeta = {
+        id: exam.id,
+        title: exam.title,
+        targetDepartment: exam.targetDepartment,
+        examDate: exam.startTime ? exam.startTime.toISOString().split('T')[0] : 'N/A',
+        examHall: 'Hall B-302',
+        durationMinutes: exam.durationMinutes,
+        totalCandidates: assignments.length,
+      };
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          exam: examMeta,
+          attendance: attendanceList,
+        },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
 }
+
 

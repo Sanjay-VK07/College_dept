@@ -49,5 +49,6 @@ router.put('/settings', requireRoles(Role.ADMIN), AdminController.updateSystemSe
 router.get('/results-ledger', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getResultsLedger);
 router.post('/assign-invigilator', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.assignInvigilator);
 router.get('/hall-tickets', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getHallTickets);
+router.get('/attendance/:testId', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getAttendanceByTestId);
 
 export default router;

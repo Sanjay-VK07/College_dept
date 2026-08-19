@@ -5,8 +5,6 @@ import { useRouter } from 'next/navigation';
 import {
   GraduationCap,
   Play,
-  CheckCircle,
-  Clock,
   Award,
   BarChart3,
   LogOut,
@@ -15,16 +13,17 @@ import {
   Bell,
   AlertCircle,
   Search,
-  Filter,
-  User,
   BookOpen,
   CheckCircle2,
-  XCircle,
-  ArrowRight,
-  TrendingUp,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { StudentAnalyticsView } from '@/components/analytics/StudentAnalyticsView';
+
+// Strict Helper for profile text fields (uses "N/A" for missing profile info)
+function displayProfileField<T>(value: T | null | undefined, fallback = 'N/A'): string {
+  if (value === null || value === undefined || value === '') return fallback;
+  return String(value);
+}
 
 export default function StudentDashboard() {
   const router = useRouter();
@@ -92,21 +91,28 @@ export default function StudentDashboard() {
   }, []);
 
   const [dbNotifications, setDbNotifications] = useState<any[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchDashboardData = async (silent: boolean = false) => {
     if (!silent) setLoading(true);
+    setFetchError(null);
     try {
-      const [testRes, analyticsRes, notifRes] = await Promise.all([
+      const [profileRes, testRes, analyticsRes, notifRes] = await Promise.all([
+        api.get('/auth/me'),
         api.get('/exam/student-tests'),
         api.get('/analytics/student-me'),
         api.get('/notifications'),
       ]);
 
+      if (profileRes.data?.success && profileRes.data?.data) {
+        setUser(profileRes.data.data);
+      }
       if (testRes.data?.success) setTests(testRes.data.data);
       if (analyticsRes.data?.success) setAnalyticsData(analyticsRes.data.data);
       if (notifRes.data?.success) setDbNotifications(notifRes.data.data.notifications || []);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching student dashboard:', err);
+      setFetchError(err.response?.data?.message || 'Failed to load examination portal data.');
     } finally {
       if (!silent) setLoading(false);
     }
@@ -126,51 +132,82 @@ export default function StudentDashboard() {
     );
   }
 
-  // Dynamic Datasets derived from DB state
+  // Dynamic Datasets derived strictly from DB state
   const activeExams = tests.filter((t) => t.status !== 'COMPLETED');
   const completedExams = tests.filter((t) => t.status === 'COMPLETED');
 
-  const avgAccuracy = analyticsData?.overallAccuracy || 88.5;
   const studentProfile = {
-    name: user.name || 'Ganesh Kumar',
-    registerNo: user.registerNo || '71762105042',
-    department: user.department || 'Computer Science and Engineering',
-    degree: `B.E. ${user.department || 'Computer Science and Engineering'}`,
-    semester: `Semester ${user.semester || 6}`,
-    section: `Section ${user.section || 'A'}`,
-    batch: '2022 - 2026',
-    advisor: 'Dr. Sabitha',
-    attendancePercent: 92.5,
-    cgpa: (avgAccuracy / 10).toFixed(2),
+    name: displayProfileField(user.name, 'N/A'),
+    registerNo: displayProfileField(user.registerNo, 'N/A'),
+    department: displayProfileField(user.department, 'N/A'),
+    degree: user.department ? `B.E. ${user.department}` : 'N/A',
+    semester: user.semester ? `Semester ${user.semester}` : 'N/A',
+    section: user.section ? `Section ${user.section}` : 'N/A',
+    batch: user.year ? `Year ${user.year}` : 'N/A',
+    advisor: 'N/A',
+    attendancePercent: '--',
+    cgpa: '--',
   };
 
-  const upcomingExamsList = activeExams.map((item: any) => ({
-    code: item.test?.title?.split(' ')[0] || 'CS8601',
-    title: item.test?.title || 'CBT Assessment',
-    date: item.test?.startTime ? new Date(item.test.startTime).toISOString().split('T')[0] : '2026-08-12',
-    time: `${item.test?.durationMinutes || 180} Mins`,
-    hall: 'CBT Hall B-302',
-    duration: `${item.test?.durationMinutes || 180} Mins`,
-    status: item.status || 'SCHEDULED',
-  }));
+  const upcomingExamsList = activeExams.map((item: any) => {
+    const startTimeDate = item.test?.startTime ? new Date(item.test.startTime) : null;
+    const formattedDate = startTimeDate
+      ? startTimeDate.toISOString().split('T')[0]
+      : '--';
+    const formattedTime = startTimeDate
+      ? startTimeDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
+      : '--';
 
-  const recentResultsList = completedExams.map((item: any) => ({
-    code: item.test?.title?.split(' ')[0] || 'CS8501',
-    subject: item.test?.title || 'Course Paper',
-    ciaMarks: Math.round((item.score || 0) * 0.4),
-    maxCia: 50,
-    eseMarks: Math.round(item.score || 0),
-    maxEse: item.test?.totalMarks || 100,
-    total: item.score || 0,
-    grade: (item.score || 0) >= 90 ? 'O (Outstanding)' : (item.score || 0) >= 80 ? 'A+ (Excellent)' : 'A (Very Good)',
-    status: 'PASS',
-  }));
+    const titleStr = item.test?.title || 'Assessment Paper';
+    const titleParts = titleStr.split(' ');
+    const courseCode = titleParts[0] && /^[A-Z0-9]+$/i.test(titleParts[0]) ? titleParts[0] : '--';
 
-  const attendanceBreakdown = [
-    { code: 'CS8601', subject: 'Database Management Systems', total: 40, attended: 38, percent: 95.0 },
-    { code: 'CS8602', subject: 'Compiler Design', total: 36, attended: 33, percent: 91.6 },
-    { code: 'CS8603', subject: 'Artificial Intelligence & ML', total: 42, attended: 39, percent: 92.8 },
-  ];
+    return {
+      id: item.test?.id || item.id,
+      code: courseCode,
+      title: titleStr,
+      date: formattedDate,
+      time: startTimeDate ? `${formattedTime} (${item.test?.durationMinutes || 0} Mins)` : '--',
+      hall: item.test?.targetSection ? `Exam Hall (${item.test.targetSection})` : 'Online CBT Portal',
+      duration: `${item.test?.durationMinutes || 0} Mins`,
+      status: item.status || 'SCHEDULED',
+    };
+  });
+
+  const recentResultsList = completedExams.map((item: any) => {
+    const titleStr = item.test?.title || 'Assessment Paper';
+    const code = titleStr.split(' ')[0] && /^[A-Z0-9]+$/i.test(titleStr.split(' ')[0]) ? titleStr.split(' ')[0] : '--';
+    const score = item.score !== null && item.score !== undefined ? item.score : 0;
+    const totalMarks = item.test?.totalMarks || 100;
+    const pct = totalMarks > 0 ? (score / totalMarks) * 100 : 0;
+
+    const ciaMarks = Math.round(score * 0.4);
+    const eseMarks = Math.round(score);
+
+    let grade = 'F (Fail)';
+    let status = 'FAIL';
+    if (pct >= 90) { grade = 'O (Outstanding)'; status = 'PASS'; }
+    else if (pct >= 80) { grade = 'A+ (Excellent)'; status = 'PASS'; }
+    else if (pct >= 70) { grade = 'A (Very Good)'; status = 'PASS'; }
+    else if (pct >= 60) { grade = 'B+ (Good)'; status = 'PASS'; }
+    else if (pct >= 50) { grade = 'B (Above Average)'; status = 'PASS'; }
+    else if (pct >= 40) { grade = 'C (Pass)'; status = 'PASS'; }
+
+    return {
+      code,
+      subject: titleStr,
+      ciaMarks,
+      maxCia: 50,
+      eseMarks,
+      maxEse: totalMarks,
+      total: score,
+      grade,
+      status,
+      percentage: pct,
+    };
+  });
+
+  const attendanceBreakdown: any[] = [];
 
   const notificationsList = dbNotifications.map((n: any) => ({
     id: n.id,
@@ -223,7 +260,7 @@ export default function StudentDashboard() {
         <div className="erp-card flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border-l-4 border-l-[#1E40AF]">
           <div className="flex items-start space-x-4">
             <div className="w-12 h-12 rounded-md bg-blue-50 text-[#1E40AF] flex items-center justify-center font-bold text-lg border border-blue-200 shrink-0">
-              {studentProfile.name.charAt(0)}
+              {studentProfile.name !== 'N/A' ? studentProfile.name.charAt(0) : 'U'}
             </div>
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -243,7 +280,7 @@ export default function StudentDashboard() {
           <div className="flex items-center space-x-4 border-t md:border-t-0 md:border-l border-slate-200 pt-3 md:pt-0 md:pl-6 text-xs">
             <div className="text-center px-2">
               <span className="text-slate-500 block uppercase text-[10px] font-semibold">Attendance</span>
-              <span className="text-lg font-bold text-emerald-700">{studentProfile.attendancePercent}%</span>
+              <span className="text-lg font-bold text-slate-700">{studentProfile.attendancePercent}</span>
             </div>
             <div className="h-8 w-px bg-slate-200" />
             <div className="text-center px-2">
@@ -297,8 +334,8 @@ export default function StudentDashboard() {
                 Assigned CBT Examinations
               </h3>
               {tests.length === 0 ? (
-                <div className="erp-card text-center py-10 text-slate-500 text-xs">
-                  No active computer-based examinations currently assigned to your registration number.
+                <div className="erp-card text-center py-10 text-slate-500 text-xs font-mono">
+                  No data available
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -310,26 +347,26 @@ export default function StudentDashboard() {
                       <div className="flex justify-between items-start">
                         <div>
                           <span className="erp-badge-blue mb-1">
-                            {assignment.test.examType || 'GATE MOCK CASS'}
+                            {assignment.test?.examType || 'SCHEDULED'}
                           </span>
-                          <h4 className="text-base font-bold text-slate-900 mt-1">{assignment.test.title}</h4>
-                          <p className="text-xs text-slate-600 line-clamp-2 mt-1">{assignment.test.description}</p>
+                          <h4 className="text-base font-bold text-slate-900 mt-1">{assignment.test?.title || 'Assessment Paper'}</h4>
+                          <p className="text-xs text-slate-600 line-clamp-2 mt-1">{assignment.test?.description || ''}</p>
                         </div>
                         <div className="text-right shrink-0">
-                          <div className="text-sm font-bold text-emerald-700">{assignment.test.totalMarks} Marks</div>
-                          <div className="text-xs text-slate-500 font-mono">{assignment.test.durationMinutes} Minutes</div>
+                          <div className="text-sm font-bold text-emerald-700">{assignment.test?.totalMarks || 0} Marks</div>
+                          <div className="text-xs text-slate-500 font-mono">{assignment.test?.durationMinutes || 0} Minutes</div>
                         </div>
                       </div>
 
                       <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
                         <div className="text-xs text-slate-500 font-mono">
-                          Max Security Violations: <b>{assignment.test.maxViolations || 5}</b>
+                          Max Security Violations: <b>{assignment.test?.maxViolations || 5}</b>
                         </div>
 
                         {assignment.status === 'COMPLETED' ? (
                           <div className="flex items-center space-x-2">
                             <span className="erp-badge-green">
-                              Score: {assignment.score}/{assignment.test.totalMarks}
+                              Score: {assignment.score}/{assignment.test?.totalMarks}
                             </span>
                             <button
                               onClick={() => router.push(`/student/solution/${assignment.id}`)}
@@ -340,7 +377,7 @@ export default function StudentDashboard() {
                           </div>
                         ) : (
                           <button
-                            onClick={() => router.push(`/student/exam/${assignment.test.id}`)}
+                            onClick={() => router.push(`/student/exam/${assignment.test?.id || assignment.testId}`)}
                             className="erp-btn-primary py-2 text-xs font-semibold"
                           >
                             <Play className="w-3.5 h-3.5 fill-current" />
@@ -361,8 +398,8 @@ export default function StudentDashboard() {
                   <span className="text-xs font-semibold uppercase tracking-wider">Attendance Status</span>
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900">{studentProfile.attendancePercent}%</div>
-                <p className="text-xs text-slate-500 mt-1">Status: Eligible for End-Semester Examinations</p>
+                <div className="text-2xl font-bold text-slate-900">{studentProfile.attendancePercent}</div>
+                <p className="text-xs text-slate-500 mt-1">Status: No data available</p>
               </div>
 
               <div className="erp-card">
@@ -380,7 +417,7 @@ export default function StudentDashboard() {
                   <Calendar className="w-4 h-4 text-amber-600" />
                 </div>
                 <div className="text-2xl font-bold text-slate-900">{upcomingExamsList.length}</div>
-                <p className="text-xs text-slate-500 mt-1">Scheduled for Semester VI</p>
+                <p className="text-xs text-slate-500 mt-1">Scheduled Assessments</p>
               </div>
             </div>
           </div>
@@ -391,10 +428,17 @@ export default function StudentDashboard() {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-                Semester VI Examination Timetable
+                Examination Timetable
               </h3>
-              <span className="text-xs text-slate-500">Official Schedule • Academic Year 2025-26</span>
+              <span className="text-xs text-slate-500">Official Schedule</span>
             </div>
+
+            {fetchError && (
+              <div className="bg-red-50 border border-red-200 text-red-800 rounded-md p-3 text-xs flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{fetchError}</span>
+              </div>
+            )}
 
             <div className="erp-table-container">
               <table className="erp-table">
@@ -409,20 +453,32 @@ export default function StudentDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {upcomingExamsList.map((exam, idx) => (
-                    <tr key={idx}>
-                      <td className="font-mono font-bold text-[#1E40AF]">{exam.code}</td>
-                      <td className="font-semibold text-slate-900">{exam.title}</td>
-                      <td className="font-mono">{exam.date}</td>
-                      <td className="text-slate-600">
-                        {exam.time} ({exam.duration})
-                      </td>
-                      <td className="font-medium text-slate-700">{exam.hall}</td>
-                      <td>
-                        <span className="erp-badge-blue">{exam.status}</span>
+                  {fetchError ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-red-600 font-medium text-xs">
+                        Failed to load examination timetable. Please try refreshing the page.
                       </td>
                     </tr>
-                  ))}
+                  ) : upcomingExamsList.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-500 text-xs font-mono">
+                        No data available
+                      </td>
+                    </tr>
+                  ) : (
+                    upcomingExamsList.map((exam, idx) => (
+                      <tr key={exam.id || idx}>
+                        <td className="font-mono font-bold text-[#1E40AF]">{exam.code}</td>
+                        <td className="font-semibold text-slate-900">{exam.title}</td>
+                        <td className="font-mono">{exam.date}</td>
+                        <td className="text-slate-600 font-mono text-xs">{exam.time}</td>
+                        <td className="font-medium text-slate-700">{exam.hall}</td>
+                        <td>
+                          <span className="erp-badge-blue">{exam.status}</span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -434,9 +490,9 @@ export default function StudentDashboard() {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-                Semester V Final Evaluation Results
+                Semester Final Evaluation Results
               </h3>
-              <span className="erp-badge-green font-mono">SGPA: 8.84</span>
+              <span className="erp-badge-green font-mono">SGPA: --</span>
             </div>
 
             <div className="erp-table-container">
@@ -483,14 +539,14 @@ export default function StudentDashboard() {
         {/* TAB 4: ATTENDANCE SUMMARY */}
         {activeTab === 'ATTENDANCE' && (
           <div className="space-y-6">
-            <div className="erp-card bg-emerald-50/50 border-emerald-200 flex items-center justify-between">
+            <div className="erp-card bg-slate-50 border-slate-200 flex items-center justify-between">
               <div>
-                <h4 className="text-sm font-bold text-emerald-900">Overall Attendance Compliance</h4>
-                <p className="text-xs text-emerald-700 mt-0.5">
+                <h4 className="text-sm font-bold text-slate-800">Overall Attendance Compliance</h4>
+                <p className="text-xs text-slate-600 mt-0.5">
                   Minimum mandatory requirement for exam eligibility: <b>75.0%</b>
                 </p>
               </div>
-              <div className="text-[#16A34A] font-bold text-2xl font-mono">{studentProfile.attendancePercent}%</div>
+              <div className="text-slate-700 font-bold text-2xl font-mono">{studentProfile.attendancePercent}</div>
             </div>
 
             <div className="erp-table-container">
@@ -539,10 +595,10 @@ export default function StudentDashboard() {
         {/* TAB 5: PERFORMANCE ANALYTICS */}
         {activeTab === 'ANALYTICS' && (
           <div className="space-y-4">
-            {analyticsData ? (
+            {analyticsData && analyticsData.totalExamsCompleted > 0 ? (
               <StudentAnalyticsView data={analyticsData} />
             ) : (
-              <div className="erp-card text-center py-8 text-slate-500 text-xs font-mono">
+              <div className="erp-card text-center py-12 text-slate-500 text-xs font-mono">
                 No data available
               </div>
             )}
@@ -558,7 +614,7 @@ export default function StudentDashboard() {
 
             <div className="space-y-3">
               {notificationsList.length === 0 ? (
-                <div className="erp-card text-center py-8 text-slate-500 text-xs font-mono">
+                <div className="erp-card text-center py-12 text-slate-500 text-xs font-mono">
                   No data available
                 </div>
               ) : (
@@ -621,14 +677,14 @@ export default function StudentDashboard() {
                   ) : (
                     completedExams
                       .filter((item: any) =>
-                        item.test.title.toLowerCase().includes(historySearch.toLowerCase())
+                        item.test?.title?.toLowerCase().includes(historySearch.toLowerCase())
                       )
                       .map((item: any) => (
                         <tr key={item.id}>
-                          <td className="font-bold text-slate-900">{item.test.title}</td>
-                          <td className="font-mono text-xs">{item.test.examType || 'CBT MOCK'}</td>
+                          <td className="font-bold text-slate-900">{item.test?.title}</td>
+                          <td className="font-mono text-xs">{item.test?.examType || 'SCHEDULED'}</td>
                           <td className="font-mono font-bold text-emerald-700">{item.score}</td>
-                          <td className="font-mono text-slate-600">{item.test.totalMarks}</td>
+                          <td className="font-mono text-slate-600">{item.test?.totalMarks}</td>
                           <td>
                             <span className="erp-badge-green">EVALUATED</span>
                           </td>
