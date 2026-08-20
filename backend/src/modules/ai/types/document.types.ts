@@ -5,7 +5,7 @@ export interface DocumentMetadataDTO {
   title: string;
   fileName: string;
   mimeType: string;
-  fileSize: number;
+  fileSize: number | null;
   visibility: AIDocumentVisibility;
   status: AIDocumentStatus;
   uploadedById: string;
