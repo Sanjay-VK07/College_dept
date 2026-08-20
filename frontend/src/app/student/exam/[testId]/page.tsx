@@ -97,16 +97,15 @@ export default function ExamPage() {
 
         // Socket connection
         const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
-        const socket = io(socketUrl);
+        const token = localStorage.getItem('gsmas_token');
+        const socket = io(socketUrl, {
+          auth: { token }
+        });
         socketRef.current = socket;
 
         socket.emit('student_join_exam', {
           assignmentId: data.assignmentId,
-          studentId: userData.id,
           testId,
-          registerNo: userData.registerNo,
-          name: userData.name,
-          department: userData.department,
         });
 
         socket.on('force_auto_submit', (payload: any) => {

@@ -80,6 +80,7 @@ model User {
   aiConversations AIConversation[]
   aiDocuments  AIDocument[]
   aiPracticeAttempts AIPracticeAttempt[]
+  invigilatorAssignments InvigilatorAssignment[]
 }
 
 model Subject {
@@ -156,6 +157,7 @@ model MockTest {
   targetYear         Int?
   targetSection      String?
   isPublished        Boolean            @default(false)
+  status             ExamStatus         @default(DRAFT)
   resultVisibility   ResultVisibility   @default(AFTER_EXAM_ENDS)
   solutionVisibility SolutionVisibility @default(SHOW_AFTER_RESULT)
   shuffleQuestions   Boolean            @default(true)
@@ -169,6 +171,10 @@ model MockTest {
 
   testQuestions      MockTestQuestion[]
   assignments        TestAssignment[]
+  invigilators       InvigilatorAssignment[]
+
+  @@index([createdById])
+  @@index([status])
 }
 
 model MockTestQuestion {
@@ -200,6 +206,8 @@ model TestAssignment {
 
   responses       QuestionResponse[]
   violations      ViolationLog[]
+
+  @@index([testId])
 }
 
 model QuestionResponse {
@@ -386,6 +394,29 @@ model AIPracticeAttempt {
   createdAt     DateTime @default(now())
 
   student       User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+enum ExamStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  LIVE
+  COMPLETED
+  ARCHIVED
+}
+
+model InvigilatorAssignment {
+  id        String   @id @default(uuid())
+  testId    String
+  facultyId String
+  createdAt DateTime @default(now())
+
+  test      MockTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  faculty   User     @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@unique([testId, facultyId])
+  @@index([testId])
+  @@index([facultyId])
 }
 
 
