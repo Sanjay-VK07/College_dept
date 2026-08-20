@@ -119,7 +119,12 @@ export class AIChatService {
        trimmedMsg.toLowerCase().includes('average') ||
        trimmedMsg.toLowerCase().includes('statistics') ||
        trimmedMsg.toLowerCase().includes('scheduled this week') ||
-       trimmedMsg.toLowerCase().includes('active exams'));
+       trimmedMsg.toLowerCase().includes('active exams') ||
+       trimmedMsg.toLowerCase().includes('today') ||
+       trimmedMsg.toLowerCase().includes('report') ||
+       trimmedMsg.toLowerCase().includes('top 10') ||
+       trimmedMsg.toLowerCase().includes('highest') ||
+       trimmedMsg.toLowerCase().includes('present'));
 
     if (isStatsQuery) {
       try {

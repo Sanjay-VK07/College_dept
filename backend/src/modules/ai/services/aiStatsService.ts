@@ -207,6 +207,94 @@ export class AIStatsService {
   /**
    * Intent router parsing query text, fetching real values, and letting LLM formulate an explanation.
    */
+  /**
+   * Safely retrieves a report of examinations scheduled or held today.
+   */
+  public static async getTodayExamsReport(): Promise<any[]> {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    const exams = await prisma.mockTest.findMany({
+      where: {
+        startTime: {
+          gte: startOfToday,
+          lte: endOfToday,
+        },
+      },
+      include: {
+        assignments: {
+          select: {
+            id: true,
+            status: true,
+            score: true,
+            startedAt: true,
+          }
+        }
+      }
+    });
+
+    return exams.map((e) => {
+      const total = e.assignments.length;
+      const present = e.assignments.filter(a => a.startedAt !== null).length;
+      const completed = e.assignments.filter(a => a.status === 'COMPLETED').length;
+      const scores = e.assignments.map(a => a.score || 0);
+      const avgScore = scores.length > 0 ? parseFloat((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2)) : 0;
+      const maxScore = scores.length > 0 ? Math.max(...scores) : 0;
+
+      return {
+        id: e.id,
+        title: e.title,
+        status: e.status,
+        totalCandidates: total,
+        presentCandidates: present,
+        completedCandidates: completed,
+        averageScore: avgScore,
+        maximumScore: maxScore,
+      };
+    });
+  }
+
+  /**
+   * Safely retrieves the top 10 performing students based on exam scores.
+   */
+  public static async getTop10Students(): Promise<any[]> {
+    const topAssignments = await prisma.testAssignment.findMany({
+      where: {
+        status: 'COMPLETED',
+        score: { not: null }
+      },
+      orderBy: {
+        score: 'desc'
+      },
+      take: 10,
+      include: {
+        student: {
+          select: {
+            name: true,
+            registerNo: true,
+            department: true,
+          }
+        },
+        test: {
+          select: {
+            title: true
+          }
+        }
+      }
+    });
+
+    return topAssignments.map(a => ({
+      studentName: a.student.name,
+      registerNo: a.student.registerNo,
+      department: a.student.department,
+      examTitle: a.test.title,
+      score: a.score,
+      totalMarks: a.totalMarks,
+    }));
+  }
+
   public static async handleStatsQuery(promptText: string, userRole: Role): Promise<string> {
     // Strict RBAC: only Admin and Faculty are allowed to request statistics.
     if (userRole !== Role.ADMIN && userRole !== Role.FACULTY) {
@@ -230,6 +318,21 @@ export class AIStatsService {
     } else if (normalized.includes('question bank') || normalized.includes('how many questions')) {
       statsData.questionCount = await this.getQuestionBankCount();
       matchedIntent = 'question bank size';
+    } else if (normalized.includes('today\'s test') || normalized.includes('today test') || normalized.includes('report of today')) {
+      statsData.todayExamsReport = await this.getTodayExamsReport();
+      matchedIntent = 'report and summary of examinations scheduled today';
+    } else if (normalized.includes('top 10') || normalized.includes('top student') || normalized.includes('highest score')) {
+      statsData.top10Students = await this.getTop10Students();
+      matchedIntent = 'top 10 performing candidates by score';
+    } else if (normalized.includes('how many present') || normalized.includes('present candidates') || normalized.includes('attendance details')) {
+      const todayExams = await this.getTodayExamsReport();
+      statsData.attendanceSummary = todayExams.map(ex => ({
+        examTitle: ex.title,
+        totalCandidates: ex.totalCandidates,
+        presentCandidates: ex.presentCandidates,
+        absentCandidates: ex.totalCandidates - ex.presentCandidates,
+      }));
+      matchedIntent = 'attendance detail summary for examinations scheduled today';
     } else if (normalized.includes('department') && (normalized.includes('most') || normalized.includes('students'))) {
       statsData.departmentStats = await this.getDepartmentStatistics();
       matchedIntent = 'student distribution by department';

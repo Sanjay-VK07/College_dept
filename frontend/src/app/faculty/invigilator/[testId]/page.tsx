@@ -365,7 +365,6 @@ export default function InvigilatorDashboard() {
             { id: 'ATTENDANCE', label: 'Attendance Register', icon: CheckCircle2 },
             { id: 'RESULTS', label: 'Results & Evaluation', icon: Award },
             { id: 'REPORTS', label: 'Reports & Analytics', icon: FileText },
-            { id: 'AI_ASSISTANT', label: 'AI Assistant', icon: Bot },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -958,12 +957,6 @@ export default function InvigilatorDashboard() {
                 <span>Generate Official PDF Broadsheet</span>
               </button>
             </div>
-          </div>
-        )}
-
-        {activeTab === 'AI_ASSISTANT' && (
-          <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl">
-            <AIExaminationAssistant role="FACULTY" />
           </div>
         )}
       </main>
