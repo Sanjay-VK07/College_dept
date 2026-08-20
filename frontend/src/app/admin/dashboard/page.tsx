@@ -53,9 +53,11 @@ import {
   FileCheck,
   UserPlus,
   PieChart as PieChartIcon,
+  Bot,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
+import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 import {
   ResponsiveContainer,
   BarChart,
@@ -84,6 +86,7 @@ export default function AdminDashboard() {
     | 'HEALTH'
     | 'LOGS'
     | 'SETTINGS'
+    | 'AI_ASSISTANT'
   >('OVERVIEW');
 
   const [overview, setOverview] = useState<any>(null);
@@ -805,6 +808,7 @@ export default function AdminDashboard() {
             { id: 'HEALTH', label: 'System Health', icon: ShieldCheck },
             { id: 'LOGS', label: 'Audit Logs', icon: Activity },
             { id: 'SETTINGS', label: 'Settings', icon: Settings },
+            { id: 'AI_ASSISTANT', label: 'AI Assistant', icon: Bot },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -1887,7 +1891,6 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* TAB 12: SETTINGS */}
           {activeTab === 'SETTINGS' && (
             <div className="erp-card space-y-4 max-w-lg">
               <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">System Governance Settings</h3>
@@ -1904,6 +1907,12 @@ export default function AdminDashboard() {
                   </select>
                 </div>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'AI_ASSISTANT' && (
+            <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl">
+              <AIExaminationAssistant role="ADMIN" />
             </div>
           )}
         </main>

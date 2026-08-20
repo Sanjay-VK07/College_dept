@@ -7,6 +7,8 @@ import { buildStudentPrompt } from '../prompts/studentPrompt';
 import { buildFacultyPrompt } from '../prompts/facultyPrompt';
 import { buildAdminPrompt } from '../prompts/adminPrompt';
 import { ChatResponseData } from '../types/ai.types';
+import { RAGService } from './ragService';
+import { AIStatsService } from './aiStatsService';
 
 export class AIChatService {
   /**
@@ -107,6 +109,104 @@ export class AIChatService {
       conversation = await ConversationService.getOrCreateConversation(userId, conversationId, trimmedMsg);
       userMsg = await ConversationService.saveUserMessage(conversation.id, trimmedMsg, requestId);
     }
+
+    // --- Phase 2D Intent Routing ---
+    
+    // A. Predefined Database Query statistics routing
+    const isStatsQuery = (role === Role.ADMIN || role === Role.FACULTY) &&
+      (trimmedMsg.toLowerCase().includes('how many') ||
+       trimmedMsg.toLowerCase().includes('count') ||
+       trimmedMsg.toLowerCase().includes('average') ||
+       trimmedMsg.toLowerCase().includes('statistics') ||
+       trimmedMsg.toLowerCase().includes('scheduled this week') ||
+       trimmedMsg.toLowerCase().includes('active exams'));
+
+    if (isStatsQuery) {
+      try {
+        const statsResponse = await AIStatsService.handleStatsQuery(trimmedMsg, role);
+        const assistantMsg = await ConversationService.saveAssistantMessage(
+          conversation.id,
+          userMsg.id,
+          statsResponse
+        );
+        return {
+          success: true,
+          type: 'SUCCESS',
+          conversationId: conversation.id,
+          title: conversation.title || 'AI Consultation',
+          message: {
+            id: assistantMsg.id,
+            role: assistantMsg.role,
+            content: assistantMsg.content,
+            createdAt: assistantMsg.createdAt,
+          },
+          answer: assistantMsg.content,
+          messageId: assistantMsg.id,
+        };
+      } catch (err: any) {
+        await ConversationService.markUserMessageFailed(userMsg.id);
+        return {
+          success: false,
+          type: 'AI_PROVIDER_UNAVAILABLE',
+          conversationId: conversation.id,
+          error: 'Failed to process database statistics query.',
+        };
+      }
+    }
+
+    // B. RAG document search and Q&A routing
+    try {
+      const matchedChunks = await RAGService.searchChunks({
+        query: trimmedMsg,
+        userId,
+        role,
+        limit: 3,
+      });
+
+      if (matchedChunks.length > 0) {
+        const ragResult = await RAGService.answerQuestion({
+          query: trimmedMsg,
+          userId,
+          role,
+          limit: 3,
+        });
+
+        let finalContent = ragResult.answer;
+        if (ragResult.sources && ragResult.sources.length > 0) {
+          const sourceList = Array.from(new Set(ragResult.sources.map(s => s.documentTitle)))
+            .map(title => `- ${title}`)
+            .join('\n');
+          finalContent += `\n\n**Sources:**\n${sourceList}`;
+        }
+
+        const assistantMsg = await ConversationService.saveAssistantMessage(
+          conversation.id,
+          userMsg.id,
+          finalContent
+        );
+
+        return {
+          success: true,
+          type: 'SUCCESS',
+          conversationId: conversation.id,
+          title: conversation.title || 'AI Consultation',
+          message: {
+            id: assistantMsg.id,
+            role: assistantMsg.role,
+            content: assistantMsg.content,
+            createdAt: assistantMsg.createdAt,
+          },
+          answer: ragResult.answer,
+          sources: ragResult.sources,
+          messageId: assistantMsg.id,
+        };
+      }
+    } catch (ragErr) {
+      console.error('[AIChatService RAG Routing Fallback]:', ragErr);
+      // Fall through to default chatbot on RAG search failure
+    }
+
+    // --- End Phase 2D Routing (Fallback to Phase 1 General Chat) ---
 
     // 4. Intent Classification
     const intent = IntentService.classifyIntent(trimmedMsg);

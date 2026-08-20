@@ -15,9 +15,11 @@ import {
   Search,
   BookOpen,
   CheckCircle2,
+  Bot,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { StudentAnalyticsView } from '@/components/analytics/StudentAnalyticsView';
+import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 
 // Strict Helper for profile text fields (uses "N/A" for missing text fields)
 function displayProfileField<T>(value: T | null | undefined, fallback = 'N/A'): string {
@@ -31,7 +33,7 @@ export default function StudentDashboard() {
   const [tests, setTests] = useState<any[]>([]);
   const [analyticsData, setAnalyticsData] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<
-    'OVERVIEW' | 'UPCOMING' | 'RESULTS' | 'ATTENDANCE' | 'ANALYTICS' | 'NOTIFICATIONS' | 'HISTORY'
+    'OVERVIEW' | 'UPCOMING' | 'RESULTS' | 'ATTENDANCE' | 'ANALYTICS' | 'NOTIFICATIONS' | 'HISTORY' | 'AI_ASSISTANT'
   >('OVERVIEW');
   const [loading, setLoading] = useState(true);
 
@@ -288,6 +290,7 @@ export default function StudentDashboard() {
             { id: 'ANALYTICS', label: 'Performance Analytics', icon: BarChart3 },
             { id: 'NOTIFICATIONS', label: 'Circulars & Alerts', icon: Bell, badge: notificationsList.length },
             { id: 'HISTORY', label: 'Completed Exams', icon: FileText, badge: completedExams.length },
+            { id: 'AI_ASSISTANT', label: 'AI Study Assistant', icon: Bot },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -724,6 +727,12 @@ export default function StudentDashboard() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'AI_ASSISTANT' && (
+          <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl">
+            <AIExaminationAssistant role="STUDENT" />
           </div>
         )}
       </main>

@@ -22,6 +22,9 @@ export interface ChatResponseData {
     content: string;
     createdAt: Date;
   };
+  answer?: string;
+  sources?: any[];
+  messageId?: string;
   error?: string;
 }
 

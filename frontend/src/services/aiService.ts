@@ -21,6 +21,9 @@ export interface ChatResponse {
   conversationId?: string;
   title?: string;
   message?: AIMessage;
+  answer?: string;
+  sources?: any[];
+  messageId?: string;
   error?: string;
 }
 
@@ -112,6 +115,61 @@ export const aiService = {
 
   async askQuestion(question: string) {
     const res = await api.post('/ai/ask', { question });
+    return res.data;
+  },
+
+  async renameConversation(conversationId: string, title: string) {
+    const res = await api.post(`/ai/conversations/${conversationId}/rename`, { title });
+    return res.data;
+  },
+
+  async generateQuestions(payload: {
+    subject: string;
+    topic: string;
+    difficulty: string;
+    questionType: string;
+    count: number;
+    marks: number;
+    negativeMarking: number;
+    documentIds?: string[];
+  }) {
+    const res = await api.post('/ai/generate-questions', payload);
+    return res.data;
+  },
+
+  async saveGeneratedQuestion(question: any) {
+    const res = await api.post('/ai/save-generated-question', { question });
+    return res.data;
+  },
+
+  async generatePracticeSet(payload: {
+    subject: string;
+    topic: string;
+    difficulty: string;
+    count: number;
+  }) {
+    const res = await api.post('/ai/practice', payload);
+    return res.data;
+  },
+
+  async submitPracticeSet(payload: {
+    subject: string;
+    topic: string;
+    difficulty: string;
+    questions: any[];
+    answers: string[];
+  }) {
+    const res = await api.post('/ai/practice/submit', payload);
+    return res.data;
+  },
+
+  async getPracticeAttempts() {
+    const res = await api.get('/ai/practice/attempts');
+    return res.data;
+  },
+
+  async getPerformanceInsights() {
+    const res = await api.get('/ai/performance-insights');
     return res.data;
   },
 };

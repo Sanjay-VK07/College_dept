@@ -79,6 +79,7 @@ model User {
   auditLogs    AuditLog[]
   aiConversations AIConversation[]
   aiDocuments  AIDocument[]
+  aiPracticeAttempts AIPracticeAttempt[]
 }
 
 model Subject {
@@ -132,6 +133,11 @@ model Question {
   createdBy      User         @relation("CreatedQuestions", fields: [createdById], references: [id])
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+
+  generatedByAI   Boolean                 @default(false)
+  generationModel String?
+  reviewStatus    AIQuestionReviewStatus?
+  aiSources       QuestionAISource[]
 
   mockTestQuestions MockTestQuestion[]
   responses         QuestionResponse[]
@@ -322,6 +328,7 @@ model AIDocument {
 
   uploadedBy User              @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
   chunks     AIDocumentChunk[]
+  aiSources  QuestionAISource[]
 
   @@index([status])
   @@index([visibility])
@@ -342,6 +349,43 @@ model AIDocumentChunk {
 
   @@unique([documentId, chunkIndex])
   @@index([documentId])
+}
+
+enum AIQuestionReviewStatus {
+  AI_DRAFT
+  REVIEWED
+  APPROVED
+  REJECTED
+}
+
+model QuestionAISource {
+  id         String     @id @default(uuid())
+  questionId String
+  documentId String
+  chunkId    String?
+  createdAt  DateTime   @default(now())
+
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  document   AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@index([documentId])
+}
+
+model AIPracticeAttempt {
+  id            String   @id @default(uuid())
+  studentId     String
+  subject       String
+  topic         String
+  difficulty    Difficulty
+  questionCount Int
+  score         Float
+  totalMarks    Float
+  startedAt     DateTime @default(now())
+  completedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  student       User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }
 
 
