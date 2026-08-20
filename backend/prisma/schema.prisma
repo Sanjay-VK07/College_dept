@@ -291,6 +291,12 @@ model AIMessage {
 
 enum AIDocumentVisibility {
   PUBLIC
+<<<<<<< Updated upstream
+=======
+  STUDENT
+  FACULTY
+  ADMIN
+>>>>>>> Stashed changes
   PRIVATE
 }
 
@@ -302,6 +308,7 @@ enum AIDocumentStatus {
 }
 
 model AIDocument {
+<<<<<<< Updated upstream
   id           String               @id @default(uuid())
   title        String
   fileName     String
@@ -316,15 +323,51 @@ model AIDocument {
   updatedAt    DateTime             @updatedAt
 
   chunks       AIDocumentChunk[]
+=======
+  id              String               @id @default(uuid())
+  title           String
+  fileName        String
+  mimeType        String
+  fileSize        Int?
+  visibility      AIDocumentVisibility
+  status          AIDocumentStatus     @default(UPLOADED)
+  processingError String?              @db.Text
+  processedAt     DateTime?
+  uploadedById    String
+  metadata        Json?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  uploadedBy User              @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  chunks     AIDocumentChunk[]
+
+  @@index([status])
+  @@index([visibility])
+  @@index([uploadedById])
+>>>>>>> Stashed changes
 }
 
 model AIDocumentChunk {
   id         String     @id @default(uuid())
   documentId String
+<<<<<<< Updated upstream
   document   AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
   chunkIndex Int
   content    String     @db.Text
   createdAt  DateTime   @default(now())
+=======
+  content    String     @db.Text
+  chunkIndex Int
+  tokenCount Int?
+  embedding  Float[]
+  metadata   Json?
+  createdAt  DateTime   @default(now())
+
+  document AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+>>>>>>> Stashed changes
 }
 
 

@@ -63,4 +63,56 @@ export const aiService = {
   async deleteConversation(conversationId: string): Promise<void> {
     await api.delete(`/ai/conversations/${conversationId}`);
   },
+
+  /**
+   * RAG Knowledge Base API Methods
+   */
+  async uploadDocument(file: File, title: string, visibility: string = 'STUDENT') {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('title', title);
+    formData.append('visibility', visibility);
+
+    const res = await api.post('/ai/documents/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  },
+
+  async getDocuments(status?: string) {
+    const res = await api.get('/ai/documents', { params: { status } });
+    return res.data;
+  },
+
+  async getDocumentStatus(documentId: string) {
+    const res = await api.get(`/ai/documents/${documentId}/status`);
+    return res.data;
+  },
+
+  async retryDocument(documentId: string, file?: File) {
+    const formData = new FormData();
+    if (file) {
+      formData.append('file', file);
+    }
+    const res = await api.post(`/ai/documents/${documentId}/retry`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  },
+
+  async deleteDocument(documentId: string) {
+    const res = await api.delete(`/ai/documents/${documentId}`);
+    return res.data;
+  },
+
+  async searchKnowledge(query: string, limit: number = 5) {
+    const res = await api.post('/ai/search', { query, limit });
+    return res.data;
+  },
+
+  async askQuestion(question: string) {
+    const res = await api.post('/ai/ask', { question });
+    return res.data;
+  },
 };
+

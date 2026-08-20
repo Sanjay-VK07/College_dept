@@ -9,4 +9,11 @@ export const ENV = {
   DIRECT_URL: process.env.DIRECT_URL || "postgresql://postgres.wvcfpelwwftkljxduhvw:welcometocitGanesh%402006@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres",
   ALLOWED_DOMAINS: (process.env.ALLOWED_DOMAINS || 'cit.edu.in,college.edu.in').split(','),
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
+  CHUNK_SIZE: parseInt(process.env.CHUNK_SIZE || '500', 10),
+  CHUNK_OVERLAP: parseInt(process.env.CHUNK_OVERLAP || '50', 10),
+  EMBEDDING_PROVIDER: process.env.EMBEDDING_PROVIDER || 'local',
+  EMBEDDING_MODEL: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
+  EMBEDDING_API_KEY: process.env.EMBEDDING_API_KEY || '',
+  EMBEDDING_DIMENSION: parseInt(process.env.EMBEDDING_DIMENSION || '384', 10),
 };
+
