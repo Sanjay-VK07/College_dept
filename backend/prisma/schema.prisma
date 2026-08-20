@@ -78,6 +78,7 @@ model User {
   questions    Question[]       @relation("CreatedQuestions")
   auditLogs    AuditLog[]
   aiConversations AIConversation[]
+  aiDocuments  AIDocument[]
 }
 
 model Subject {
@@ -287,5 +288,44 @@ model AIMessage {
   parentUserMessage AIMessage?     @relation("UserToAssistantMessage", fields: [parentUserMessageId], references: [id], onDelete: Cascade)
   assistantMessage  AIMessage?     @relation("UserToAssistantMessage")
 }
+
+enum AIDocumentVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum AIDocumentStatus {
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+
+model AIDocument {
+  id           String               @id @default(uuid())
+  title        String
+  fileName     String
+  mimeType     String
+  fileSize     Int
+  visibility   AIDocumentVisibility @default(PRIVATE)
+  status       AIDocumentStatus     @default(UPLOADED)
+  storageKey   String               @unique
+  uploadedById String
+  uploadedBy   User                 @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  chunks       AIDocumentChunk[]
+}
+
+model AIDocumentChunk {
+  id         String     @id @default(uuid())
+  documentId String
+  document   AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  chunkIndex Int
+  content    String     @db.Text
+  createdAt  DateTime   @default(now())
+}
+
 
 

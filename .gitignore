@@ -13,3 +13,7 @@ backend/.env
 frontend/.env
 
 *.log
+
+uploads/
+**/uploads/
+
