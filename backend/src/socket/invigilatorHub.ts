@@ -1,10 +1,23 @@
 import { Server, Socket } from 'socket.io';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../config/prisma';
 import { RiskLevel, Role } from '@prisma/client';
-import jwt from 'jsonwebtoken';
 import { ENV } from '../config/env';
 import { AuditLogger } from '../services/auditLogger';
 import { GateScoringService } from '../services/gateScoringService';
+
+interface AuthedSocket extends Socket {
+  data: {
+    user: {
+      id: string;
+      role: Role;
+      name: string;
+      registerNo?: string | null;
+      department: string;
+    };
+    assignmentId?: string;
+  };
+}
 
 export interface ConnectedStudent {
   socketId: string;
@@ -28,41 +41,56 @@ let globalIo: Server | null = null;
 export function setupInvigilatorHub(io: Server) {
   globalIo = io;
 
-  // Middleware to authenticate socket connections via JWT
-  io.use((socket, next) => {
-    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
-    if (!token) {
-      return next(new Error('Authentication error: Token is required'));
-    }
+  // Reject any socket connection that doesn't present a valid JWT for a real, still-existing user
+  io.use(async (socket: Socket, next) => {
     try {
+      const token = socket.handshake.auth?.token as string | undefined;
+      if (!token) {
+        return next(new Error('Authentication required'));
+      }
+
       const decoded = jwt.verify(token, ENV.JWT_SECRET) as any;
-      socket.data.user = decoded;
+      const dbUser = await prisma.user.findUnique({ where: { id: decoded.id } });
+      if (!dbUser) {
+        return next(new Error('Authentication required'));
+      }
+
+      (socket as AuthedSocket).data.user = {
+        id: dbUser.id,
+        role: dbUser.role,
+        name: dbUser.name,
+        registerNo: dbUser.registerNo,
+        department: dbUser.department,
+      };
+
       next();
-    } catch (err) {
-      return next(new Error('Authentication error: Invalid token'));
+    } catch (error) {
+      next(new Error('Authentication required'));
     }
   });
+
   io.on('connection', (socket: Socket) => {
-    const user = socket.data.user;
-    console.log(`🔌 [Socket.IO] Client connected: ${socket.id} (User: ${user?.email}, Role: ${user?.role})`);
+    const authedSocket = socket as AuthedSocket;
+    const user = authedSocket.data.user;
+    console.log(`🔌 [Socket.IO] Client connected: ${socket.id} (${user.role} ${user.name})`);
 
-    // Join Faculty Invigilator Room
+    // Join Faculty Invigilator Room — faculty/admin only, and scoped to tests they own/invigilate
     socket.on('join_faculty_room', async (data: { testId: string }) => {
-      const requestedTestId = data?.testId;
-      if (!requestedTestId) return;
-
-      if (!user || (user.role !== Role.FACULTY && user.role !== Role.ADMIN)) {
-        console.warn(`🛑 [Socket.IO] Unauthorized join_faculty_room request by user role: ${user?.role}`);
+      if (user.role !== Role.FACULTY && user.role !== Role.ADMIN) {
+        console.warn(`⛔ [Socket.IO] Non-faculty user ${user.id} attempted to join faculty room`);
         return;
       }
+
+      const requestedTestId = data?.testId;
+      if (!requestedTestId) return;
 
       if (user.role === Role.FACULTY && requestedTestId !== 'all') {
         const test = await prisma.mockTest.findUnique({
           where: { id: requestedTestId },
-          include: { invigilators: { where: { facultyId: user.id } } }
+          include: { invigilators: { where: { facultyId: user.id } } },
         });
         if (!test || (test.createdById !== user.id && test.invigilators.length === 0)) {
-          console.warn(`🛑 [Socket.IO] Faculty user ${user.id} unauthorized to invigilate test ${requestedTestId}`);
+          console.warn(`⛔ [Socket.IO] Faculty user ${user.id} unauthorized to invigilate test ${requestedTestId}`);
           return;
         }
       }
@@ -110,33 +138,32 @@ export function setupInvigilatorHub(io: Server) {
       }
     });
 
-    // Student joins exam session
+    // Student joins exam session — identity comes from the JWT, not the payload
     socket.on(
       'student_join_exam',
-      async (data: {
-        assignmentId: string;
-        testId: string;
-      }) => {
-        if (!user || user.role !== Role.STUDENT) {
-          console.warn(`🛑 [Socket.IO] Unauthorized student_join_exam request`);
+      async (data: { assignmentId: string; testId: string }) => {
+        if (user.role !== Role.STUDENT) {
+          console.warn(`⛔ [Socket.IO] Non-student ${user.id} attempted student_join_exam`);
           return;
         }
 
         try {
           const assignment = await prisma.testAssignment.findUnique({
             where: { id: data.assignmentId },
-            include: { test: true, student: true },
+            include: { test: true },
           });
 
           if (!assignment || assignment.studentId !== user.id) {
-            console.warn(`🛑 [Socket.IO] Student ${user.id} not authorized for assignment ${data.assignmentId}`);
+            console.warn(`⛔ [Socket.IO] Student ${user.id} attempted to join an exam session they don't own (assignment ${data.assignmentId})`);
             return;
           }
 
-          console.log(`👨‍🎓 [Socket.IO] Student joined exam: ${assignment.student.name} [Assignment: ${assignment.id}]`);
-
+          // Only trust the assignment/testId this socket has proven ownership of
+          authedSocket.data.assignmentId = assignment.id;
           socket.join(`exam_${assignment.id}`);
           socket.join(`test_${assignment.testId}`);
+
+          console.log(`👨‍🎓 [Socket.IO] Student joined exam: ${user.name} (${user.registerNo}) [Assignment: ${assignment.id}]`);
 
           const totalSec = assignment.test?.durationMinutes ? assignment.test.durationMinutes * 60 : 10800;
           const elapsedSec = assignment.startedAt
@@ -145,12 +172,12 @@ export function setupInvigilatorHub(io: Server) {
 
           const currentStudent: ConnectedStudent = {
             socketId: socket.id,
-            studentId: assignment.studentId,
+            studentId: user.id,
             assignmentId: assignment.id,
             testId: assignment.testId,
-            registerNo: assignment.student.registerNo || 'N/A',
-            name: assignment.student.name,
-            department: assignment.student.department,
+            registerNo: user.registerNo || 'N/A',
+            name: user.name,
+            department: user.department,
             currentQuestion: 1,
             remainingSec: Math.max(0, totalSec - elapsedSec),
             violationCount: assignment.violationCount || 0,
@@ -160,6 +187,8 @@ export function setupInvigilatorHub(io: Server) {
           };
 
           activeStudents.set(assignment.id, currentStudent);
+
+          // Broadcast status change to the faculty room for this test
           io.to(`faculty_${assignment.testId}`).emit('student_status_changed', currentStudent);
         } catch (error: any) {
           console.error('❌ [Socket.IO] Error handling student_join_exam:', error.message);
@@ -167,14 +196,16 @@ export function setupInvigilatorHub(io: Server) {
       }
     );
 
-    // Student Heartbeat & Progress Update
+    // Student Heartbeat & Progress Update — only for the assignment this socket owns
     socket.on(
       'student_heartbeat',
       async (data: { assignmentId: string; currentQuestion: number; remainingSec: number }) => {
-        if (!user || user.role !== Role.STUDENT) return;
+        if (user.role !== Role.STUDENT || authedSocket.data.assignmentId !== data.assignmentId) {
+          return;
+        }
 
         const student = activeStudents.get(data.assignmentId);
-        if (student && student.studentId === user.id) {
+        if (student) {
           student.currentQuestion = data.currentQuestion;
           student.remainingSec = data.remainingSec;
           student.status = 'ONLINE';
@@ -192,14 +223,19 @@ export function setupInvigilatorHub(io: Server) {
       }
     );
 
-    // Security Violation Event
+    // Security Violation Event — only for the assignment this socket owns
     socket.on(
       'security_violation_event',
       async (data: { assignmentId: string; violationType: string; details?: string }) => {
-        if (!user || user.role !== Role.STUDENT) return;
+        if (user.role !== Role.STUDENT || authedSocket.data.assignmentId !== data.assignmentId) {
+          console.warn(`⛔ [Socket.IO] Rejected forged violation event from ${user.id} for assignment ${data.assignmentId}`);
+          return;
+        }
+
+        console.warn(`🚨 [Socket.IO] Violation logged for assignment ${data.assignmentId}: ${data.violationType}`);
 
         const student = activeStudents.get(data.assignmentId);
-        if (!student || student.studentId !== user.id) return;
+        if (!student) return;
 
         let violationCount = student.violationCount + 1;
         let riskLevel: RiskLevel = RiskLevel.SAFE;
@@ -247,7 +283,7 @@ export function setupInvigilatorHub(io: Server) {
             io.to(`exam_${data.assignmentId}`).emit('force_auto_submit', {
               reason: `Maximum violation limit (${maxViolations}) exceeded. Exam automatically submitted.`,
             });
-            
+
             student.status = 'DISCONNECTED';
             io.to(`faculty_${student.testId}`).emit('student_status_changed', student);
           }
@@ -257,30 +293,36 @@ export function setupInvigilatorHub(io: Server) {
       }
     );
 
-    // Student Exam Submission Event
+    // Student Exam Submission Event — only for the assignment this socket owns
     socket.on('student_submit_exam', (data: { assignmentId: string }) => {
-      if (!user || user.role !== Role.STUDENT) return;
+      if (user.role !== Role.STUDENT || authedSocket.data.assignmentId !== data.assignmentId) {
+        return;
+      }
 
+      console.log(`🏁 [Socket.IO] Student submitted exam for assignment: ${data.assignmentId}`);
       const student = activeStudents.get(data.assignmentId);
-      if (student && student.studentId === user.id) {
+      if (student) {
         student.status = 'DISCONNECTED';
         io.to(`faculty_${student.testId}`).emit('student_status_changed', student);
       }
     });
 
-    // Faculty sends warning message to student
+    // Faculty sends warning message to student — faculty/admin only, scoped to tests they own/invigilate
     socket.on('faculty_send_warning', async (data: { assignmentId: string; message: string }) => {
-      if (!user || (user.role !== Role.FACULTY && user.role !== Role.ADMIN)) return;
+      if (user.role !== Role.FACULTY && user.role !== Role.ADMIN) {
+        console.warn(`⛔ [Socket.IO] Non-faculty user ${user.id} attempted faculty_send_warning`);
+        return;
+      }
 
       const assignment = await prisma.testAssignment.findUnique({
         where: { id: data.assignmentId },
-        include: { test: { include: { invigilators: { where: { facultyId: user.id } } } } }
+        include: { test: { include: { invigilators: { where: { facultyId: user.id } } } } },
       });
 
       if (!assignment) return;
 
       if (user.role === Role.FACULTY && assignment.test.createdById !== user.id && assignment.test.invigilators.length === 0) {
-        console.warn(`🛑 [Socket.IO] Faculty user ${user.id} unauthorized to warn student in test ${assignment.testId}`);
+        console.warn(`⛔ [Socket.IO] Faculty user ${user.id} unauthorized to warn student in test ${assignment.testId}`);
         return;
       }
 
@@ -291,26 +333,29 @@ export function setupInvigilatorHub(io: Server) {
       });
     });
 
-    // Faculty forces immediate submit for high-risk student
+    // Faculty forces immediate submit for high-risk student — faculty/admin only, scoped to tests they own/invigilate
     socket.on('faculty_force_submit', async (data: { assignmentId: string; reason: string }) => {
-      if (!user || (user.role !== Role.FACULTY && user.role !== Role.ADMIN)) return;
+      if (user.role !== Role.FACULTY && user.role !== Role.ADMIN) {
+        console.warn(`⛔ [Socket.IO] Non-faculty user ${user.id} attempted faculty_force_submit`);
+        return;
+      }
 
       const assignment = await prisma.testAssignment.findUnique({
         where: { id: data.assignmentId },
-        include: { test: { include: { invigilators: { where: { facultyId: user.id } } } } }
+        include: { test: { include: { invigilators: { where: { facultyId: user.id } } } } },
       });
 
       if (!assignment) return;
 
       if (user.role === Role.FACULTY && assignment.test.createdById !== user.id && assignment.test.invigilators.length === 0) {
-        console.warn(`🛑 [Socket.IO] Faculty user ${user.id} unauthorized to force submit assignment ${data.assignmentId}`);
+        console.warn(`⛔ [Socket.IO] Faculty user ${user.id} unauthorized to force submit assignment ${data.assignmentId}`);
         return;
       }
 
       try {
         console.log(`⚡ [Socket.IO] Faculty force submit executing transaction for assignment ${data.assignmentId}`);
         await forceSubmitAssignment(data.assignmentId, '127.0.0.1', user);
-        
+
         io.to(`exam_${data.assignmentId}`).emit('force_auto_submit', {
           reason: data.reason || 'Invigilator issued remote termination.',
         });

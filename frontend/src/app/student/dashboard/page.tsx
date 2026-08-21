@@ -9,17 +9,11 @@ import {
   BarChart3,
   LogOut,
   Calendar,
-  FileText,
-  Bell,
   AlertCircle,
-  Search,
   BookOpen,
-  CheckCircle2,
-  Bot,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { StudentAnalyticsView } from '@/components/analytics/StudentAnalyticsView';
-import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 
 // Strict Helper for profile text fields (uses "N/A" for missing text fields)
 function displayProfileField<T>(value: T | null | undefined, fallback = 'N/A'): string {
@@ -33,12 +27,9 @@ export default function StudentDashboard() {
   const [tests, setTests] = useState<any[]>([]);
   const [analyticsData, setAnalyticsData] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<
-    'OVERVIEW' | 'UPCOMING' | 'RESULTS' | 'ATTENDANCE' | 'ANALYTICS' | 'NOTIFICATIONS' | 'HISTORY'
+    'OVERVIEW' | 'UPCOMING' | 'RESULTS' | 'ANALYTICS'
   >('OVERVIEW');
   const [loading, setLoading] = useState(true);
-
-  // Search & Filter State for History
-  const [historySearch, setHistorySearch] = useState('');
 
   // Live Clock State & Reactive Background Polling
   const [currentDateTime, setCurrentDateTime] = useState<string>('');
@@ -92,18 +83,16 @@ export default function StudentDashboard() {
     };
   }, []);
 
-  const [dbNotifications, setDbNotifications] = useState<any[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchDashboardData = async (silent: boolean = false) => {
     if (!silent) setLoading(true);
     setFetchError(null);
     try {
-      const [profileRes, testRes, analyticsRes, notifRes] = await Promise.all([
+      const [profileRes, testRes, analyticsRes] = await Promise.all([
         api.get('/auth/me'),
         api.get('/exam/student-tests'),
         api.get('/analytics/student-me'),
-        api.get('/notifications'),
       ]);
 
       if (profileRes.data?.success && profileRes.data?.data) {
@@ -111,7 +100,6 @@ export default function StudentDashboard() {
       }
       if (testRes.data?.success) setTests(testRes.data.data || []);
       if (analyticsRes.data?.success) setAnalyticsData(analyticsRes.data.data);
-      if (notifRes.data?.success) setDbNotifications(notifRes.data.data.notifications || []);
     } catch (err: any) {
       console.error('Error fetching student dashboard:', err);
       setFetchError(err.response?.data?.message || 'Failed to load examination portal data.');
@@ -152,7 +140,6 @@ export default function StudentDashboard() {
     section: user.section ? `Section ${user.section}` : 'N/A',
     batch: user.year ? `Year ${user.year}` : 'N/A',
     advisor: 'N/A',
-    attendancePercent: '--',
     cgpa: '--',
   };
 
@@ -170,15 +157,25 @@ export default function StudentDashboard() {
     const courseCode = titleParts[0] && /^[A-Z0-9]+$/i.test(titleParts[0]) ? titleParts[0] : '--';
     const duration = item.test?.durationMinutes !== undefined && item.test?.durationMinutes !== null ? item.test.durationMinutes : '--';
 
+    // Derive display status from the exam's real time window rather than the raw assignment status,
+    // so an exam the student never opened still flips to COMPLETED once its window has closed.
+    const endTimeDate = item.test?.endTime ? new Date(item.test.endTime) : null;
+    const now = new Date();
+    let derivedStatus: 'UPCOMING' | 'IN_PROGRESS' | 'COMPLETED' = 'UPCOMING';
+    if (startTimeDate && endTimeDate) {
+      if (now > endTimeDate) derivedStatus = 'COMPLETED';
+      else if (now >= startTimeDate) derivedStatus = 'IN_PROGRESS';
+      else derivedStatus = 'UPCOMING';
+    }
+
     return {
       id: item.test?.id || item.id,
       code: courseCode,
       title: titleStr,
       date: formattedDate,
       time: startTimeDate ? `${formattedTime} (${duration} Mins)` : '--',
-      hall: item.test?.targetSection ? `Exam Hall (${item.test.targetSection})` : 'Online CBT Portal',
       duration: `${duration} Mins`,
-      status: item.status || '--',
+      status: derivedStatus,
     };
   });
 
@@ -193,20 +190,11 @@ export default function StudentDashboard() {
       subject: titleStr,
       score,
       totalMarks,
+      correctCount: item.correctCount ?? 0,
+      wrongCount: item.wrongCount ?? 0,
       status: item.status || 'EVALUATED',
     };
   });
-
-  const attendanceBreakdown: any[] = [];
-
-  const notificationsList = dbNotifications.map((n: any) => ({
-    id: n.id,
-    title: n.title,
-    date: new Date(n.createdAt).toISOString().split('T')[0],
-    author: n.role ? `Target: ${n.role}` : 'System',
-    badge: (n.type || 'INFO').toUpperCase(),
-    content: n.message,
-  }));
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans">
@@ -269,11 +257,6 @@ export default function StudentDashboard() {
 
           <div className="flex items-center space-x-4 border-t md:border-t-0 md:border-l border-slate-200 pt-3 md:pt-0 md:pl-6 text-xs">
             <div className="text-center px-2">
-              <span className="text-slate-500 block uppercase text-[10px] font-semibold">Attendance</span>
-              <span className="text-lg font-bold text-slate-700">{studentProfile.attendancePercent}</span>
-            </div>
-            <div className="h-8 w-px bg-slate-200" />
-            <div className="text-center px-2">
               <span className="text-slate-500 block uppercase text-[10px] font-semibold">Current CGPA</span>
               <span className="text-lg font-bold text-[#1E40AF]">{studentProfile.cgpa}</span>
             </div>
@@ -286,10 +269,7 @@ export default function StudentDashboard() {
             { id: 'OVERVIEW', label: 'Overview & Ongoing', icon: BookOpen },
             { id: 'UPCOMING', label: 'Upcoming Timetable', icon: Calendar },
             { id: 'RESULTS', label: 'Semester Results', icon: Award },
-            { id: 'ATTENDANCE', label: 'Attendance Summary', icon: CheckCircle2 },
             { id: 'ANALYTICS', label: 'Performance Analytics', icon: BarChart3 },
-            { id: 'NOTIFICATIONS', label: 'Circulars & Alerts', icon: Bell, badge: notificationsList.length },
-            { id: 'HISTORY', label: 'Completed Exams', icon: FileText, badge: completedExams.length },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -305,11 +285,6 @@ export default function StudentDashboard() {
               >
                 <Icon className="w-4 h-4" />
                 <span>{tab.label}</span>
-                {tab.badge !== undefined && tab.badge > 0 && (
-                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${isActive ? 'bg-[#1E40AF] text-white' : 'bg-slate-200 text-slate-700'}`}>
-                    {tab.badge}
-                  </span>
-                )}
               </button>
             );
           })}
@@ -406,16 +381,7 @@ export default function StudentDashboard() {
             </div>
 
             {/* Overview Quick Glance Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="erp-card">
-                <div className="flex items-center justify-between text-slate-600 mb-2">
-                  <span className="text-xs font-semibold uppercase tracking-wider">Attendance Status</span>
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                </div>
-                <div className="text-2xl font-bold text-slate-900">{studentProfile.attendancePercent}</div>
-                <p className="text-xs text-slate-500 mt-1">Status: No data available</p>
-              </div>
-
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="erp-card">
                 <div className="flex items-center justify-between text-slate-600 mb-2">
                   <span className="text-xs font-semibold uppercase tracking-wider">Completed Assessments</span>
@@ -458,24 +424,23 @@ export default function StudentDashboard() {
               <table className="erp-table">
                 <thead>
                   <tr>
-                    <th>Course Code</th>
-                    <th>Subject & Title</th>
+                    <th>Subject</th>
+                    <th>Topic</th>
                     <th>Exam Date</th>
                     <th>Timing & Duration</th>
-                    <th>Exam Hall</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {fetchError ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-red-600 font-medium text-xs">
+                      <td colSpan={5} className="py-8 text-center text-red-600 font-medium text-xs">
                         Failed to load examination timetable. Please try refreshing the page.
                       </td>
                     </tr>
                   ) : upcomingExamsList.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500 text-xs font-mono">
+                      <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-mono">
                         No data available
                       </td>
                     </tr>
@@ -486,9 +451,18 @@ export default function StudentDashboard() {
                         <td className="font-semibold text-slate-900">{exam.title}</td>
                         <td className="font-mono">{exam.date}</td>
                         <td className="text-slate-600 font-mono text-xs">{exam.time}</td>
-                        <td className="font-medium text-slate-700">{exam.hall}</td>
                         <td>
-                          <span className="erp-badge-blue">{exam.status}</span>
+                          <span
+                            className={
+                              exam.status === 'COMPLETED'
+                                ? 'erp-badge-green'
+                                : exam.status === 'IN_PROGRESS'
+                                ? 'erp-badge-amber'
+                                : 'erp-badge-blue'
+                            }
+                          >
+                            {exam.status}
+                          </span>
                         </td>
                       </tr>
                     ))
@@ -513,19 +487,18 @@ export default function StudentDashboard() {
               <table className="erp-table">
                 <thead>
                   <tr>
-                    <th>Course Code</th>
-                    <th>Subject Name</th>
-                    <th>CIA Marks (50)</th>
-                    <th>ESE Marks (100)</th>
-                    <th>Total Score</th>
-                    <th>Letter Grade</th>
+                    <th>Subject</th>
+                    <th>Topic</th>
+                    <th>Score</th>
+                    <th>Correct</th>
+                    <th>Wrong</th>
                     <th>Result Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {recentResultsList.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-500 text-xs font-mono">
+                      <td colSpan={6} className="py-8 text-center text-slate-500 text-xs font-mono">
                         No data available
                       </td>
                     </tr>
@@ -534,10 +507,9 @@ export default function StudentDashboard() {
                       <tr key={idx}>
                         <td className="font-mono font-bold text-[#1E40AF]">{res.code}</td>
                         <td className="font-semibold text-slate-900">{res.subject}</td>
-                        <td className="font-mono text-slate-700">--</td>
-                        <td className="font-mono text-slate-700">--</td>
                         <td className="font-mono font-bold text-[#1E40AF]">{res.score} / {res.totalMarks}</td>
-                        <td className="font-semibold text-slate-900">--</td>
+                        <td className="font-mono font-bold text-emerald-700">{res.correctCount}</td>
+                        <td className="font-mono font-bold text-red-600">{res.wrongCount}</td>
                         <td>
                           <span className="erp-badge-green">{res.status}</span>
                         </td>
@@ -550,63 +522,7 @@ export default function StudentDashboard() {
           </div>
         )}
 
-        {/* TAB 4: ATTENDANCE SUMMARY */}
-        {activeTab === 'ATTENDANCE' && (
-          <div className="space-y-6">
-            <div className="erp-card bg-slate-50 border-slate-200 flex items-center justify-between">
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">Overall Attendance Compliance</h4>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Minimum mandatory requirement for exam eligibility: <b>{user?.minAttendanceRequirement ? `${user.minAttendanceRequirement}%` : '--'}</b>
-                </p>
-              </div>
-              <div className="text-slate-700 font-bold text-2xl font-mono">{studentProfile.attendancePercent}</div>
-            </div>
-
-            <div className="erp-table-container">
-              <table className="erp-table">
-                <thead>
-                  <tr>
-                    <th>Course Code</th>
-                    <th>Subject Title</th>
-                    <th>Conducted Classes</th>
-                    <th>Attended Classes</th>
-                    <th>Attendance %</th>
-                    <th>Eligibility Badge</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {attendanceBreakdown.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500 text-xs font-mono">
-                        No data available
-                      </td>
-                    </tr>
-                  ) : (
-                    attendanceBreakdown.map((att, idx) => (
-                      <tr key={idx}>
-                        <td className="font-mono font-bold text-[#1E40AF]">{att.code}</td>
-                        <td className="font-semibold text-slate-900">{att.subject}</td>
-                        <td className="font-mono">{att.total}</td>
-                        <td className="font-mono text-emerald-700 font-bold">{att.attended}</td>
-                        <td className="font-mono font-bold">{att.percent}%</td>
-                        <td>
-                          {att.percent >= (user?.minAttendanceRequirement ? Number(user.minAttendanceRequirement) : 100) ? (
-                            <span className="erp-badge-green">ELIGIBLE</span>
-                          ) : (
-                            <span className="erp-badge-red">SHORTAGE</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 5: PERFORMANCE ANALYTICS */}
+        {/* TAB 4: PERFORMANCE ANALYTICS */}
         {activeTab === 'ANALYTICS' && (
           <div className="space-y-4">
             {fetchError ? (
@@ -629,105 +545,6 @@ export default function StudentDashboard() {
           </div>
         )}
 
-        {/* TAB 6: CIRCULARS & NOTIFICATIONS */}
-        {activeTab === 'NOTIFICATIONS' && (
-          <div className="space-y-4">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-              Official Examination Circulars
-            </h3>
-
-            <div className="space-y-3">
-              {notificationsList.length === 0 ? (
-                <div className="erp-card text-center py-12 text-slate-500 text-xs font-mono">
-                  No data available
-                </div>
-              ) : (
-                notificationsList.map((notif) => (
-                  <div key={notif.id} className="erp-card space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <span className="erp-badge-red">{notif.badge}</span>
-                        <h4 className="text-sm font-bold text-slate-900">{notif.title}</h4>
-                      </div>
-                      <span className="text-xs text-slate-500 font-mono">{notif.date}</span>
-                    </div>
-                    <p className="text-xs text-slate-700 leading-relaxed">{notif.content}</p>
-                    <div className="text-[11px] text-slate-500 font-medium">Issued by: {notif.author}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* TAB 7: EXAMINATION HISTORY */}
-        {activeTab === 'HISTORY' && (
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-                Completed CBT Assessments Archive
-              </h3>
-              <div className="relative w-full sm:w-64">
-                <Search className="w-4 h-4 absolute left-[#1E40AF] top-2.5 text-slate-400" />
-                <input
-                  type="text"
-                  value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
-                  placeholder="Filter exam title..."
-                  className="erp-input pl-9 text-xs py-1.5"
-                />
-              </div>
-            </div>
-
-            <div className="erp-table-container">
-              <table className="erp-table">
-                <thead>
-                  <tr>
-                    <th>Exam Title</th>
-                    <th>Exam Category</th>
-                    <th>Score Obtained</th>
-                    <th>Total Marks</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {completedExams.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="text-center py-8 text-slate-500 text-xs font-mono">
-                        No data available
-                      </td>
-                    </tr>
-                  ) : (
-                    completedExams
-                      .filter((item: any) =>
-                        item.test?.title?.toLowerCase().includes(historySearch.toLowerCase())
-                      )
-                      .map((item: any) => (
-                        <tr key={item.id}>
-                          <td className="font-bold text-slate-900">{item.test?.title}</td>
-                          <td className="font-mono text-xs">{item.test?.examType || '--'}</td>
-                          <td className="font-mono font-bold text-emerald-700">{item.score}</td>
-                          <td className="font-mono text-slate-600">{item.test?.totalMarks}</td>
-                          <td>
-                            <span className="erp-badge-green">{item.status}</span>
-                          </td>
-                          <td>
-                            <button
-                              onClick={() => router.push(`/student/solution/${item.id}`)}
-                              className="erp-btn-secondary py-1 text-xs"
-                            >
-                              Review Solutions
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </main>
 
       {/* Footer */}

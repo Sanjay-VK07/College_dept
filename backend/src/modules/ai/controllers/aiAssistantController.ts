@@ -123,7 +123,7 @@ export class AIAssistantController {
         });
       }
 
-      const questions = await QuestionGenerationService.generateQuestions({
+      const questions = await QuestionGenerationService.generateQuestionsDirect({
         subject,
         topic,
         difficulty: difficulty as Difficulty,

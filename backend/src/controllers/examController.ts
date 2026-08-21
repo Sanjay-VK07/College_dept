@@ -66,11 +66,22 @@ export class ExamController {
               },
             },
           },
+          responses: {
+            where: { status: { in: ['ANSWERED', 'ANSWERED_AND_MARKED'] } },
+            select: { isCorrect: true },
+          },
         },
         orderBy: { test: { startTime: 'desc' } },
       });
 
-      return res.status(200).json({ success: true, data: assignments });
+      // Attach correct/wrong counts and drop the raw response rows from the payload
+      const assignmentsWithCounts = assignments.map(({ responses, ...assignment }) => ({
+        ...assignment,
+        correctCount: responses.filter((r) => r.isCorrect).length,
+        wrongCount: responses.filter((r) => !r.isCorrect).length,
+      }));
+
+      return res.status(200).json({ success: true, data: assignmentsWithCounts });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }

@@ -659,8 +659,6 @@ model AIExamAssemblyTrace {
   @@index([createdAt])
 }
 
-
-
 model QuestionAISource {
   id         String     @id @default(uuid())
   questionId String

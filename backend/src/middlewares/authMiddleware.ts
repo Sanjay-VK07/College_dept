@@ -120,13 +120,6 @@ export const enforceStudentPrivacy = (paramName: string = 'studentId') => {
         ownerStudentId = String(requestParam);
       }
 
-      // Detailed logging for development diagnostic tracking
-      console.log({
-        loggedInUserId: req.user.id,
-        requestParam: requestParam,
-        solutionOwnerId: ownerStudentId,
-      });
-
       if (req.user.role === Role.STUDENT && req.user.id !== ownerStudentId) {
         return res.status(403).json({
           success: false,

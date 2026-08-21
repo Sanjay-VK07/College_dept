@@ -97,7 +97,7 @@ export const AIAssistant: React.FC = () => {
     }
   };
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || userRole === 'STUDENT') {
     return null;
   }
 

@@ -195,7 +195,7 @@ async function runTests() {
     // TEST 5: Question Generation MCQ
     // ----------------------------------------------------
     console.log('\n--- TEST 5: AI Question Generator MCQ ---');
-    const generatedMcqs = await QuestionGenerationService.generateQuestions({
+    const generatedMcqs = await QuestionGenerationService.generateQuestionsDirect({
       subject: 'Computer Networks',
       topic: 'TCP Congestion Control',
       difficulty: Difficulty.MEDIUM,
@@ -216,7 +216,7 @@ async function runTests() {
     // TEST 6: Question Generation NAT validation
     // ----------------------------------------------------
     console.log('\n--- TEST 6: AI Question Generator NAT ---');
-    const generatedNats = await QuestionGenerationService.generateQuestions({
+    const generatedNats = await QuestionGenerationService.generateQuestionsDirect({
       subject: 'Data Structures',
       topic: 'B-Trees',
       difficulty: Difficulty.HARD,
