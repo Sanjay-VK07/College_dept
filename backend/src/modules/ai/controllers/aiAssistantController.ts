@@ -397,4 +397,44 @@ export class AIAssistantController {
       });
     }
   }
+
+  /**
+   * GET /api/ai/practice/recommendations
+   */
+  public static async getStudentRecommendations(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Unauthenticated.' });
+      }
+
+      const userId = req.user.id;
+      const role = req.user.role;
+
+      if (role !== Role.STUDENT) {
+        return res.status(403).json({
+          success: false,
+          message: 'Student recommendations are strictly for Students.',
+        });
+      }
+
+      const insights = await AIStatsService.getStudentPerformanceInsights(userId);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          recommendations: insights?.recommendations || [],
+          weakTopics: insights?.weakTopics || [],
+          weakSubjects: insights?.weakSubjects || [],
+        },
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to retrieve student recommendations.';
+      console.error('[AIAssistantController.getStudentRecommendations Error]:', error);
+      return res.status(500).json({
+        success: false,
+        message,
+      });
+    }
+  }
 }
+

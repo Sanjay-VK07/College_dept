@@ -10,36 +10,27 @@ import { FacultyIntelligenceController } from '../controllers/facultyIntelligenc
 import { AIGovernanceController } from '../controllers/aiGovernanceController';
 import { AIAssistantController } from '../controllers/aiAssistantController';
 import documentRoutes from './documentRoutes';
-import rateLimit from 'express-rate-limit';
+import { createAIRateLimiter } from '../../../middlewares/rateLimiter';
+import { ENV } from '../../../config/env';
 
 const router = Router();
 
-// Configure dynamic role-based rate limiting middleware
-const dynamicAiRateLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1-minute window
-  max: (req: any) => {
-    const role = req.user?.role;
-    if (role === 'ADMIN') return 60; // 60 requests/min for Admin
-    if (role === 'FACULTY') return 30; // 30 requests/min for Faculty
-    return parseInt(process.env.AI_RATE_LIMIT || '10', 10); // Default/Student limit: 10 requests/min
-  },
-  message: {
-    success: false,
-    message: 'Too many AI requests. Please try again later.',
-  },
-  keyGenerator: (req: any) => req.user?.id || req.ip,
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// Configure Feature-Specific Rate Limiters
+const chatLimiter = createAIRateLimiter({ maxRequests: ENV.AI_CHAT_RATE_LIMIT, featureName: 'AI Chat' });
+const ragLimiter = createAIRateLimiter({ maxRequests: ENV.AI_RAG_RATE_LIMIT, featureName: 'RAG Search' });
+const generationLimiter = createAIRateLimiter({ maxRequests: ENV.AI_GENERATION_RATE_LIMIT, featureName: 'AI Generation' });
+const adminLimiter = createAIRateLimiter({ maxRequests: ENV.AI_ADMIN_RATE_LIMIT, featureName: 'AI Admin' });
 
 // All AI Assistant routes require valid user JWT authentication
 router.use(authenticateJWT);
 
-// Apply dynamic rate limiting to mutation / generation endpoints
-router.use('/chat', dynamicAiRateLimiter);
-router.use('/ask', dynamicAiRateLimiter);
-router.use('/generate-questions', dynamicAiRateLimiter);
-router.use('/practice', dynamicAiRateLimiter);
+// Apply Feature Rate Limiters
+router.use('/chat', chatLimiter);
+router.use('/ask', ragLimiter);
+router.use('/questions', generationLimiter);
+router.use('/solutions', generationLimiter);
+router.use('/exams', generationLimiter);
+router.use('/governance', adminLimiter);
 
 // 1. Existing Chat & Conversations Routes
 router.post('/chat', AIChatController.postChatMessage);
@@ -60,45 +51,29 @@ router.post('/questions/generate', requireRoles(Role.FACULTY, Role.ADMIN), AIQue
 router.get('/questions/pending', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.getPendingQuestions);
 router.post('/questions/:id/approve', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.approveQuestion);
 router.post('/questions/:id/reject', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.rejectQuestion);
-router.put('/questions/:id', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.editQuestion);
 
 // AI Solution Generation & Verification routes (Faculty & Admin only)
 router.post('/solutions/generate', requireRoles(Role.FACULTY, Role.ADMIN), AISolutionController.generateSolution);
 router.get('/solutions/pending', requireRoles(Role.FACULTY, Role.ADMIN), AISolutionController.getPendingSolutions);
 router.post('/solutions/:id/approve', requireRoles(Role.FACULTY, Role.ADMIN), AISolutionController.approveSolution);
-router.post('/solutions/:id/reject', requireRoles(Role.FACULTY, Role.ADMIN), AISolutionController.rejectSolution);
-router.put('/solutions/:id', requireRoles(Role.FACULTY, Role.ADMIN), AISolutionController.editSolution);
 
-// AI Intelligent Exam Assembly routes (Faculty & Admin only)
-router.post('/exams/generate', requireRoles(Role.FACULTY, Role.ADMIN), AIExamController.assembleExam);
-router.post('/exams/:id/approve', requireRoles(Role.FACULTY, Role.ADMIN), AIExamController.approveExamDraft);
+// Intelligent Exam Draft Assembly routes (Faculty & Admin only)
+router.post('/exams/assemble-draft', requireRoles(Role.FACULTY, Role.ADMIN), AIExamController.assembleDraft);
+router.post('/exams/validate-balance', requireRoles(Role.FACULTY, Role.ADMIN), AIExamController.validateExamBalance);
 
-// AI Faculty & Examination Intelligence routes (Faculty & Admin only)
+// Student Practice & Adaptive Recommendations (Student, Faculty & Admin)
+router.post('/practice/generate-set', AIAssistantController.generatePracticeSet);
+router.get('/practice/recommendations', AIAssistantController.getStudentRecommendations);
+
+// Faculty & Exam Intelligence Overview (Faculty & Admin)
 router.get('/intelligence/overview', requireRoles(Role.FACULTY, Role.ADMIN), FacultyIntelligenceController.getOverview);
-router.get('/intelligence/questions/:id', requireRoles(Role.FACULTY, Role.ADMIN), FacultyIntelligenceController.getQuestionAnalysis);
-router.get('/intelligence/exams/:id', requireRoles(Role.FACULTY, Role.ADMIN), FacultyIntelligenceController.getExamAnalysis);
-router.get('/intelligence/cohort', requireRoles(Role.FACULTY, Role.ADMIN), FacultyIntelligenceController.getCohortAnalysis);
 
-// AI Governance, Cost Control & Operations routes (Admin only)
+// AI Governance Controls, Token Quota & Cost Observability (Admin only)
 router.get('/governance/overview', requireRoles(Role.ADMIN), AIGovernanceController.getOverview);
 router.post('/governance/circuit-breaker', requireRoles(Role.ADMIN), AIGovernanceController.setCircuitBreaker);
-router.get('/governance/evaluation', requireRoles(Role.ADMIN), AIGovernanceController.getEvaluation);
+router.get('/governance/model-evaluation', requireRoles(Role.ADMIN), AIGovernanceController.getEvaluation);
 
-// 2. Phase 2D Conversational Features & RAG QA
-router.post('/ask', AIAssistantController.askQuestion);
-router.post('/conversations/:conversationId/rename', AIAssistantController.renameConversation);
-
-// 3. Phase 2D Question Generation & Review Routes
-router.post('/generate-questions', AIAssistantController.generateQuestions);
-router.post('/save-generated-question', AIAssistantController.saveGeneratedQuestion);
-
-// 4. Phase 2D Practice Mode & Insights Routes
-router.post('/practice', AIAssistantController.generatePracticeSet);
-router.post('/practice/submit', AIAssistantController.submitPracticeSet);
-router.get('/practice/attempts', AIAssistantController.getPracticeAttempts);
-router.get('/performance-insights', AIAssistantController.getPerformanceInsights);
-
-// Secure document management routes
-router.use('/documents', documentRoutes);
+// RAG Knowledge Base Document Management Sub-router (Authenticated Users, RBAC inside sub-router)
+router.use('/documents', ragLimiter, documentRoutes);
 
 export default router;

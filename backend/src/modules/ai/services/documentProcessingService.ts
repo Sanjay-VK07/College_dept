@@ -13,7 +13,7 @@ import { ENV } from '../../../config/env';
 export class DocumentProcessingService {
   /**
    * Processes a document by reading it, extracting raw text, chunking,
-   * calculating embeddings, storing them in PostgreSQL, and transition states.
+   * calculating embeddings, storing them in PostgreSQL, and transitioning states.
    */
   public static async processDocument(documentId: string): Promise<void> {
     const document = await prisma.aIDocument.findUnique({
@@ -115,6 +115,13 @@ export class DocumentProcessingService {
         throw new Error('No readable text content extracted from document.');
       }
 
+      // Hardening: Protect against zip-bombs or massive extracted text
+      const maxExtractedTextLength = ENV.MAX_EXTRACTED_TEXT || 500000;
+      if (extractedText.length > maxExtractedTextLength) {
+        console.warn(`[DocumentProcessingService] Document ${documentId} text length (${extractedText.length}) exceeds limit. Truncating to ${maxExtractedTextLength}.`);
+        extractedText = extractedText.substring(0, maxExtractedTextLength);
+      }
+
       // 4. Split text into chunks
       const chunkSize = ENV.CHUNK_SIZE || 500;
       const chunkOverlap = ENV.CHUNK_OVERLAP || 50;
@@ -136,20 +143,22 @@ export class DocumentProcessingService {
         throw new Error('Text extraction resulted in 0 text chunks.');
       }
 
+      // Hardening: Enforce maximum chunk count limit per document
+      const maxChunks = ENV.MAX_CHUNKS_PER_DOCUMENT || 1000;
+      const finalChunks = chunks.length > maxChunks ? chunks.slice(0, maxChunks) : chunks;
+
       // 5. Generate embeddings and write to database
       const embeddingProvider = EmbeddingFactory.getProvider();
-      
+
       // Clean up any existing chunks for this document first (safety retry check)
       await prisma.aIDocumentChunk.deleteMany({
         where: { documentId },
       });
 
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkText = chunks[i];
-        
-        // Calculate token count estimate (approx. 4 chars per token)
+      for (let i = 0; i < finalChunks.length; i++) {
+        const chunkText = finalChunks[i];
         const tokenCount = Math.ceil(chunkText.length / 4);
-        
+
         // Generate Embedding Vector
         const vector = await embeddingProvider.getEmbedding(chunkText);
 
@@ -186,7 +195,7 @@ export class DocumentProcessingService {
         document.uploadedById
       );
 
-      console.log(`[DocumentProcessingService]: Document ${documentId} processed successfully into ${chunks.length} chunks.`);
+      console.log(`[DocumentProcessingService]: Document ${documentId} processed successfully into ${finalChunks.length} chunks.`);
 
     } catch (error: any) {
       console.error(`[DocumentProcessingService Error]: Fail to process document ${documentId}:`, error);
@@ -209,5 +218,36 @@ export class DocumentProcessingService {
         document.uploadedById
       );
     }
+  }
+
+  /**
+   * Recovers stale document processing jobs stuck in PROCESSING status > 10 minutes.
+   */
+  public static async recoverStaleJobs(): Promise<number> {
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const staleDocs = await prisma.aIDocument.findMany({
+      where: {
+        status: AIDocumentStatus.PROCESSING,
+        updatedAt: { lt: tenMinutesAgo },
+      },
+    });
+
+    for (const doc of staleDocs) {
+      try {
+        await prisma.aIDocument.update({
+          where: { id: doc.id },
+          data: {
+            status: AIDocumentStatus.FAILED,
+            processingError: 'Processing timed out (stale job recovered). You may retry processing.',
+          },
+        });
+      } catch (e) {}
+    }
+
+    if (staleDocs.length > 0) {
+      console.log(`[DocumentProcessingService]: Recovered ${staleDocs.length} stale document processing jobs.`);
+    }
+
+    return staleDocs.length;
   }
 }

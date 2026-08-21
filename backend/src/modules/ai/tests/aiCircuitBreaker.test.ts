@@ -1,21 +1,20 @@
 import { AICircuitBreakerService } from '../services/aiCircuitBreakerService';
 
 describe('AICircuitBreakerService Admin Control Tests', () => {
-  afterEach(() => {
-    // Reset circuit breaker to normal operational state after each test
-    AICircuitBreakerService.setCircuitBreaker(false);
-    AICircuitBreakerService.setRoutingMode('PRIMARY');
+  afterEach(async () => {
+    await AICircuitBreakerService.setCircuitBreaker(false);
+    await AICircuitBreakerService.setRoutingMode('PRIMARY');
   });
 
-  it('should allow AI execution when circuit breaker is closed (NORMAL OPERATIONAL)', () => {
-    AICircuitBreakerService.setCircuitBreaker(false);
+  it('should allow AI execution when circuit breaker is closed (NORMAL OPERATIONAL)', async () => {
+    await AICircuitBreakerService.setCircuitBreaker(false);
     const check = AICircuitBreakerService.checkCircuitBreaker();
 
     expect(check.allowed).toBe(true);
   });
 
-  it('should block AI execution with maintenance message when circuit breaker is opened', () => {
-    AICircuitBreakerService.setCircuitBreaker(true);
+  it('should block AI execution with maintenance message when circuit breaker is opened', async () => {
+    await AICircuitBreakerService.setCircuitBreaker(true);
     const check = AICircuitBreakerService.checkCircuitBreaker();
 
     expect(check.allowed).toBe(false);
