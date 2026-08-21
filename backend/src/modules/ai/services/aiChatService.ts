@@ -1,24 +1,32 @@
-import { Role, AIRequestStatus } from '@prisma/client';
+import { Role, AIRequestStatus, AIRAGDecision, AIRAGTraceStatus } from '@prisma/client';
 import { IntentService } from './intentService';
 import { ContextService } from './contextService';
 import { ConversationService } from './conversationService';
 import { AIProviderService } from './aiProviderService';
+import { RAGService } from './ragService';
+import { RAGObservabilityService } from './ragObservabilityService';
+import { AICircuitBreakerService } from './aiCircuitBreakerService';
+import { AIGovernanceService } from './aiGovernanceService';
 import { buildStudentPrompt } from '../prompts/studentPrompt';
 import { buildFacultyPrompt } from '../prompts/facultyPrompt';
 import { buildAdminPrompt } from '../prompts/adminPrompt';
 import { ChatResponseData } from '../types/ai.types';
+import { performance } from 'perf_hooks';
 
 export class AIChatService {
   /**
-   * Enterprise State-Machine Driven AI Chat Orchestration Flow:
+   * Enterprise State-Machine Driven AI Chat Orchestration Flow with RAG Observability & Provenance:
    * 1. Request validation
    * 2. Scoped Idempotency & Request Lifecycle State Check (PROCESSING / COMPLETED / FAILED)
-   * 3. Atomic processing lock acquisition for retries / new requests
-   * 4. Strict conversation ownership check
-   * 5. Intent classification & authorized context retrieval
-   * 6. AI Provider invocation
-   * 7. Fail-safe provider handling (updates user message status to FAILED on error, no fake messages)
-   * 8. Deterministic assistant message saving linked via parentUserMessageId
+   * 3. Completed Idempotent Replay Check (zero RAG calls, zero duplicate traces)
+   * 4. Atomic processing lock acquisition for retries / new requests
+   * 5. Initialize AIRAGTrace (status = PROCESSING)
+   * 6. Intent classification & RAG decision
+   * 7. Vector Search, RAG Quality Evaluation & Citation Provenance Validation
+   * 8. AI Provider invocation with timing metrics
+   * 9. Fail-safe provider handling (updates user message & trace status to FAILED on error)
+   * 10. Save ASSISTANT response linked deterministically via parentUserMessageId
+   * 11. Finalize AIRAGTrace (status = COMPLETED with totalDurationMs)
    */
   public static async processChatMessage(
     userId: string,
@@ -27,6 +35,8 @@ export class AIChatService {
     conversationId?: string,
     requestId?: string
   ): Promise<ChatResponseData> {
+    const requestStartTime = performance.now();
+
     // 1. Request Validation
     if (!message || message.trim().length === 0) {
       const err: any = new Error('Message content cannot be empty.');
@@ -41,6 +51,26 @@ export class AIChatService {
       throw err;
     }
 
+    // 0. Circuit Breaker Pre-Flight Check
+    const cbCheck = AICircuitBreakerService.checkCircuitBreaker();
+    if (!cbCheck.allowed) {
+      return {
+        success: false,
+        type: 'AI_PROVIDER_UNAVAILABLE',
+        error: cbCheck.message || 'AI service is temporarily unavailable.',
+      };
+    }
+
+    // 0.1 Safety & Governance Check
+    const safetyResult = AIGovernanceService.inspectInputSafety(trimmedMsg);
+    if (!safetyResult.safe) {
+      return {
+        success: false,
+        type: 'PROMPT_INJECTION_DETECTED',
+        error: safetyResult.violationReason || 'Input prompt violates safety policy.',
+      };
+    }
+
     let userMsg: any = null;
     let conversation: any = null;
 
@@ -52,7 +82,8 @@ export class AIChatService {
         conversation = existingUserMsg.conversation;
 
         if (existingUserMsg.status === AIRequestStatus.COMPLETED) {
-          // Return existing ASSISTANT message deterministically linked via parentUserMessageId
+          // Completed Idempotent Replay: Return existing ASSISTANT message
+          // ZERO embedding calls, ZERO vector search, ZERO AI provider calls, ZERO duplicate AIRAGTrace rows
           const assistantMsg =
             existingUserMsg.assistantMessage ||
             (await ConversationService.getLinkedAssistantMessage(existingUserMsg.id));
@@ -108,20 +139,69 @@ export class AIChatService {
       userMsg = await ConversationService.saveUserMessage(conversation.id, trimmedMsg, requestId);
     }
 
-    // 4. Intent Classification
+    // 4. Initialize AIRAGTrace (status = PROCESSING) with dual-path upsert/create logic
+    let trace: any = null;
+    try {
+      trace = await RAGObservabilityService.createInitialTrace({
+        requestId,
+        conversationId: conversation.id,
+        userId,
+        userMessageId: userMsg.id,
+      });
+    } catch (traceErr: any) {
+      console.warn('[AIChatService] Initial trace creation warning:', traceErr.message);
+    }
+
+    const traceId = trace ? trace.id : '';
+
+    // 5. Intent Classification
     const intent = IntentService.classifyIntent(trimmedMsg);
 
-    // 5. Retrieve Recent History (last 10 messages)
-    const recentHistory = await ConversationService.getRecentMessages(conversation.id, 10);
+    // 6. RAG Pipeline Execution (If applicable)
+    let ragResult: any = {
+      ragDecision: AIRAGDecision.SKIPPED_GENERAL_KNOWLEDGE,
+      ragUsed: false,
+      contextText: '',
+      sources: [],
+      embeddingDurationMs: 0,
+      vectorSearchDurationMs: 0,
+      contextAssemblyDurationMs: 0,
+    };
 
-    // 6. Retrieve Verified Context Scoped to User & Intent
+    // Trigger RAG for general knowledge or unknown inquiry if context exists
+    if (
+      intent === 'GENERAL_KNOWLEDGE' ||
+      intent === 'UNKNOWN'
+    ) {
+      try {
+        ragResult = await RAGService.executeRAGPipeline({
+          userMessage: trimmedMsg,
+          userId,
+          role,
+        });
+      } catch (ragPipelineErr: any) {
+        console.error('[AIChatService] RAG Pipeline error:', ragPipelineErr.message);
+        ragResult.ragDecision = AIRAGDecision.FAILED;
+        ragResult.errorCode = 'AI_RAG_UNAVAILABLE';
+      }
+    }
+
+    // 7. Retrieve DB Verified Context Scoped to User & Intent
     const verifiedContext = await ContextService.getAuthorizedContext({
       userId,
       role,
       intent,
     });
 
-    // 7. Build Secure Role Prompt
+    // Merge RAG context text if available
+    if (ragResult.ragUsed && ragResult.contextText) {
+      (verifiedContext as any).documentContext = ragResult.contextText;
+    }
+
+    // 8. Retrieve Recent History (last 10 messages)
+    const recentHistory = await ConversationService.getRecentMessages(conversation.id, 10);
+
+    // 9. Build Secure Role Prompt
     let systemPrompt = '';
     if (role === Role.STUDENT) {
       systemPrompt = buildStudentPrompt(verifiedContext);
@@ -133,12 +213,26 @@ export class AIChatService {
       systemPrompt = buildStudentPrompt(verifiedContext);
     }
 
-    // 8. Call AI Provider
+    // 10. Invoke AI Provider with timing measurement
+    const providerStartTime = performance.now();
     let providerResult;
     try {
       providerResult = await AIProviderService.generateResponse(systemPrompt, recentHistory, trimmedMsg);
     } catch (err: any) {
+      const providerDurationMs = Math.round(performance.now() - providerStartTime);
+      const totalDurationMs = Math.round(performance.now() - requestStartTime);
+
       await ConversationService.markUserMessageFailed(userMsg.id);
+      if (traceId) {
+        await RAGObservabilityService.markTraceFailed(
+          traceId,
+          requestId,
+          'AI_PROVIDER_UNAVAILABLE',
+          'Provider call threw exception',
+          totalDurationMs
+        );
+      }
+
       return {
         success: false,
         type: 'AI_PROVIDER_UNAVAILABLE',
@@ -147,9 +241,23 @@ export class AIChatService {
       };
     }
 
-    // 9. Provider Failure Handling (Update status to FAILED, NO fake messages saved)
+    const providerDurationMs = Math.round(performance.now() - providerStartTime);
+
+    // 11. Provider Failure Handling (Update status to FAILED, NO fake messages saved)
     if (!providerResult.success || !providerResult.content) {
+      const totalDurationMs = Math.round(performance.now() - requestStartTime);
+
       await ConversationService.markUserMessageFailed(userMsg.id);
+      if (traceId) {
+        await RAGObservabilityService.markTraceFailed(
+          traceId,
+          requestId,
+          'AI_PROVIDER_UNAVAILABLE',
+          providerResult.message || 'AI Provider returned unsuccessful response',
+          totalDurationMs
+        );
+      }
+
       return {
         success: false,
         type: 'AI_PROVIDER_UNAVAILABLE',
@@ -158,12 +266,43 @@ export class AIChatService {
       };
     }
 
-    // 10. Save ASSISTANT Response linked deterministically to USER message
+    // 12. Save ASSISTANT Response linked deterministically to USER message
     const assistantMsg = await ConversationService.saveAssistantMessage(
       conversation.id,
       userMsg.id,
       providerResult.content
     );
+
+    // 13. Finalize AIRAGTrace (status = COMPLETED with totalDurationMs)
+    const totalDurationMs = Math.round(performance.now() - requestStartTime);
+
+    if (traceId) {
+      const finalStatus =
+        ragResult.ragDecision === AIRAGDecision.FAILED
+          ? AIRAGTraceStatus.FAILED
+          : ragResult.ragDecision === AIRAGDecision.RETRIEVAL_NO_RELEVANT
+          ? AIRAGTraceStatus.NO_RELEVANT_CONTEXT
+          : AIRAGTraceStatus.COMPLETED;
+
+      await RAGObservabilityService.updateTrace(traceId, requestId, {
+        ragDecision: ragResult.ragDecision,
+        ragUsed: ragResult.ragUsed,
+        status: finalStatus,
+        embeddingDurationMs: ragResult.embeddingDurationMs || 0,
+        vectorSearchDurationMs: ragResult.vectorSearchDurationMs || 0,
+        contextAssemblyDurationMs: ragResult.contextAssemblyDurationMs || 0,
+        providerDurationMs,
+        totalDurationMs,
+        authorizedChunksFound: ragResult.evaluation?.authorizedChunksFound || 0,
+        relevantChunksUsed: ragResult.evaluation?.relevantChunksUsed || 0,
+        sourceDocumentCount: ragResult.sources ? ragResult.sources.length : 0,
+        qualityScore: ragResult.evaluation?.qualityScore || null,
+        qualityClassification: ragResult.evaluation?.qualityClassification || null,
+        fallbackReason: ragResult.fallbackReason || null,
+        errorCode: ragResult.errorCode || null,
+        assistantMessageId: assistantMsg.id,
+      });
+    }
 
     return {
       success: true,
@@ -176,7 +315,7 @@ export class AIChatService {
         content: assistantMsg.content,
         createdAt: assistantMsg.createdAt,
       },
-    };
+      sources: ragResult.ragUsed ? ragResult.sources : undefined,
+    } as any;
   }
 }
-

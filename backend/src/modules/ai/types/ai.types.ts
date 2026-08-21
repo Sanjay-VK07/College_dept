@@ -13,7 +13,7 @@ export interface ChatRequestDTO {
 
 export interface ChatResponseData {
   success: boolean;
-  type?: 'SUCCESS' | 'AI_PROVIDER_UNAVAILABLE' | 'AI_REQUEST_IN_PROGRESS';
+  type?: 'SUCCESS' | 'AI_PROVIDER_UNAVAILABLE' | 'AI_REQUEST_IN_PROGRESS' | 'PROMPT_INJECTION_DETECTED';
   conversationId?: string;
   title?: string;
   message?: {

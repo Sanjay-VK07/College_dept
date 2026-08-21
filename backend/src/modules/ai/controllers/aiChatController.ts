@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../../../middlewares/authMiddleware';
 import { AIChatService } from '../services/aiChatService';
 import { ConversationService } from '../services/conversationService';
+import { FeedbackService } from '../services/feedbackService';
 
 export class AIChatController {
   /**
@@ -97,6 +98,66 @@ export class AIChatController {
       return res.status(error.status || 500).json({
         success: false,
         message: error.message || 'Failed to delete conversation',
+      });
+    }
+  }
+
+  /**
+   * POST /api/ai/messages/:messageId/feedback
+   * Submits or updates feedback for an assistant message
+   */
+  public static async postMessageFeedback(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { messageId } = req.params;
+      const { rating, category, comment } = req.body;
+
+      if (!rating || !['HELPFUL', 'NOT_HELPFUL'].includes(rating)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid feedback rating. Must be HELPFUL or NOT_HELPFUL.',
+        });
+      }
+
+      const feedback = await FeedbackService.submitFeedback({
+        messageId,
+        userId,
+        rating,
+        category,
+        comment,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: feedback,
+      });
+    } catch (error: any) {
+      return res.status(error.status || 500).json({
+        success: false,
+        message: error.message || 'Failed to submit feedback',
+      });
+    }
+  }
+
+  /**
+   * GET /api/ai/messages/:messageId/feedback
+   * Retrieves active feedback for an assistant message
+   */
+  public static async getMessageFeedback(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { messageId } = req.params;
+
+      const feedback = await FeedbackService.getFeedbackForMessage(messageId, userId);
+
+      return res.status(200).json({
+        success: true,
+        data: feedback,
+      });
+    } catch (error: any) {
+      return res.status(error.status || 500).json({
+        success: false,
+        message: error.message || 'Failed to retrieve feedback',
       });
     }
   }

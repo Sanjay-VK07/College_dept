@@ -1,8 +1,8 @@
 'use client';
 
-import React from 'react';
-import { Bot, User } from 'lucide-react';
-import { AIMessage } from '@/services/aiService';
+import React, { useState, useEffect } from 'react';
+import { Bot, User, ThumbsUp, ThumbsDown, Check } from 'lucide-react';
+import { AIMessage, aiService } from '@/services/aiService';
 
 interface AIChatMessageProps {
   message: AIMessage;
@@ -10,6 +10,69 @@ interface AIChatMessageProps {
 
 export const AIChatMessage: React.FC<AIChatMessageProps> = ({ message }) => {
   const isUser = message.role === 'USER';
+
+  const [rating, setRating] = useState<'HELPFUL' | 'NOT_HELPFUL' | null>(null);
+  const [showCategoryMenu, setShowCategoryMenu] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<
+    'INCORRECT' | 'NOT_RELEVANT' | 'INSUFFICIENT_CONTEXT' | 'GOOD_ANSWER' | 'OTHER' | undefined
+  >(undefined);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!isUser && message.id) {
+      aiService
+        .getFeedback(message.id)
+        .then((res) => {
+          if (res?.data) {
+            setRating(res.data.rating);
+            setSelectedCategory(res.data.category);
+            setFeedbackSubmitted(true);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [message.id, isUser]);
+
+  const handleRatingClick = async (newRating: 'HELPFUL' | 'NOT_HELPFUL') => {
+    if (submitting) return;
+    setRating(newRating);
+    setShowCategoryMenu(true);
+
+    try {
+      setSubmitting(true);
+      await aiService.submitFeedback(message.id, {
+        rating: newRating,
+        category: newRating === 'HELPFUL' ? 'GOOD_ANSWER' : 'NOT_RELEVANT',
+      });
+      setFeedbackSubmitted(true);
+    } catch (err) {
+      console.error('Failed to submit feedback:', err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCategorySelect = async (
+    category: 'INCORRECT' | 'NOT_RELEVANT' | 'INSUFFICIENT_CONTEXT' | 'GOOD_ANSWER' | 'OTHER'
+  ) => {
+    if (!rating || submitting) return;
+    setSelectedCategory(category);
+    setShowCategoryMenu(false);
+
+    try {
+      setSubmitting(true);
+      await aiService.submitFeedback(message.id, {
+        rating,
+        category,
+      });
+      setFeedbackSubmitted(true);
+    } catch (err) {
+      console.error('Failed to update feedback category:', err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   // Basic renderer for bullet lists, bold text, and lines
   const renderFormattedContent = (content: string) => {
@@ -49,23 +112,128 @@ export const AIChatMessage: React.FC<AIChatMessageProps> = ({ message }) => {
         </div>
 
         {/* Message Content Bubble */}
-        <div
-          className={`p-3 rounded-xl text-xs sm:text-sm shadow-sm ${
-            isUser
-              ? 'bg-[#1E40AF] text-white rounded-tr-none'
-              : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'
-          }`}
-        >
-          {renderFormattedContent(message.content)}
+        <div className="flex flex-col">
           <div
-            className={`text-[10px] mt-1 text-right ${
-              isUser ? 'text-blue-200' : 'text-slate-400'
+            className={`p-3 rounded-xl text-xs sm:text-sm shadow-sm ${
+              isUser
+                ? 'bg-[#1E40AF] text-white rounded-tr-none'
+                : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'
             }`}
           >
-            {message.createdAt
-              ? new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : ''}
+            {renderFormattedContent(message.content)}
+
+            {/* Source Citations UI */}
+            {message.sources && message.sources.length > 0 && (
+              <div className="mt-2.5 pt-2 border-t border-slate-100 text-[11px]">
+                <span className="font-medium text-slate-500 block mb-1">Sources Cited:</span>
+                <div className="flex flex-wrap gap-1">
+                  {message.sources.map((src, i) => (
+                    <span
+                      key={i}
+                      className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-100 font-mono text-[10px]"
+                    >
+                      📄 {src.title}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div
+              className={`text-[10px] mt-1 text-right ${
+                isUser ? 'text-blue-200' : 'text-slate-400'
+              }`}
+            >
+              {message.createdAt
+                ? new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : ''}
+            </div>
           </div>
+
+          {/* Feedback UI Controls for Assistant Messages */}
+          {!isUser && (
+            <div className="flex items-center space-x-2 mt-1 ml-1 text-slate-400">
+              <button
+                type="button"
+                onClick={() => handleRatingClick('HELPFUL')}
+                title="Helpful"
+                className={`p-1 rounded hover:bg-slate-100 transition-colors ${
+                  rating === 'HELPFUL' ? 'text-green-600 font-bold bg-green-50' : 'hover:text-slate-600'
+                }`}
+              >
+                <ThumbsUp className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleRatingClick('NOT_HELPFUL')}
+                title="Not Helpful"
+                className={`p-1 rounded hover:bg-slate-100 transition-colors ${
+                  rating === 'NOT_HELPFUL' ? 'text-red-600 font-bold bg-red-50' : 'hover:text-slate-600'
+                }`}
+              >
+                <ThumbsDown className="w-3.5 h-3.5" />
+              </button>
+
+              {feedbackSubmitted && (
+                <span className="text-[10px] text-green-600 flex items-center space-x-0.5">
+                  <Check className="w-3 h-3" />
+                  <span>Feedback saved</span>
+                </span>
+              )}
+
+              {/* Reason Category Quick Picker */}
+              {showCategoryMenu && (
+                <div className="flex flex-wrap gap-1 mt-1 text-[10px]">
+                  {rating === 'HELPFUL' ? (
+                    <button
+                      onClick={() => handleCategorySelect('GOOD_ANSWER')}
+                      className={`px-1.5 py-0.5 rounded border ${
+                        selectedCategory === 'GOOD_ANSWER'
+                          ? 'bg-blue-100 text-blue-800 border-blue-300'
+                          : 'bg-white text-slate-600 border-slate-200'
+                      }`}
+                    >
+                      Good Answer
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => handleCategorySelect('INCORRECT')}
+                        className={`px-1.5 py-0.5 rounded border ${
+                          selectedCategory === 'INCORRECT'
+                            ? 'bg-red-100 text-red-800 border-red-300'
+                            : 'bg-white text-slate-600 border-slate-200'
+                        }`}
+                      >
+                        Incorrect
+                      </button>
+                      <button
+                        onClick={() => handleCategorySelect('NOT_RELEVANT')}
+                        className={`px-1.5 py-0.5 rounded border ${
+                          selectedCategory === 'NOT_RELEVANT'
+                            ? 'bg-red-100 text-red-800 border-red-300'
+                            : 'bg-white text-slate-600 border-slate-200'
+                        }`}
+                      >
+                        Not Relevant
+                      </button>
+                      <button
+                        onClick={() => handleCategorySelect('INSUFFICIENT_CONTEXT')}
+                        className={`px-1.5 py-0.5 rounded border ${
+                          selectedCategory === 'INSUFFICIENT_CONTEXT'
+                            ? 'bg-red-100 text-red-800 border-red-300'
+                            : 'bg-white text-slate-600 border-slate-200'
+                        }`}
+                      >
+                        Needs Context
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -15,5 +15,36 @@ export const ENV = {
   EMBEDDING_MODEL: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
   EMBEDDING_API_KEY: process.env.EMBEDDING_API_KEY || '',
   EMBEDDING_DIMENSION: parseInt(process.env.EMBEDDING_DIMENSION || '384', 10),
+  RAG_HIGH_CONFIDENCE_THRESHOLD: parseFloat(process.env.RAG_HIGH_CONFIDENCE_THRESHOLD || '0.75'),
+  RAG_MEDIUM_CONFIDENCE_THRESHOLD: parseFloat(process.env.RAG_MEDIUM_CONFIDENCE_THRESHOLD || '0.50'),
+  RAG_MIN_SIMILARITY: parseFloat(process.env.RAG_MIN_SIMILARITY || '0.35'),
+  RAG_MIN_RELEVANT_CHUNKS: parseInt(process.env.RAG_MIN_RELEVANT_CHUNKS || '1', 10),
 };
+
+export function validateRAGThresholds() {
+  const {
+    RAG_HIGH_CONFIDENCE_THRESHOLD: high,
+    RAG_MEDIUM_CONFIDENCE_THRESHOLD: med,
+    RAG_MIN_SIMILARITY: minSim,
+    RAG_MIN_RELEVANT_CHUNKS: minChunks,
+  } = ENV;
+
+  if (isNaN(high) || isNaN(med) || isNaN(minSim) || isNaN(minChunks)) {
+    throw new Error('Invalid RAG configuration: threshold values must be valid numbers.');
+  }
+
+  if (minSim < 0 || minSim > med || med > high || high > 1) {
+    throw new Error(
+      `Invalid RAG Threshold Configuration: Must satisfy 0 <= RAG_MIN_SIMILARITY (${minSim}) <= RAG_MEDIUM_CONFIDENCE_THRESHOLD (${med}) <= RAG_HIGH_CONFIDENCE_THRESHOLD (${high}) <= 1`
+    );
+  }
+
+  if (minChunks < 1) {
+    throw new Error(`Invalid RAG Configuration: RAG_MIN_RELEVANT_CHUNKS must be >= 1, received ${minChunks}`);
+  }
+}
+
+// Validate configuration on application module load
+validateRAGThresholds();
+
 

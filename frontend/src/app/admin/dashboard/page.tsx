@@ -34,6 +34,8 @@ import {
   Bell,
   CheckSquare,
   Zap,
+  Cpu,
+  Sparkles,
   Calendar,
   Layers,
   ArrowUpDown,
@@ -55,6 +57,7 @@ import {
   PieChart as PieChartIcon,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { aiService } from '@/services/aiService';
 import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
 import {
   ResponsiveContainer,
@@ -82,6 +85,8 @@ export default function AdminDashboard() {
     | 'ANALYTICS'
     | 'REPORTS'
     | 'HEALTH'
+    | 'INTELLIGENCE'
+    | 'GOVERNANCE'
     | 'LOGS'
     | 'SETTINGS'
   >('OVERVIEW');
@@ -91,6 +96,12 @@ export default function AdminDashboard() {
   const [errorState, setErrorState] = useState('');
   const [toastMsg, setToastMsg] = useState('');
   const [searchGlobal, setSearchGlobal] = useState('');
+
+  // RAG Observability & Monitoring States
+  const [ragHealth, setRagHealth] = useState<any>(null);
+  const [ragMetrics, setRagMetrics] = useState<any>(null);
+  const [ragTraces, setRagTraces] = useState<any>(null);
+  const [loadingRag, setLoadingRag] = useState(false);
 
   // Table State: Student Roster
   const [students, setStudents] = useState<any[]>([]);
@@ -119,6 +130,29 @@ export default function AdminDashboard() {
   // Question Bank & Exams
   const [questions, setQuestions] = useState<any[]>([]);
   const [exams, setExams] = useState<any[]>([]);
+
+  // AI Question Generation States
+  const [aiGenType, setAiGenType] = useState<string>('MCQ');
+  const [aiGenDifficulty, setAiGenDifficulty] = useState<string>('MEDIUM');
+  const [aiGenCount, setAiGenCount] = useState<number>(1);
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState<boolean>(false);
+  const [genMessage, setGenMessage] = useState<string>('');
+  const [pendingAiQuestions, setPendingAiQuestions] = useState<any[]>([]);
+
+  // AI Solution & Exam Assembly States
+  const [pendingSolutions, setPendingSolutions] = useState<any[]>([]);
+  const [isGeneratingSolutionId, setIsGeneratingSolutionId] = useState<string | null>(null);
+  const [isAssemblingExam, setIsAssemblingExam] = useState<boolean>(false);
+  const [examAssembleTitle, setExamAssembleTitle] = useState<string>('');
+  const [examAssembleCount, setExamAssembleCount] = useState<number>(10);
+
+  // Faculty & Examination Intelligence States
+  const [facultyIntelligence, setFacultyIntelligence] = useState<any | null>(null);
+  const [loadingIntelligence, setLoadingIntelligence] = useState<boolean>(false);
+
+  // AI Governance & Operations States
+  const [governanceData, setGovernanceData] = useState<any | null>(null);
+  const [loadingGovernance, setLoadingGovernance] = useState<boolean>(false);
 
   // Examination Management Enhanced State
   const [examViewMode, setExamViewMode] = useState<'TABLE' | 'GRID'>('TABLE');
@@ -195,6 +229,209 @@ export default function AdminDashboard() {
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(''), 4000);
+  };
+
+  const loadRagTelemetry = async () => {
+    setLoadingRag(true);
+    try {
+      const [healthRes, metricsRes, tracesRes] = await Promise.all([
+        aiService.getRagHealth(),
+        aiService.getRagMetrics('24h'),
+        aiService.getRagTraces({ page: 1, limit: 10 }),
+      ]);
+      if (healthRes?.success) setRagHealth(healthRes);
+      if (metricsRes?.success) setRagMetrics(metricsRes.metrics);
+      if (tracesRes?.success) setRagTraces(tracesRes);
+    } catch (err) {
+      console.error('Failed to load RAG telemetry:', err);
+    } finally {
+      setLoadingRag(false);
+    }
+  };
+
+  const loadPendingAiQuestions = async () => {
+    try {
+      const res = await aiService.getPendingQuestions({ status: 'PENDING_REVIEW' });
+      if (res?.success) setPendingAiQuestions(res.data || []);
+    } catch (err) {
+      console.error('Failed to load pending AI questions:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'HEALTH') {
+      loadRagTelemetry();
+    } else if (activeTab === 'QUESTIONS') {
+      loadPendingAiQuestions();
+      loadPendingSolutions();
+    } else if (activeTab === 'INTELLIGENCE') {
+      loadFacultyIntelligence();
+    } else if (activeTab === 'GOVERNANCE') {
+      loadGovernanceOverview();
+    }
+  }, [activeTab]);
+
+  const handleGenerateAiQuestions = async () => {
+    setIsGeneratingQuestions(true);
+    setGenMessage('');
+    try {
+      const res = await aiService.generateQuestions({
+        questionType: aiGenType,
+        difficulty: aiGenDifficulty,
+        count: aiGenCount,
+        generationRequestId: `req_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      });
+      if (res?.success) {
+        showToast(res.message || 'AI Question Generation completed!');
+        loadPendingAiQuestions();
+      } else {
+        setGenMessage(res.message || 'Failed to generate questions.');
+      }
+    } catch (err: any) {
+      setGenMessage(err.response?.data?.message || err.message || 'Generation failed.');
+    } finally {
+      setIsGeneratingQuestions(false);
+    }
+  };
+
+  const handleApproveAiQuestion = async (id: string) => {
+    try {
+      const res = await aiService.approveQuestion(id);
+      if (res?.success) {
+        showToast('Question approved and published to Question Bank!');
+        loadPendingAiQuestions();
+        fetchInitialData(true);
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Approve failed.');
+    }
+  };
+
+  const handleRejectAiQuestion = async (id: string) => {
+    try {
+      const res = await aiService.rejectQuestion(id);
+      if (res?.success) {
+        showToast('Question rejected.');
+        loadPendingAiQuestions();
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Reject failed.');
+    }
+  };
+
+  const loadPendingSolutions = async () => {
+    try {
+      const res = await aiService.getPendingSolutions();
+      if (res?.success) setPendingSolutions(res.data || []);
+    } catch (err) {
+      console.error('Failed to load pending solutions:', err);
+    }
+  };
+
+  const handleGenerateSolution = async (questionId: string) => {
+    setIsGeneratingSolutionId(questionId);
+    try {
+      const res = await aiService.generateSolution({
+        questionId,
+        generationRequestId: `sol_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      });
+      if (res?.success) {
+        showToast(res.message || 'Solution generated!');
+        loadPendingSolutions();
+      } else {
+        showToast(res.message || 'Solution generation failed.');
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || err.message || 'Solution generation error.');
+    } finally {
+      setIsGeneratingSolutionId(null);
+    }
+  };
+
+  const handleApproveSolution = async (id: string) => {
+    try {
+      const res = await aiService.approveSolution(id);
+      if (res?.success) {
+        showToast('Solution approved and official Question Bank updated!');
+        loadPendingSolutions();
+        fetchInitialData(true);
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Approve solution failed.');
+    }
+  };
+
+  const handleRejectSolution = async (id: string) => {
+    try {
+      const res = await aiService.rejectSolution(id);
+      if (res?.success) {
+        showToast('Solution rejected.');
+        loadPendingSolutions();
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Reject solution failed.');
+    }
+  };
+
+  const handleAssembleExam = async () => {
+    setIsAssemblingExam(true);
+    try {
+      const res = await aiService.assembleExam({
+        examGenerationRequestId: `exam_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        title: examAssembleTitle || 'AI Assembled GATE Practice Test',
+        questionCount: examAssembleCount,
+        difficultyDistribution: { EASY: 30, MEDIUM: 50, HARD: 20 },
+      });
+      if (res?.success) {
+        showToast(`Intelligent Exam assembled with ${res.selectedQuestionCount} questions as DRAFT!`);
+        fetchInitialData(true);
+      } else {
+        showToast(res.message || 'Exam assembly failed.');
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || err.message || 'Exam assembly failed.');
+    } finally {
+      setIsAssemblingExam(false);
+    }
+  };
+
+  const loadFacultyIntelligence = async () => {
+    setLoadingIntelligence(true);
+    try {
+      const res = await aiService.getFacultyIntelligenceOverview();
+      if (res?.success) setFacultyIntelligence(res.data);
+    } catch (err) {
+      console.error('Failed to load faculty intelligence overview:', err);
+    } finally {
+      setLoadingIntelligence(false);
+    }
+  };
+
+  const loadGovernanceOverview = async () => {
+    setLoadingGovernance(true);
+    try {
+      const res = await aiService.getGovernanceOverview();
+      if (res?.success) setGovernanceData(res.data);
+    } catch (err) {
+      console.error('Failed to load AI governance overview:', err);
+    } finally {
+      setLoadingGovernance(false);
+    }
+  };
+
+  const toggleCircuitBreaker = async () => {
+    if (!governanceData) return;
+    const currentState = governanceData.circuitBreakerState?.circuitBreakerOpen;
+    const targetState = !currentState;
+    try {
+      const res = await aiService.setCircuitBreaker(targetState);
+      if (res?.success) {
+        showToast(res.message || 'Circuit breaker state updated');
+        loadGovernanceOverview();
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Failed to toggle circuit breaker');
+    }
   };
 
   // Notifications State & Handlers
@@ -801,6 +1038,8 @@ export default function AdminDashboard() {
             { id: 'DEPARTMENTS', label: 'Departments', icon: Layers, badge: realMetrics.departments },
             { id: 'RESULTS', label: 'Results', icon: Award },
             { id: 'ANALYTICS', label: 'Analytics', icon: TrendingUp },
+            { id: 'INTELLIGENCE', label: 'Faculty Intelligence', icon: Cpu },
+            { id: 'GOVERNANCE', label: 'AI Governance & Cost', icon: ShieldCheck },
             { id: 'REPORTS', label: 'Reports', icon: FileText },
             { id: 'HEALTH', label: 'System Health', icon: ShieldCheck },
             { id: 'LOGS', label: 'Audit Logs', icon: Activity },
@@ -1106,6 +1345,59 @@ export default function AdminDashboard() {
                           <LayoutGrid className="w-3.5 h-3.5" />
                           <span>Grid</span>
                         </button>
+                      </div>
+                    </div>
+
+                    {/* AI Intelligent Exam Assembly Studio */}
+                    <div className="erp-card space-y-3 bg-gradient-to-r from-indigo-50/60 to-blue-50/40 border border-indigo-200">
+                      <div className="flex justify-between items-center border-b border-indigo-200/60 pb-2">
+                        <div className="flex items-center space-x-2">
+                          <Cpu className="w-4 h-4 text-indigo-600" />
+                          <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                            AI Intelligent GATE Exam Assembly Studio
+                          </h4>
+                        </div>
+                        <span className="text-[11px] font-mono text-indigo-700 font-semibold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                          Constraint-Validated (Only Approved Question Bank)
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 text-xs">
+                        <div className="flex-1 min-w-[200px]">
+                          <label className="block text-[10px] font-semibold text-slate-500 uppercase mb-1">Exam Title</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. GATE CS Full Mock Test - 2026"
+                            value={examAssembleTitle}
+                            onChange={(e) => setExamAssembleTitle(e.target.value)}
+                            className="erp-input text-xs py-1.5"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-semibold text-slate-500 uppercase mb-1">Question Count</label>
+                          <select
+                            value={examAssembleCount}
+                            onChange={(e) => setExamAssembleCount(Number(e.target.value))}
+                            className="erp-select text-xs py-1.5 min-w-[80px]"
+                          >
+                            <option value={5}>5 Questions</option>
+                            <option value={10}>10 Questions</option>
+                            <option value={15}>15 Questions</option>
+                            <option value={20}>20 Questions</option>
+                          </select>
+                        </div>
+
+                        <div className="pt-4">
+                          <button
+                            disabled={isAssemblingExam}
+                            onClick={handleAssembleExam}
+                            className="erp-btn-primary py-1.5 px-4 text-xs bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50"
+                          >
+                            <Sparkles className={`w-3.5 h-3.5 mr-1 ${isAssemblingExam ? 'animate-spin' : ''}`} />
+                            <span>{isAssemblingExam ? 'Assembling Draft...' : 'Assemble AI Exam Draft'}</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -1458,6 +1750,226 @@ export default function AdminDashboard() {
           {/* TAB 3: QUESTION BANK */}
           {activeTab === 'QUESTIONS' && (
             <div className="space-y-4">
+              {/* AI GATE Question Generator Studio Panel */}
+              <div className="erp-card space-y-3 bg-gradient-to-r from-blue-50/50 to-indigo-50/30 border border-blue-200">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-blue-200/60 pb-2.5">
+                  <div className="flex items-center space-x-2">
+                    <Zap className="w-4 h-4 text-blue-600" />
+                    <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                      AI GATE Question Generator Studio (RAG-Grounded)
+                    </h3>
+                  </div>
+                  <span className="text-[11px] font-mono text-slate-500">
+                    Source: Authorized RAG Knowledge Base Only
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-500 uppercase mb-1">Type</label>
+                    <select
+                      value={aiGenType}
+                      onChange={(e) => setAiGenType(e.target.value)}
+                      className="erp-select text-xs py-1.5 min-w-[90px]"
+                    >
+                      <option value="MCQ">MCQ</option>
+                      <option value="MSQ">MSQ</option>
+                      <option value="NAT">NAT</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-500 uppercase mb-1">Difficulty</label>
+                    <select
+                      value={aiGenDifficulty}
+                      onChange={(e) => setAiGenDifficulty(e.target.value)}
+                      className="erp-select text-xs py-1.5 min-w-[100px]"
+                    >
+                      <option value="EASY">EASY</option>
+                      <option value="MEDIUM">MEDIUM</option>
+                      <option value="HARD">HARD</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-500 uppercase mb-1">Count</label>
+                    <select
+                      value={aiGenCount}
+                      onChange={(e) => setAiGenCount(Number(e.target.value))}
+                      className="erp-select text-xs py-1.5 min-w-[70px]"
+                    >
+                      <option value={1}>1</option>
+                      <option value={2}>2</option>
+                      <option value={3}>3</option>
+                      <option value={5}>5</option>
+                    </select>
+                  </div>
+
+                  <div className="pt-4">
+                    <button
+                      disabled={isGeneratingQuestions}
+                      onClick={handleGenerateAiQuestions}
+                      className="erp-btn-primary py-1.5 px-4 text-xs disabled:opacity-50"
+                    >
+                      <Zap className={`w-3.5 h-3.5 mr-1 ${isGeneratingQuestions ? 'animate-spin' : ''}`} />
+                      <span>{isGeneratingQuestions ? 'Generating via RAG...' : 'Generate AI Question'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {genMessage && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800 flex items-center space-x-2">
+                    <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                    <span>{genMessage}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Pending Faculty Review Queue */}
+              {pendingAiQuestions.length > 0 && (
+                <div className="erp-card space-y-3 border-l-4 border-l-amber-500">
+                  <div className="flex justify-between items-center">
+                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center">
+                      <Clock className="w-4 h-4 mr-1.5 text-amber-600" />
+                      Pending Faculty Review Queue ({pendingAiQuestions.length} Items)
+                    </h4>
+                    <span className="text-[11px] font-mono text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                      Requires Faculty Approval
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {pendingAiQuestions.map((aiQ) => (
+                      <div key={aiQ.id} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-2 text-xs">
+                        <div className="flex justify-between items-start">
+                          <div className="flex items-center space-x-2">
+                            <span className="erp-badge-gray font-mono font-bold">{aiQ.type}</span>
+                            <span className="erp-badge-gray font-mono">{aiQ.difficulty}</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                              aiQ.similarityStatus === 'UNIQUE'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : aiQ.similarityStatus === 'SIMILAR'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}>
+                              {aiQ.similarityStatus}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              onClick={() => handleApproveAiQuestion(aiQ.id)}
+                              className="erp-btn-primary py-1 px-3 text-[11px] bg-emerald-700 hover:bg-emerald-800"
+                            >
+                              Approve & Publish
+                            </button>
+                            <button
+                              onClick={() => handleRejectAiQuestion(aiQ.id)}
+                              className="erp-btn-danger py-1 px-2.5 text-[11px]"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+
+                        <p className="font-semibold text-slate-900 leading-relaxed">{aiQ.stem}</p>
+
+                        {aiQ.options && Array.isArray(aiQ.options) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 text-[11px] font-mono">
+                            {aiQ.options.map((opt: any, idx: number) => {
+                              const isCorrect = Array.isArray(aiQ.correctAnswer) && aiQ.correctAnswer.includes(idx);
+                              return (
+                                <div
+                                  key={idx}
+                                  className={`p-1.5 rounded border ${
+                                    isCorrect ? 'bg-emerald-50 border-emerald-300 font-bold text-emerald-900' : 'bg-white border-slate-200 text-slate-700'
+                                  }`}
+                                >
+                                  {String.fromCharCode(65 + idx)}. {typeof opt === 'string' ? opt : opt.text}
+                                  {isCorrect && ' ✓'}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {aiQ.explanation && (
+                          <div className="p-2 bg-blue-50/50 border border-blue-200/60 rounded text-[11px] text-slate-700">
+                            <span className="font-bold text-[#1E40AF]">Explanation: </span>
+                            {aiQ.explanation}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Pending Solutions Review Queue */}
+              {pendingSolutions.length > 0 && (
+                <div className="erp-card space-y-3 border-l-4 border-l-blue-600">
+                  <div className="flex justify-between items-center">
+                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center">
+                      <FileCheck className="w-4 h-4 mr-1.5 text-blue-600" />
+                      Pending AI Solution Verification Queue ({pendingSolutions.length} Items)
+                    </h4>
+                    <span className="text-[11px] font-mono text-blue-700 font-semibold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                      Requires Faculty Solution Approval
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {pendingSolutions.map((sol) => (
+                      <div key={sol.id} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-2 text-xs">
+                        <div className="flex justify-between items-start">
+                          <div className="flex items-center space-x-2">
+                            <span className="erp-badge-blue font-mono font-bold">Solution Review</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                              sol.verificationStatus === 'PASS'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : sol.verificationStatus === 'REQUIRES_REVIEW'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}>
+                              Verification: {sol.verificationStatus}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              onClick={() => handleApproveSolution(sol.id)}
+                              className="erp-btn-primary py-1 px-3 text-[11px] bg-emerald-700 hover:bg-emerald-800"
+                            >
+                              Approve & Update Question Bank
+                            </button>
+                            <button
+                              onClick={() => handleRejectSolution(sol.id)}
+                              className="erp-btn-danger py-1 px-2.5 text-[11px]"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+
+                        {sol.question && (
+                          <p className="font-semibold text-slate-900 leading-relaxed">
+                            Question: {sol.question.text}
+                          </p>
+                        )}
+
+                        <div className="p-2 bg-white border border-slate-200 rounded text-[11px]">
+                          <span className="font-bold text-slate-700">Draft Answer: </span>
+                          <span className="font-mono">{JSON.stringify(sol.draftAnswer)}</span>
+                        </div>
+
+                        <div className="p-2 bg-blue-50/50 border border-blue-200/60 rounded text-[11px] text-slate-700">
+                          <span className="font-bold text-[#1E40AF]">Draft Explanation: </span>
+                          {sol.draftExplanation}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                 <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Central Question Bank ({questions.length} Items)</h3>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1506,9 +2018,20 @@ export default function AdminDashboard() {
                           <td><span className="erp-badge-gray">{q.difficulty}</span></td>
                           <td className="font-bold font-mono text-emerald-700">+{q.marks}</td>
                           <td>
-                            <button onClick={() => handleDeleteQuestion(q.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete Question">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            <div className="flex items-center space-x-1">
+                              <button
+                                disabled={isGeneratingSolutionId === q.id}
+                                onClick={() => handleGenerateSolution(q.id)}
+                                className="erp-btn-secondary py-1 px-2 text-[10px] text-blue-700 disabled:opacity-50"
+                                title="Generate AI Solution via RAG"
+                              >
+                                <Sparkles className={`w-3 h-3 mr-1 ${isGeneratingSolutionId === q.id ? 'animate-spin' : ''}`} />
+                                <span>{isGeneratingSolutionId === q.id ? 'Generating...' : 'AI Solution'}</span>
+                              </button>
+                              <button onClick={() => handleDeleteQuestion(q.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete Question">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -1828,22 +2351,430 @@ export default function AdminDashboard() {
 
           {/* TAB 10: HEALTH */}
           {activeTab === 'HEALTH' && (
-            <div className="erp-card space-y-4">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center">
-                <ShieldCheck className="w-4 h-4 mr-1.5 text-emerald-700" />
-                Infrastructure & System Health Panel
-              </h3>
+            <div className="space-y-4">
+              <div className="erp-card space-y-4">
+                <div className="flex justify-between items-center border-b border-slate-200 pb-3">
+                  <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center">
+                    <ShieldCheck className="w-4 h-4 mr-1.5 text-emerald-700" />
+                    Infrastructure & System Health Panel
+                  </h3>
+                  <button onClick={loadRagTelemetry} className="erp-btn-secondary text-xs py-1 px-2.5">
+                    <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loadingRag ? 'animate-spin' : ''}`} />
+                    Refresh Status
+                  </button>
+                </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-                {systemHealthServices.map((service: any, i: number) => (
-                  <div key={i} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
-                    <div className="flex justify-between items-center">
-                      <span className="font-bold text-slate-900">{service.name}</span>
-                      <span className="erp-badge-green font-mono">{service.status}</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                  {systemHealthServices.map((service: any, i: number) => (
+                    <div key={i} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-slate-900">{service.name}</span>
+                        <span className="erp-badge-green font-mono">{service.status}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">{service.detail}</p>
                     </div>
-                    <p className="text-[11px] text-slate-500">{service.detail}</p>
+                  ))}
+                </div>
+              </div>
+
+              {/* RAG System Health & Observability Panel */}
+              <div className="erp-card space-y-4">
+                <div className="flex justify-between items-center border-b border-slate-200 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <Activity className="w-4 h-4 text-blue-600" />
+                    <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                      RAG Observability & Quality Telemetry
+                    </h3>
                   </div>
-                ))}
+                  {ragHealth && (
+                    <span
+                      className={`px-2.5 py-0.5 rounded text-xs font-mono font-bold ${
+                        ragHealth.status === 'HEALTHY'
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : ragHealth.status === 'DEGRADED'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                          : 'bg-red-100 text-red-800 border border-red-300'
+                      }`}
+                    >
+                      RAG System: {ragHealth.status}
+                    </span>
+                  )}
+                </div>
+
+                {!ragMetrics || !ragMetrics.hasData ? (
+                  <div className="p-6 text-center text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded text-xs">
+                    <AlertCircle className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+                    <p className="font-semibold">No data available</p>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      No RAG telemetry traces have been recorded in the database yet.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Metrics Summary Cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Total RAG Requests</span>
+                        <span className="text-lg font-bold font-mono text-slate-900">{ragMetrics.totalRequests}</span>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">RAG Usage Rate</span>
+                        <span className="text-lg font-bold font-mono text-blue-600">{ragMetrics.ragUsageRate}</span>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Avg Retrieval Latency</span>
+                        <span className="text-lg font-bold font-mono text-slate-900">{ragMetrics.averageVectorSearchLatency} ms</span>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Avg Provider Latency</span>
+                        <span className="text-lg font-bold font-mono text-slate-900">{ragMetrics.averageProviderLatency} ms</span>
+                      </div>
+                    </div>
+
+                    {/* Confidence & Failure Distribution */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div className="p-3 border border-slate-200 rounded space-y-2">
+                        <h4 className="font-bold text-slate-800">Retrieval Quality Breakdown</h4>
+                        <div className="space-y-1 font-mono text-[11px]">
+                          <div className="flex justify-between">
+                            <span className="text-emerald-700 font-semibold">High Confidence:</span>
+                            <span>{ragMetrics.confidenceDistribution?.highConfidence || 0}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-blue-700 font-semibold">Medium Confidence:</span>
+                            <span>{ragMetrics.confidenceDistribution?.mediumConfidence || 0}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-amber-700 font-semibold">Low Confidence:</span>
+                            <span>{ragMetrics.confidenceDistribution?.lowConfidence || 0}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500 font-semibold">No Relevant Context:</span>
+                            <span>{ragMetrics.confidenceDistribution?.noRelevantContext || 0}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-3 border border-slate-200 rounded space-y-2">
+                        <h4 className="font-bold text-slate-800">Component Health Statuses</h4>
+                        {ragHealth?.components && (
+                          <div className="space-y-1 font-mono text-[11px]">
+                            {Object.entries(ragHealth.components).map(([comp, stat]: any) => (
+                              <div key={comp} className="flex justify-between">
+                                <span className="capitalize text-slate-600">{comp}:</span>
+                                <span
+                                  className={
+                                    stat === 'HEALTHY'
+                                      ? 'text-emerald-600 font-bold'
+                                      : 'text-amber-600 font-bold'
+                                  }
+                                >
+                                  {stat}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Traces Log Table */}
+                    {ragTraces?.data && ragTraces.data.length > 0 && (
+                      <div className="space-y-2 pt-2">
+                        <h4 className="font-bold text-slate-900 text-xs">Recent RAG Traces Log</h4>
+                        <div className="erp-table-container">
+                          <table className="erp-table text-[11px]">
+                            <thead>
+                              <tr>
+                                <th>Timestamp</th>
+                                <th>Decision</th>
+                                <th>Status</th>
+                                <th>Latency</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ragTraces.data.map((tr: any) => (
+                                <tr key={tr.id}>
+                                  <td className="font-mono text-slate-500">
+                                    {new Date(tr.createdAt).toLocaleTimeString()}
+                                  </td>
+                                  <td className="font-mono font-semibold">{tr.ragDecision}</td>
+                                  <td className="font-mono">
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded text-[10px] ${
+                                        tr.status === 'COMPLETED'
+                                          ? 'bg-emerald-50 text-emerald-700'
+                                          : tr.status === 'FAILED'
+                                          ? 'bg-red-50 text-red-700'
+                                          : 'bg-amber-50 text-amber-700'
+                                      }`}
+                                    >
+                                      {tr.status}
+                                    </span>
+                                  </td>
+                                  <td className="font-mono">{tr.totalDurationMs} ms</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: FACULTY INTELLIGENCE */}
+          {activeTab === 'INTELLIGENCE' && (
+            <div className="space-y-4">
+              <div className="erp-card space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <Cpu className="w-5 h-5 text-indigo-600" />
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                        AI Faculty & Examination Intelligence Studio
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Evidence-Based Performance & Quality Analytics (Real Database Records Only)
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={loadFacultyIntelligence}
+                    disabled={loadingIntelligence}
+                    className="erp-btn-secondary py-1 px-3 text-xs"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loadingIntelligence ? 'animate-spin' : ''}`} />
+                    <span>Refresh Analytics</span>
+                  </button>
+                </div>
+
+                {!facultyIntelligence ? (
+                  <div className="p-8 text-center text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded text-xs">
+                    <AlertCircle className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+                    <p className="font-semibold">No data available</p>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Click Refresh to calculate evidence-based intelligence from PostgreSQL records.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Metrics Overview Cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="p-3 bg-blue-50/60 border border-blue-200 rounded">
+                        <span className="text-[10px] font-semibold text-blue-700 uppercase block">Total Approved Questions</span>
+                        <span className="text-xl font-bold font-mono text-[#1E40AF]">
+                          {facultyIntelligence.questionBankHealth?.totalApprovedQuestions || 0}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-amber-50/60 border border-amber-200 rounded">
+                        <span className="text-[10px] font-semibold text-amber-700 uppercase block">Pending AI Questions</span>
+                        <span className="text-xl font-bold font-mono text-amber-800">
+                          {facultyIntelligence.questionBankHealth?.pendingAiQuestions || 0}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded">
+                        <span className="text-[10px] font-semibold text-indigo-700 uppercase block">Cohort Avg Accuracy</span>
+                        <span className="text-xl font-bold font-mono text-indigo-800">
+                          {facultyIntelligence.cohortOverview?.averageCohortAccuracy || 0}%
+                        </span>
+                      </div>
+                      <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded">
+                        <span className="text-[10px] font-semibold text-emerald-700 uppercase block">Exams Intelligence Analyzed</span>
+                        <span className="text-xl font-bold font-mono text-emerald-800">
+                          {facultyIntelligence.examsIntelligence?.length || 0}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Evidence-Based Recommendations */}
+                    <div className="space-y-2 border border-slate-200 rounded p-3">
+                      <h4 className="font-bold text-xs text-slate-900 uppercase tracking-wider flex items-center">
+                        <Sparkles className="w-4 h-4 text-indigo-600 mr-1.5" />
+                        Evidence-Based Faculty Recommendations
+                      </h4>
+                      <div className="space-y-2">
+                        {facultyIntelligence.recommendations?.map((rec: any) => (
+                          <div key={rec.id} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1 text-xs">
+                            <div className="flex justify-between items-center">
+                              <span className="font-bold text-slate-900">{rec.title}</span>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                                rec.priority === 'HIGH' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
+                              }`}>
+                                {rec.priority} PRIORITY
+                              </span>
+                            </div>
+                            <p className="text-slate-600 text-[11px]"><span className="font-semibold text-slate-800">Evidence:</span> {rec.evidence}</p>
+                            <p className="text-blue-800 text-[11px] font-medium"><span className="font-semibold text-blue-900">Action:</span> {rec.recommendedAction}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Cohort Academic Gaps */}
+                    <div className="space-y-2 border border-slate-200 rounded p-3">
+                      <h4 className="font-bold text-xs text-slate-900 uppercase tracking-wider flex items-center">
+                        <AlertCircle className="w-4 h-4 text-amber-600 mr-1.5" />
+                        Cohort Academic Gaps & Weak Topics
+                      </h4>
+                      {facultyIntelligence.cohortOverview?.academicGaps?.length === 0 ? (
+                        <p className="text-xs text-slate-500 italic py-2">No academic gaps detected (sufficient accuracy across cohort attempts).</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {facultyIntelligence.cohortOverview?.academicGaps?.map((gap: any) => (
+                            <div key={gap.topicId} className="p-2.5 bg-amber-50/50 border border-amber-200 rounded text-xs flex justify-between items-center">
+                              <div>
+                                <span className="font-bold text-slate-900">{gap.topicName} ({gap.subjectName})</span>
+                                <p className="text-[11px] text-slate-600 mt-0.5">{gap.evidence}</p>
+                              </div>
+                              <span className="font-mono font-bold text-amber-900 bg-amber-100 px-2 py-1 rounded">
+                                {gap.accuracyPercentage}% Accuracy
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: AI GOVERNANCE & COST */}
+          {activeTab === 'GOVERNANCE' && (
+            <div className="space-y-4">
+              <div className="erp-card space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <ShieldCheck className="w-5 h-5 text-blue-600" />
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                        AI Governance, Cost Control & Operations Studio
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Production Circuit Breaker, Model Evaluation & Token Cost Analytics
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={toggleCircuitBreaker}
+                      className={`px-3 py-1.5 rounded text-xs font-bold font-mono border transition-colors ${
+                        governanceData?.circuitBreakerState?.circuitBreakerOpen
+                          ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
+                          : 'bg-red-600 text-white border-red-700 hover:bg-red-700'
+                      }`}
+                    >
+                      {governanceData?.circuitBreakerState?.circuitBreakerOpen
+                        ? 'RESUME AI OPERATIONS'
+                        : 'PAUSE AI (CIRCUIT BREAKER)'}
+                    </button>
+                    <button
+                      onClick={loadGovernanceOverview}
+                      disabled={loadingGovernance}
+                      className="erp-btn-secondary py-1.5 px-3 text-xs"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loadingGovernance ? 'animate-spin' : ''}`} />
+                      <span>Refresh Governance</span>
+                    </button>
+                  </div>
+                </div>
+
+                {!governanceData ? (
+                  <div className="p-8 text-center text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded text-xs">
+                    <AlertCircle className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+                    <p className="font-semibold">No data available</p>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Click Refresh to load AI governance, circuit breaker, and evaluation telemetry.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Circuit Breaker & Routing Bar */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-xs">
+                      <div>
+                        <span className="font-semibold text-slate-700">System Circuit Breaker Status: </span>
+                        <span
+                          className={`font-mono font-bold px-2 py-0.5 rounded text-[11px] ${
+                            governanceData.circuitBreakerState?.circuitBreakerOpen
+                              ? 'bg-red-100 text-red-800 border border-red-300'
+                              : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          }`}
+                        >
+                          {governanceData.circuitBreakerState?.circuitBreakerOpen ? 'CIRCUIT BREAKER ACTIVATED (PAUSED)' : 'NORMAL OPERATIONAL'}
+                        </span>
+                      </div>
+                      <div className="font-mono text-slate-600 text-[11px]">
+                        Active Model: <span className="font-bold text-blue-900">{governanceData.circuitBreakerState?.activeModel || 'gemini-1.5-flash'}</span>
+                      </div>
+                    </div>
+
+                    {/* Token & Cost Metrics */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Total System Traces</span>
+                        <span className="text-xl font-bold font-mono text-slate-900">
+                          {governanceData.costMetrics?.totalTracesCount || 0}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Estimated Total Tokens</span>
+                        <span className="text-xl font-bold font-mono text-blue-600">
+                          {governanceData.costMetrics?.estimatedTotalTokens?.toLocaleString() || 0}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Estimated API Cost</span>
+                        <span className="text-xl font-bold font-mono text-emerald-700">
+                          ${governanceData.costMetrics?.estimatedTotalCostUsd || '0.00'}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">System Quality Score</span>
+                        <span className="text-xl font-bold font-mono text-indigo-700">
+                          {governanceData.evaluationOverview?.overallSystemQualityScore || 100} / 100
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Multi-Pipeline Evaluation Table */}
+                    <div className="space-y-2 pt-2">
+                      <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider">Multi-Pipeline Model Evaluation</h4>
+                      <div className="erp-table-container">
+                        <table className="erp-table text-[11px]">
+                          <thead>
+                            <tr>
+                              <th>Operational AI Pipeline</th>
+                              <th>Executions</th>
+                              <th>Success Rate</th>
+                              <th>Avg Latency</th>
+                              <th>Quality Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {governanceData.evaluationOverview?.pipelines?.map((pipe: any) => (
+                              <tr key={pipe.pipelineName}>
+                                <td className="font-semibold text-slate-800">{pipe.pipelineName}</td>
+                                <td className="font-mono">{pipe.totalExecutions}</td>
+                                <td className="font-mono text-emerald-700 font-bold">{pipe.successRatePercentage}%</td>
+                                <td className="font-mono">{pipe.averageLatencyMs} ms</td>
+                                <td>
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800">
+                                    {pipe.qualityStatus}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

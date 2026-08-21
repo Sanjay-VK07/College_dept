@@ -191,10 +191,10 @@ export class ContextService {
           break;
         }
       }
-    } else if (role === Role.FACULTY) {
+    } else if (role === Role.FACULTY || role === Role.ADMIN) {
       if (intent === 'PORTAL_UPCOMING_EXAMS' || intent === 'PORTAL_COMPLETED_EXAMS') {
         const tests = await prisma.mockTest.findMany({
-          where: { createdById: userId },
+          where: role === Role.FACULTY ? { createdById: userId } : undefined,
           take: 5,
           select: { title: true, startTime: true, durationMinutes: true, isPublished: true },
         });
@@ -203,6 +203,19 @@ export class ContextService {
           scheduledAt: t.startTime ? new Date(t.startTime).toISOString() : 'TBD',
           durationMinutes: t.durationMinutes,
         }));
+      }
+
+      // Attach evidence-based faculty intelligence aggregate context
+      try {
+        const approvedCount = await prisma.question.count();
+        const pendingAiCount = await prisma.aIGeneratedQuestion.count({ where: { status: 'PENDING_REVIEW' } });
+        (baseContext as any).facultyIntelligenceSummary = {
+          totalApprovedQuestionsInBank: approvedCount,
+          pendingAiQuestionsCount: pendingAiCount,
+          department: user.department || 'Computer Science and Engineering',
+        };
+      } catch (err) {
+        console.error('[ContextService] Error attaching faculty intelligence summary:', err);
       }
     }
 
