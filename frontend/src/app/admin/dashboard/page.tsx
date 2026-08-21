@@ -51,7 +51,6 @@ import {
   Eye,
   Archive,
   Printer,
-  Ticket,
   FileCheck,
   UserPlus,
   PieChart as PieChartIcon,
@@ -758,18 +757,6 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleGenerateHallTickets = async () => {
-    try {
-      const res = await api.get('/admin/hall-tickets');
-      if (res.data?.success) {
-        exportToCSV('HallTickets_Roster', res.data.data);
-        showToast('Hall Tickets dataset exported successfully');
-      }
-    } catch (err: any) {
-      showToast('Failed to generate hall tickets');
-    }
-  };
-
   const handleSaveSetting = async (key: string, value: string) => {
     try {
       const res = await api.put('/admin/settings', { key, value });
@@ -1428,10 +1415,6 @@ export default function AdminDashboard() {
                       <button onClick={() => setIsAssignInvigilatorOpen(true)} className="erp-btn-secondary py-1.5 text-xs">
                         <UserPlus className="w-3.5 h-3.5 text-[#1E40AF]" />
                         <span>Assign Invigilator</span>
-                      </button>
-                      <button onClick={handleGenerateHallTickets} className="erp-btn-secondary py-1.5 text-xs">
-                        <Ticket className="w-3.5 h-3.5 text-amber-700" />
-                        <span>Generate Hall Tickets</span>
                       </button>
                       <button onClick={() => handleExportCSV('Attendance', filteredExams)} className="erp-btn-secondary py-1.5 text-xs">
                         <FileCheck className="w-3.5 h-3.5 text-emerald-700" />

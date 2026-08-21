@@ -1184,56 +1184,6 @@ export class AdminController {
     }
   }
 
-  /**
-   * Generate Hall Tickets Data
-   */
-  public static async getHallTickets(req: AuthRequest, res: Response) {
-    try {
-      const students = await prisma.user.findMany({
-        where: { role: Role.STUDENT },
-        include: {
-          assignments: {
-            include: { test: true },
-          },
-        },
-        take: 50,
-      });
-
-      const upcomingExams = await prisma.mockTest.findMany({
-        where: { isPublished: true },
-        take: 10,
-      });
-
-      const hallTickets = students.map((s) => ({
-        studentId: s.id,
-        registerNo: s.registerNo || '71762105042',
-        studentName: s.name,
-        department: s.department,
-        degree: 'B.E.',
-        semester: `Semester ${s.semester || 6}`,
-        exams: upcomingExams.map((e) => ({
-          examId: e.id,
-          code: e.title.split(' ')[0] || 'CS8601',
-          title: e.title,
-          date: e.startTime.toISOString().split('T')[0],
-          time: '09:30 AM - 12:30 PM',
-          hall: 'Exam Hall B-302',
-        })),
-      }));
-
-      await NotificationController.createSystemNotification(
-        'Hall Tickets Issued',
-        'Official hall tickets for upcoming examinations are available for download in portal',
-        'success',
-        'Student'
-      );
-
-      return res.status(200).json({ success: true, data: hallTickets });
-    } catch (error: any) {
-      return res.status(500).json({ success: false, message: error.message });
-    }
-  }
-
   public static async getAttendanceByTestId(req: AuthRequest, res: Response) {
     try {
       const { testId } = req.params;
