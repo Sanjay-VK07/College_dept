@@ -2,16 +2,13 @@ import { Router } from 'express';
 import { authenticateJWT, requireRoles } from '../../../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 import { AIChatController } from '../controllers/aiChatController';
-<<<<<<< HEAD
 import { RAGAdminController } from '../controllers/ragAdminController';
 import { AIQuestionController } from '../controllers/aiQuestionController';
 import { AISolutionController } from '../controllers/aiSolutionController';
 import { AIExamController } from '../controllers/aiExamController';
 import { FacultyIntelligenceController } from '../controllers/facultyIntelligenceController';
 import { AIGovernanceController } from '../controllers/aiGovernanceController';
-=======
 import { AIAssistantController } from '../controllers/aiAssistantController';
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 import documentRoutes from './documentRoutes';
 import rateLimit from 'express-rate-limit';
 
@@ -88,7 +85,7 @@ router.get('/intelligence/cohort', requireRoles(Role.FACULTY, Role.ADMIN), Facul
 router.get('/governance/overview', requireRoles(Role.ADMIN), AIGovernanceController.getOverview);
 router.post('/governance/circuit-breaker', requireRoles(Role.ADMIN), AIGovernanceController.setCircuitBreaker);
 router.get('/governance/evaluation', requireRoles(Role.ADMIN), AIGovernanceController.getEvaluation);
-=======
+
 // 2. Phase 2D Conversational Features & RAG QA
 router.post('/ask', AIAssistantController.askQuestion);
 router.post('/conversations/:conversationId/rename', AIAssistantController.renameConversation);
@@ -102,7 +99,6 @@ router.post('/practice', AIAssistantController.generatePracticeSet);
 router.post('/practice/submit', AIAssistantController.submitPracticeSet);
 router.get('/practice/attempts', AIAssistantController.getPracticeAttempts);
 router.get('/performance-insights', AIAssistantController.getPerformanceInsights);
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 
 // Secure document management routes
 router.use('/documents', documentRoutes);
