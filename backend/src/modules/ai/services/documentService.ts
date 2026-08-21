@@ -5,6 +5,7 @@ import { DocumentAuthorizationService } from './documentAuthorizationService';
 import { validateUploadFile } from '../utils/documentValidation';
 import { DocumentMetadataDTO } from '../types/document.types';
 import { AuditLogger } from '../../../services/auditLogger';
+import { DocumentProcessingService } from './documentProcessingService';
 
 export class DocumentService {
   /**
@@ -72,6 +73,11 @@ export class DocumentService {
         action: 'UPLOAD_AI_DOCUMENT',
         resource: 'AIDocument',
         details: `Uploaded document "${cleanTitle}" (${fileName}, ${fileBuffer.length} bytes)`,
+      });
+
+      // Trigger background text extraction and chunking (Phase 2C)
+      DocumentProcessingService.processDocument(document.id).catch((err) => {
+        console.error('[DocumentService.uploadDocument] Background processing failed:', err);
       });
 
       return document;

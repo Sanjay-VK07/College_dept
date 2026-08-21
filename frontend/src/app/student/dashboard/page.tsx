@@ -15,9 +15,11 @@ import {
   Search,
   BookOpen,
   CheckCircle2,
+  Bot,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { StudentAnalyticsView } from '@/components/analytics/StudentAnalyticsView';
+import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 
 // Strict Helper for profile text fields (uses "N/A" for missing text fields)
 function displayProfileField<T>(value: T | null | undefined, fallback = 'N/A'): string {

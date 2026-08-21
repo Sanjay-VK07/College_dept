@@ -4,7 +4,7 @@ import { prisma } from '../config/prisma';
 import { ExcelImportService } from '../services/excelImportService';
 import { ReportExportService } from '../services/reportExportService';
 import { AuditLogger } from '../services/auditLogger';
-import { Role, QuestionType, Difficulty, ExamType } from '@prisma/client';
+import { Role, QuestionType, Difficulty, ExamType, ExamStatus } from '@prisma/client';
 import { ENV } from '../config/env';
 import { NotificationController } from './notificationController';
 
@@ -17,6 +17,93 @@ export class AdminController {
       const now = new Date();
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+      if (req.user!.role === Role.FACULTY) {
+        const userId = req.user!.id;
+        
+        // Scope to exams created by or assigned to this faculty member
+        const facultyExams = await prisma.mockTest.findMany({
+          where: {
+            OR: [
+              { createdById: userId },
+              { invigilators: { some: { facultyId: userId } } }
+            ]
+          },
+          select: { id: true, startTime: true, endTime: true, status: true, title: true }
+        });
+        
+        const examIds = facultyExams.map(e => e.id);
+        
+        const assignedCount = facultyExams.length;
+        const upcomingCount = facultyExams.filter(e => e.status === 'SCHEDULED' || e.status === 'PUBLISHED').length;
+        const liveCount = facultyExams.filter(e => e.status === 'LIVE').length;
+        const completedCount = facultyExams.filter(e => e.status === 'COMPLETED' || e.status === 'ARCHIVED').length;
+        
+        const [
+          totalQuestions,
+          totalCandidates,
+          pendingEvaluations,
+          attendancePresent,
+          attendanceTotal,
+          recentLogs,
+        ] = await Promise.all([
+          prisma.question.count({ where: { createdById: userId } }),
+          prisma.testAssignment.count({ where: { testId: { in: examIds } } }),
+          prisma.testAssignment.count({ where: { testId: { in: examIds }, status: 'COMPLETED' } }),
+          prisma.testAssignment.count({ where: { testId: { in: examIds }, startedAt: { not: null } } }),
+          prisma.testAssignment.count({ where: { testId: { in: examIds } } }),
+          prisma.auditLog.findMany({
+            where: {
+              OR: [
+                { userId },
+                { details: { contains: userId } },
+                { resource: 'MockTest', details: { contains: 'exam' } }
+              ]
+            },
+            take: 10,
+            orderBy: { timestamp: 'desc' },
+            include: {
+              user: { select: { name: true, registerNo: true, role: true } }
+            }
+          })
+        ]);
+
+        const recentActivities = recentLogs.map((log) => ({
+          id: log.id,
+          text: log.details || `${log.action} performed on ${log.resource}`,
+          time: log.timestamp.toISOString(),
+          user: log.user?.name || 'System',
+          action: log.action,
+        }));
+
+        const notifications = recentLogs.slice(0, 4).map((log) => ({
+          id: log.id,
+          text: log.details || `${log.action}: ${log.resource}`,
+          badge: log.action.includes('EXAM') ? 'EXAM' : log.action.includes('USER') ? 'USER' : 'SYSTEM',
+          time: log.timestamp.toISOString(),
+        }));
+
+        return res.status(200).json({
+          success: true,
+          data: {
+            metrics: {
+              assignedExams: assignedCount,
+              upcomingExams: upcomingCount,
+              liveExams: liveCount,
+              completedExams: completedCount,
+              questionBank: totalQuestions,
+              students: totalCandidates,
+              pendingEvaluations,
+              attendanceRate: attendanceTotal > 0 ? Math.round((attendancePresent / attendanceTotal) * 100) : 0,
+              databaseStatus: 'CONNECTED',
+              socketStatus: 'ACTIVE',
+              serverHealth: 'HEALTHY',
+            },
+            recentActivities,
+            notifications,
+          }
+        });
+      }
 
       // Perform real database queries for every metric & widget
       const [
@@ -196,6 +283,25 @@ export class AdminController {
         ];
       }
 
+      if (req.user!.role === Role.FACULTY) {
+        const userId = req.user!.id;
+        const facultyExams = await prisma.mockTest.findMany({
+          where: {
+            OR: [
+              { createdById: userId },
+              { invigilators: { some: { facultyId: userId } } }
+            ]
+          },
+          select: { id: true }
+        });
+        const examIds = facultyExams.map(e => e.id);
+        whereClause.assignments = {
+          some: {
+            testId: { in: examIds }
+          }
+        };
+      }
+
       const students = await prisma.user.findMany({
         where: whereClause,
         orderBy: { name: 'asc' },
@@ -320,15 +426,35 @@ export class AdminController {
   public static async resetStudentAttempts(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      await prisma.testAssignment.deleteMany({
-        where: { studentId: id },
-      });
+      const { testId } = req.body;
+
+      if (req.user!.role === Role.FACULTY) {
+        if (!testId) {
+          return res.status(400).json({ success: false, message: 'testId is required for faculty to reset attempts' });
+        }
+        const test = await prisma.mockTest.findUnique({
+          where: { id: testId },
+          include: { invigilators: { where: { facultyId: req.user!.id } } }
+        });
+        if (!test || (test.createdById !== req.user!.id && test.invigilators.length === 0)) {
+          return res.status(403).json({ success: false, message: 'Unauthorized to reset attempts for this examination' });
+        }
+        await prisma.testAssignment.deleteMany({
+          where: { studentId: id, testId },
+        });
+      } else {
+        const whereClause: any = { studentId: id };
+        if (testId) whereClause.testId = testId;
+        await prisma.testAssignment.deleteMany({
+          where: whereClause,
+        });
+      }
 
       await AuditLogger.log({
         userId: req.user?.id,
         action: 'RESET_ATTEMPTS',
         resource: 'TestAssignment',
-        details: `Reset exam attempts for student ID ${id}`,
+        details: `Reset exam attempts for student ID ${id}${testId ? ` on test ${testId}` : ''}`,
         ipAddress: req.ip,
       });
 
@@ -463,6 +589,13 @@ export class AdminController {
         whereClause.text = { contains: String(search), mode: 'insensitive' };
       }
 
+      if (req.user!.role === Role.FACULTY) {
+        whereClause.OR = [
+          { createdById: req.user!.id },
+          { subtopic: { topic: { module: { subject: { department: { contains: req.user!.department, mode: 'insensitive' } } } } } }
+        ];
+      }
+
       const questions = await prisma.question.findMany({
         where: whereClause,
         include: {
@@ -537,6 +670,16 @@ export class AdminController {
   public static async deleteQuestion(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
+
+      const question = await prisma.question.findUnique({ where: { id } });
+      if (!question) {
+        return res.status(404).json({ success: false, message: 'Question not found' });
+      }
+
+      if (req.user!.role === Role.FACULTY && question.createdById !== req.user!.id) {
+        return res.status(403).json({ success: false, message: 'Unauthorized to delete this question' });
+      }
+
       await prisma.question.delete({ where: { id } });
 
       await AuditLogger.log({
@@ -565,7 +708,19 @@ export class AdminController {
    */
   public static async getExams(req: AuthRequest, res: Response) {
     try {
+      const userId = req.user!.id;
+      const role = req.user!.role;
+
+      const whereClause: any = {};
+      if (role === Role.FACULTY) {
+        whereClause.OR = [
+          { createdById: userId },
+          { invigilators: { some: { facultyId: userId } } }
+        ];
+      }
+
       const exams = await prisma.mockTest.findMany({
+        where: whereClause,
         include: {
           createdBy: { select: { name: true, department: true } },
           _count: { select: { testQuestions: true, assignments: true } },
@@ -583,8 +738,23 @@ export class AdminController {
     try {
       const { title, description, examType, durationMinutes, totalMarks, targetDepartment, maxViolations, instructions } = req.body;
 
-      if (!title) {
-        return res.status(400).json({ success: false, message: 'Exam title is required' });
+      if (!title || String(title).trim().length < 5) {
+        return res.status(400).json({ success: false, message: 'Exam title / course code is required and must be at least 5 characters.' });
+      }
+
+      const parsedDuration = Number(durationMinutes);
+      if (isNaN(parsedDuration) || parsedDuration <= 0) {
+        return res.status(400).json({ success: false, message: 'Duration must be a valid positive integer.' });
+      }
+
+      const parsedMarks = Number(totalMarks);
+      if (isNaN(parsedMarks) || parsedMarks <= 0) {
+        return res.status(400).json({ success: false, message: 'Total marks must be a valid positive number.' });
+      }
+
+      const parsedViolations = Number(maxViolations);
+      if (isNaN(parsedViolations) || parsedViolations < 0) {
+        return res.status(400).json({ success: false, message: 'Max violations threshold must be a non-negative number.' });
       }
 
       const exam = await prisma.mockTest.create({
@@ -592,14 +762,15 @@ export class AdminController {
           title,
           description: description || 'Official Institutional CBT Examination',
           examType: examType || ExamType.SCHEDULED,
-          durationMinutes: Number(durationMinutes) || 180,
-          totalMarks: Number(totalMarks) || 100,
+          durationMinutes: parsedDuration,
+          totalMarks: parsedMarks,
           startTime: new Date(),
           endTime: new Date(Date.now() + 86400000 * 7),
           targetDepartment: targetDepartment || 'Computer Science and Engineering',
-          maxViolations: Number(maxViolations) || 5,
+          maxViolations: parsedViolations,
           instructions: instructions || 'Fullscreen mode is strictly enforced.',
-          isPublished: true,
+          isPublished: false,
+          status: ExamStatus.DRAFT,
           createdById: req.user!.id,
         },
       });
@@ -613,13 +784,13 @@ export class AdminController {
       });
 
       await NotificationController.createSystemNotification(
-        'Examination Scheduled',
-        `New examination paper "${title}" scheduled for ${targetDepartment || 'CSE'}`,
+        'Examination Created',
+        `New examination paper "${title}" created as DRAFT`,
         'info',
         'ALL'
       );
 
-      return res.status(201).json({ success: true, message: 'Exam scheduled and published', data: exam });
+      return res.status(201).json({ success: true, message: 'Exam created successfully', data: exam });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }
@@ -837,7 +1008,18 @@ export class AdminController {
    */
   public static async getResultsLedger(req: AuthRequest, res: Response) {
     try {
+      const whereClause: any = {};
+      if (req.user!.role === Role.FACULTY) {
+        whereClause.test = {
+          OR: [
+            { createdById: req.user!.id },
+            { invigilators: { some: { facultyId: req.user!.id } } }
+          ]
+        };
+      }
+
       const assignments = await prisma.testAssignment.findMany({
+        where: whereClause,
         include: {
           student: {
             select: { id: true, name: true, registerNo: true, department: true, email: true },
@@ -893,20 +1075,55 @@ export class AdminController {
   public static async assignInvigilator(req: AuthRequest, res: Response) {
     try {
       const { testId, facultyId } = req.body;
+
+      if (!testId || !facultyId) {
+        return res.status(400).json({ success: false, message: 'testId and facultyId are required' });
+      }
+
       const test = await prisma.mockTest.findUnique({ where: { id: testId } });
       const faculty = await prisma.user.findUnique({ where: { id: facultyId } });
+
+      if (!test) {
+        return res.status(404).json({ success: false, message: 'Examination not found' });
+      }
+
+      if (!faculty) {
+        return res.status(404).json({ success: false, message: 'Faculty user not found' });
+      }
+
+      if (faculty.role !== Role.FACULTY && faculty.role !== Role.ADMIN) {
+        return res.status(400).json({ success: false, message: 'Only faculty/admin members can be assigned as invigilators' });
+      }
+
+      if (req.user!.role === Role.FACULTY && test.createdById !== req.user!.id) {
+        return res.status(403).json({ success: false, message: 'Unauthorized to assign invigilator to this examination' });
+      }
+
+      const existing = await prisma.invigilatorAssignment.findUnique({
+        where: {
+          testId_facultyId: { testId, facultyId }
+        }
+      });
+
+      if (existing) {
+        return res.status(400).json({ success: false, message: 'Faculty member is already assigned as an invigilator for this exam' });
+      }
+
+      const assignment = await prisma.invigilatorAssignment.create({
+        data: { testId, facultyId },
+      });
 
       await AuditLogger.log({
         userId: req.user?.id,
         action: 'ASSIGN_INVIGILATOR',
         resource: 'MockTest',
-        details: `Assigned faculty ${faculty?.name || facultyId} as invigilator for test ${test?.title || testId}`,
+        details: `Assigned faculty ${faculty.name} (ID: ${facultyId}) as invigilator for test ${test.title} (ID: ${testId})`,
         ipAddress: req.ip,
       });
 
       await NotificationController.createSystemNotification(
         'Invigilator Assigned',
-        `Faculty member ${faculty?.name || 'assigned'} allocated to ${test?.title || 'examination'}`,
+        `Faculty member ${faculty.name} allocated to ${test.title}`,
         'info',
         'Faculty',
         facultyId
@@ -914,7 +1131,8 @@ export class AdminController {
 
       return res.status(200).json({
         success: true,
-        message: `Invigilator ${faculty?.name || 'assigned'} successfully to ${test?.title || 'examination'}.`,
+        message: `Invigilator ${faculty.name} successfully assigned to ${test.title}.`,
+        data: assignment,
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
@@ -971,9 +1189,6 @@ export class AdminController {
     }
   }
 
-  /**
-   * Examination-Scoped Attendance Register
-   */
   public static async getAttendanceByTestId(req: AuthRequest, res: Response) {
     try {
       const { testId } = req.params;
@@ -984,10 +1199,17 @@ export class AdminController {
 
       const exam = await prisma.mockTest.findUnique({
         where: { id: testId },
+        include: {
+          invigilators: { where: { facultyId: req.user!.id } }
+        }
       });
 
       if (!exam) {
         return res.status(404).json({ success: false, message: 'Examination not found' });
+      }
+
+      if (req.user!.role === Role.FACULTY && exam.createdById !== req.user!.id && exam.invigilators.length === 0) {
+        return res.status(403).json({ success: false, message: 'Unauthorized to view attendance for this examination' });
       }
 
       // Query test assignments strictly filtered by examination_id (testId)
@@ -1055,6 +1277,146 @@ export class AdminController {
           attendance: attendanceList,
         },
       });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Toggle Student Attendance Status
+   */
+  public static async toggleAttendance(req: AuthRequest, res: Response) {
+    try {
+      const { testId } = req.params;
+      const { studentId, status } = req.body;
+
+      if (!testId || !studentId || !status) {
+        return res.status(400).json({ success: false, message: 'testId, studentId, and status are required' });
+      }
+
+      // Check faculty authorization
+      const exam = await prisma.mockTest.findUnique({
+        where: { id: testId },
+        include: {
+          invigilators: { where: { facultyId: req.user!.id } }
+        }
+      });
+
+      if (!exam) {
+        return res.status(404).json({ success: false, message: 'Examination not found' });
+      }
+
+      if (req.user!.role === Role.FACULTY && exam.createdById !== req.user!.id && exam.invigilators.length === 0) {
+        return res.status(403).json({ success: false, message: 'Unauthorized to toggle attendance for this examination' });
+      }
+
+      const assignment = await prisma.testAssignment.findFirst({
+        where: { testId, studentId },
+      });
+
+      if (!assignment) {
+        return res.status(404).json({ success: false, message: 'Student assignment not found' });
+      }
+
+      const updated = await prisma.testAssignment.update({
+        where: { id: assignment.id },
+        data: {
+          startedAt: status === 'PRESENT' ? new Date() : null,
+          status: status === 'PRESENT' ? 'IN_PROGRESS' : 'SCHEDULED',
+        },
+      });
+
+      return res.status(200).json({ success: true, message: 'Attendance status updated successfully', data: updated });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Transition Exam Lifecycle Status
+   */
+  public static async updateExamStatus(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const { status } = req.body; // DRAFT, SCHEDULED, PUBLISHED, LIVE, COMPLETED, ARCHIVED
+
+      if (!status || !['DRAFT', 'SCHEDULED', 'PUBLISHED', 'LIVE', 'COMPLETED', 'ARCHIVED'].includes(status)) {
+        return res.status(400).json({ success: false, message: 'Invalid exam status value' });
+      }
+
+      const exam = await prisma.mockTest.findUnique({
+        where: { id },
+        include: {
+          _count: { select: { testQuestions: true } },
+          invigilators: { where: { facultyId: req.user!.id } }
+        }
+      });
+
+      if (!exam) {
+        return res.status(404).json({ success: false, message: 'Examination not found' });
+      }
+
+      if (req.user!.role === Role.FACULTY && exam.createdById !== req.user!.id && exam.invigilators.length === 0) {
+        return res.status(403).json({ success: false, message: 'Unauthorized to manage this examination' });
+      }
+
+      const current = exam.status;
+      let allowed = false;
+
+      if (current === 'DRAFT') {
+        allowed = ['SCHEDULED', 'PUBLISHED'].includes(status);
+      } else if (current === 'SCHEDULED') {
+        allowed = ['PUBLISHED', 'DRAFT'].includes(status);
+      } else if (current === 'PUBLISHED') {
+        allowed = ['LIVE', 'DRAFT', 'SCHEDULED'].includes(status);
+      } else if (current === 'LIVE') {
+        allowed = ['COMPLETED'].includes(status);
+      } else if (current === 'COMPLETED') {
+        allowed = ['ARCHIVED'].includes(status);
+      } else if (current === 'ARCHIVED') {
+        allowed = false;
+      }
+
+      if (!allowed) {
+        return res.status(400).json({ success: false, message: `Invalid status transition from ${current} to ${status}` });
+      }
+
+      if ((status === 'PUBLISHED' || status === 'SCHEDULED' || status === 'LIVE') && exam._count.testQuestions === 0) {
+        return res.status(400).json({ success: false, message: 'Cannot publish or schedule an examination with no questions.' });
+      }
+
+      const isPublished = ['PUBLISHED', 'LIVE', 'COMPLETED'].includes(status);
+
+      const updated = await prisma.$transaction(async (tx) => {
+        const u = await tx.mockTest.update({
+          where: { id },
+          data: {
+            status: status as ExamStatus,
+            isPublished,
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId: req.user!.id,
+            action: 'UPDATE_EXAM_STATUS',
+            resource: 'MockTest',
+            details: `Exam status transitioned from ${current} to ${status} (isPublished: ${isPublished})`,
+            ipAddress: req.ip,
+          }
+        });
+
+        return u;
+      });
+
+      await NotificationController.createSystemNotification(
+        `Examination Status: ${status}`,
+        `Exam "${exam.title}" status changed to ${status}`,
+        status === 'LIVE' ? 'success' : 'info',
+        'ALL'
+      );
+
+      return res.status(200).json({ success: true, message: `Exam status successfully updated to ${status}`, data: updated });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }

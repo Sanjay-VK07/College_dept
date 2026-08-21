@@ -17,7 +17,7 @@ router.get('/students', requireRoles(Role.ADMIN), AdminController.getStudents);
 router.post('/students', requireRoles(Role.ADMIN), AdminController.createStudent);
 router.put('/students/:id', requireRoles(Role.ADMIN), AdminController.updateStudent);
 router.delete('/students/:id', requireRoles(Role.ADMIN), AdminController.deleteStudent);
-router.post('/students/:id/reset-attempts', requireRoles(Role.ADMIN), AdminController.resetStudentAttempts);
+router.post('/students/:id/reset-attempts', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.resetStudentAttempts);
 
 // Faculty Management
 router.get('/faculty', requireRoles(Role.ADMIN), AdminController.getFaculty);
@@ -28,12 +28,13 @@ router.delete('/faculty/:id', requireRoles(Role.ADMIN), AdminController.deleteFa
 // Question Bank Management
 router.get('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getQuestions);
 router.post('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.createQuestion);
-router.delete('/questions/:id', requireRoles(Role.ADMIN), AdminController.deleteQuestion);
+router.delete('/questions/:id', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.deleteQuestion);
 
 // Exam Management
 router.get('/exams', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getExams);
 router.post('/exams', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.createExam);
 router.put('/exams/:id/publish', requireRoles(Role.ADMIN), AdminController.togglePublishExam);
+router.put('/exams/:id/status', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.updateExamStatus);
 router.delete('/exams/:id', requireRoles(Role.ADMIN), AdminController.deleteExam);
 
 // Bulk Uploads & Reports
@@ -50,5 +51,6 @@ router.get('/results-ledger', requireRoles(Role.FACULTY, Role.ADMIN), AdminContr
 router.post('/assign-invigilator', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.assignInvigilator);
 router.get('/hall-tickets', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getHallTickets);
 router.get('/attendance/:testId', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getAttendanceByTestId);
+router.put('/attendance/:testId/toggle', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.toggleAttendance);
 
 export default router;

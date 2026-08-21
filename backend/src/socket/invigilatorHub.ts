@@ -1,6 +1,10 @@
 import { Server, Socket } from 'socket.io';
 import { prisma } from '../config/prisma';
-import { RiskLevel } from '@prisma/client';
+import { RiskLevel, Role } from '@prisma/client';
+import jwt from 'jsonwebtoken';
+import { ENV } from '../config/env';
+import { AuditLogger } from '../services/auditLogger';
+import { GateScoringService } from '../services/gateScoringService';
 
 export interface ConnectedStudent {
   socketId: string;
@@ -23,20 +27,50 @@ let globalIo: Server | null = null;
 
 export function setupInvigilatorHub(io: Server) {
   globalIo = io;
+
+  // Middleware to authenticate socket connections via JWT
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    if (!token) {
+      return next(new Error('Authentication error: Token is required'));
+    }
+    try {
+      const decoded = jwt.verify(token, ENV.JWT_SECRET) as any;
+      socket.data.user = decoded;
+      next();
+    } catch (err) {
+      return next(new Error('Authentication error: Invalid token'));
+    }
+  });
   io.on('connection', (socket: Socket) => {
-    console.log(`🔌 [Socket.IO] Client connected: ${socket.id}`);
+    const user = socket.data.user;
+    console.log(`🔌 [Socket.IO] Client connected: ${socket.id} (User: ${user?.email}, Role: ${user?.role})`);
 
     // Join Faculty Invigilator Room
     socket.on('join_faculty_room', async (data: { testId: string }) => {
       const requestedTestId = data?.testId;
       if (!requestedTestId) return;
 
-      socket.join(`faculty_${requestedTestId}`);
+      if (!user || (user.role !== Role.FACULTY && user.role !== Role.ADMIN)) {
+        console.warn(`🛑 [Socket.IO] Unauthorized join_faculty_room request by user role: ${user?.role}`);
+        return;
+      }
 
+      if (user.role === Role.FACULTY && requestedTestId !== 'all') {
+        const test = await prisma.mockTest.findUnique({
+          where: { id: requestedTestId },
+          include: { invigilators: { where: { facultyId: user.id } } }
+        });
+        if (!test || (test.createdById !== user.id && test.invigilators.length === 0)) {
+          console.warn(`🛑 [Socket.IO] Faculty user ${user.id} unauthorized to invigilate test ${requestedTestId}`);
+          return;
+        }
+      }
+
+      socket.join(`faculty_${requestedTestId}`);
       console.log(`👨‍🏫 [Socket.IO] Faculty joined monitoring room: faculty_${requestedTestId}`);
 
       try {
-        // Query DB for test assignments strictly filtered by examination ID
         const assignments = await prisma.testAssignment.findMany({
           where: requestedTestId !== 'all' ? { testId: requestedTestId } : {},
           include: {
@@ -45,7 +79,6 @@ export function setupInvigilatorHub(io: Server) {
           },
         });
 
-        // Merge DB records with active live socket connections
         const snapshot: ConnectedStudent[] = assignments.map((a) => {
           const live = activeStudents.get(a.id);
           if (live) {
@@ -71,7 +104,6 @@ export function setupInvigilatorHub(io: Server) {
           };
         });
 
-        console.log(`📊 [Socket.IO] Emitting live_students_snapshot with ${snapshot.length} students to faculty_${requestedTestId}`);
         socket.emit('live_students_snapshot', snapshot);
       } catch (error: any) {
         console.error('❌ [Socket.IO] Error fetching live_students_snapshot:', error.message);
@@ -83,48 +115,52 @@ export function setupInvigilatorHub(io: Server) {
       'student_join_exam',
       async (data: {
         assignmentId: string;
-        studentId: string;
         testId: string;
-        registerNo: string;
-        name: string;
-        department: string;
       }) => {
-        console.log(`👨‍🎓 [Socket.IO] Student joined exam: ${data.name} (${data.registerNo}) [Assignment: ${data.assignmentId}]`);
-
-        socket.join(`exam_${data.assignmentId}`);
-        socket.join(`test_${data.testId}`);
+        if (!user || user.role !== Role.STUDENT) {
+          console.warn(`🛑 [Socket.IO] Unauthorized student_join_exam request`);
+          return;
+        }
 
         try {
           const assignment = await prisma.testAssignment.findUnique({
             where: { id: data.assignmentId },
-            include: { test: true },
+            include: { test: true, student: true },
           });
 
-          const totalSec = assignment?.test?.durationMinutes ? assignment.test.durationMinutes * 60 : 10800;
-          const elapsedSec = assignment?.startedAt
+          if (!assignment || assignment.studentId !== user.id) {
+            console.warn(`🛑 [Socket.IO] Student ${user.id} not authorized for assignment ${data.assignmentId}`);
+            return;
+          }
+
+          console.log(`👨‍🎓 [Socket.IO] Student joined exam: ${assignment.student.name} [Assignment: ${assignment.id}]`);
+
+          socket.join(`exam_${assignment.id}`);
+          socket.join(`test_${assignment.testId}`);
+
+          const totalSec = assignment.test?.durationMinutes ? assignment.test.durationMinutes * 60 : 10800;
+          const elapsedSec = assignment.startedAt
             ? Math.floor((Date.now() - new Date(assignment.startedAt).getTime()) / 1000)
             : 0;
 
           const currentStudent: ConnectedStudent = {
             socketId: socket.id,
-            studentId: data.studentId,
-            assignmentId: data.assignmentId,
-            testId: data.testId,
-            registerNo: data.registerNo,
-            name: data.name,
-            department: data.department,
+            studentId: assignment.studentId,
+            assignmentId: assignment.id,
+            testId: assignment.testId,
+            registerNo: assignment.student.registerNo || 'N/A',
+            name: assignment.student.name,
+            department: assignment.student.department,
             currentQuestion: 1,
             remainingSec: Math.max(0, totalSec - elapsedSec),
-            violationCount: assignment?.violationCount || 0,
-            riskLevel: (assignment?.riskLevel as RiskLevel) || RiskLevel.SAFE,
+            violationCount: assignment.violationCount || 0,
+            riskLevel: (assignment.riskLevel as RiskLevel) || RiskLevel.SAFE,
             status: 'ONLINE',
             lastSeen: new Date(),
           };
 
-          activeStudents.set(data.assignmentId, currentStudent);
-
-          // Broadcast status change to faculty room
-          io.to(`faculty_${data.testId}`).emit('student_status_changed', currentStudent);
+          activeStudents.set(assignment.id, currentStudent);
+          io.to(`faculty_${assignment.testId}`).emit('student_status_changed', currentStudent);
         } catch (error: any) {
           console.error('❌ [Socket.IO] Error handling student_join_exam:', error.message);
         }
@@ -135,8 +171,10 @@ export function setupInvigilatorHub(io: Server) {
     socket.on(
       'student_heartbeat',
       async (data: { assignmentId: string; currentQuestion: number; remainingSec: number }) => {
+        if (!user || user.role !== Role.STUDENT) return;
+
         const student = activeStudents.get(data.assignmentId);
-        if (student) {
+        if (student && student.studentId === user.id) {
           student.currentQuestion = data.currentQuestion;
           student.remainingSec = data.remainingSec;
           student.status = 'ONLINE';
@@ -158,10 +196,12 @@ export function setupInvigilatorHub(io: Server) {
     socket.on(
       'security_violation_event',
       async (data: { assignmentId: string; violationType: string; details?: string }) => {
-        console.warn(`🚨 [Socket.IO] Violation logged for assignment ${data.assignmentId}: ${data.violationType}`);
+        if (!user || user.role !== Role.STUDENT) return;
 
         const student = activeStudents.get(data.assignmentId);
-        let violationCount = (student?.violationCount || 0) + 1;
+        if (!student || student.studentId !== user.id) return;
+
+        let violationCount = student.violationCount + 1;
         let riskLevel: RiskLevel = RiskLevel.SAFE;
 
         if (violationCount >= 4) {
@@ -170,10 +210,8 @@ export function setupInvigilatorHub(io: Server) {
           riskLevel = RiskLevel.WARNING;
         }
 
-        if (student) {
-          student.violationCount = violationCount;
-          student.riskLevel = riskLevel;
-        }
+        student.violationCount = violationCount;
+        student.riskLevel = riskLevel;
 
         try {
           await prisma.violationLog.create({
@@ -189,27 +227,29 @@ export function setupInvigilatorHub(io: Server) {
             data: { violationCount, riskLevel },
           });
 
-          const test = student ? await prisma.mockTest.findUnique({ where: { id: student.testId } }) : null;
+          const test = await prisma.mockTest.findUnique({ where: { id: student.testId } });
           const maxViolations = test?.maxViolations || 5;
 
           const violationPayload = {
             assignmentId: data.assignmentId,
-            studentName: student?.name || 'Student',
+            studentName: student.name,
             violationType: data.violationType,
             violationCount,
             riskLevel,
             timestamp: new Date(),
           };
 
-          if (student?.testId) {
-            io.to(`faculty_${student.testId}`).emit('student_violation_logged', violationPayload);
-          }
+          io.to(`faculty_${student.testId}`).emit('student_violation_logged', violationPayload);
 
           if (violationCount >= maxViolations) {
-            console.error(`⛔ [Socket.IO] Max violations reached (${violationCount}/${maxViolations}). Triggering auto submit.`);
+            console.error(`⛔ [Socket.IO] Max violations reached (${violationCount}/${maxViolations}). Triggering force transaction.`);
+            await forceSubmitAssignment(data.assignmentId, '127.0.0.1', { id: 'SYSTEM' });
             io.to(`exam_${data.assignmentId}`).emit('force_auto_submit', {
               reason: `Maximum violation limit (${maxViolations}) exceeded. Exam automatically submitted.`,
             });
+            
+            student.status = 'DISCONNECTED';
+            io.to(`faculty_${student.testId}`).emit('student_status_changed', student);
           }
         } catch (error: any) {
           console.error('❌ [Socket.IO] Error handling security_violation_event:', error.message);
@@ -219,16 +259,31 @@ export function setupInvigilatorHub(io: Server) {
 
     // Student Exam Submission Event
     socket.on('student_submit_exam', (data: { assignmentId: string }) => {
-      console.log(`🏁 [Socket.IO] Student submitted exam for assignment: ${data.assignmentId}`);
+      if (!user || user.role !== Role.STUDENT) return;
+
       const student = activeStudents.get(data.assignmentId);
-      if (student) {
+      if (student && student.studentId === user.id) {
         student.status = 'DISCONNECTED';
         io.to(`faculty_${student.testId}`).emit('student_status_changed', student);
       }
     });
 
     // Faculty sends warning message to student
-    socket.on('faculty_send_warning', (data: { assignmentId: string; message: string }) => {
+    socket.on('faculty_send_warning', async (data: { assignmentId: string; message: string }) => {
+      if (!user || (user.role !== Role.FACULTY && user.role !== Role.ADMIN)) return;
+
+      const assignment = await prisma.testAssignment.findUnique({
+        where: { id: data.assignmentId },
+        include: { test: { include: { invigilators: { where: { facultyId: user.id } } } } }
+      });
+
+      if (!assignment) return;
+
+      if (user.role === Role.FACULTY && assignment.test.createdById !== user.id && assignment.test.invigilators.length === 0) {
+        console.warn(`🛑 [Socket.IO] Faculty user ${user.id} unauthorized to warn student in test ${assignment.testId}`);
+        return;
+      }
+
       console.log(`💬 [Socket.IO] Faculty warning sent to assignment ${data.assignmentId}: ${data.message}`);
       io.to(`exam_${data.assignmentId}`).emit('faculty_warning_received', {
         message: data.message,
@@ -237,11 +292,37 @@ export function setupInvigilatorHub(io: Server) {
     });
 
     // Faculty forces immediate submit for high-risk student
-    socket.on('faculty_force_submit', (data: { assignmentId: string; reason: string }) => {
-      console.log(`⚡ [Socket.IO] Faculty force submit requested for assignment ${data.assignmentId}`);
-      io.to(`exam_${data.assignmentId}`).emit('force_auto_submit', {
-        reason: data.reason || 'Invigilator issued remote termination.',
+    socket.on('faculty_force_submit', async (data: { assignmentId: string; reason: string }) => {
+      if (!user || (user.role !== Role.FACULTY && user.role !== Role.ADMIN)) return;
+
+      const assignment = await prisma.testAssignment.findUnique({
+        where: { id: data.assignmentId },
+        include: { test: { include: { invigilators: { where: { facultyId: user.id } } } } }
       });
+
+      if (!assignment) return;
+
+      if (user.role === Role.FACULTY && assignment.test.createdById !== user.id && assignment.test.invigilators.length === 0) {
+        console.warn(`🛑 [Socket.IO] Faculty user ${user.id} unauthorized to force submit assignment ${data.assignmentId}`);
+        return;
+      }
+
+      try {
+        console.log(`⚡ [Socket.IO] Faculty force submit executing transaction for assignment ${data.assignmentId}`);
+        await forceSubmitAssignment(data.assignmentId, '127.0.0.1', user);
+        
+        io.to(`exam_${data.assignmentId}`).emit('force_auto_submit', {
+          reason: data.reason || 'Invigilator issued remote termination.',
+        });
+
+        const student = activeStudents.get(data.assignmentId);
+        if (student) {
+          student.status = 'DISCONNECTED';
+          io.to(`faculty_${student.testId}`).emit('student_status_changed', student);
+        }
+      } catch (error: any) {
+        console.error('❌ [Socket.IO] Error executing force submission:', error.message);
+      }
     });
 
     socket.on('disconnect', () => {
@@ -261,4 +342,94 @@ export function broadcastNotification(notif: any) {
   if (globalIo) {
     globalIo.emit('new_notification', notif);
   }
+}
+
+async function forceSubmitAssignment(assignmentId: string, ipAddress: string, triggerUser: any) {
+  return await prisma.$transaction(async (tx) => {
+    const assignment = await tx.testAssignment.findUnique({
+      where: { id: assignmentId },
+      include: {
+        test: {
+          include: {
+            testQuestions: {
+              include: { question: true },
+            },
+          },
+        },
+        responses: true,
+      },
+    });
+
+    if (!assignment) {
+      throw new Error('Assignment not found');
+    }
+
+    let totalScore = 0;
+    let totalAttempted = 0;
+    let totalCorrect = 0;
+
+    const responseMap = new Map();
+    assignment.responses.forEach(r => responseMap.set(r.questionId, r));
+
+    for (const tq of assignment.test.testQuestions) {
+      const q = tq.question;
+      const studentResp = responseMap.get(q.id);
+      const chosenAnswer = studentResp ? studentResp.chosenAnswer : null;
+
+      if (chosenAnswer !== null && chosenAnswer !== undefined && chosenAnswer !== '') {
+        totalAttempted++;
+        const evaluation = GateScoringService.evaluateResponse(
+          {
+            id: q.id,
+            type: q.type,
+            marks: q.marks,
+            negativeMarks: q.negativeMarks,
+            correctAnswer: q.correctAnswer,
+          },
+          chosenAnswer
+        );
+
+        totalScore += evaluation.marksObtained;
+        if (evaluation.isCorrect) totalCorrect++;
+
+        if (studentResp) {
+          await tx.questionResponse.update({
+            where: { id: studentResp.id },
+            data: {
+              isCorrect: evaluation.isCorrect,
+              marksObtained: evaluation.marksObtained,
+            },
+          });
+        }
+      }
+    }
+
+    const finalScore = Math.max(0, Number(totalScore.toFixed(2)));
+    const accuracy = totalAttempted > 0 ? (totalCorrect / totalAttempted) * 100 : 0;
+    const timeTakenSec = Math.floor((Date.now() - new Date(assignment.startedAt || Date.now()).getTime()) / 1000);
+
+    const updated = await tx.testAssignment.update({
+      where: { id: assignmentId },
+      data: {
+        status: 'COMPLETED',
+        score: finalScore,
+        totalMarks: assignment.test.totalMarks,
+        accuracy,
+        timeTakenSec,
+        submittedAt: new Date(),
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        userId: triggerUser.id === 'SYSTEM' ? null : triggerUser.id,
+        action: 'FORCE_SUBMIT',
+        resource: 'TestAssignment',
+        details: `Invigilator force-submitted assignment ${assignmentId} for student ${assignment.studentId}`,
+        ipAddress: ipAddress,
+      }
+    });
+
+    return updated;
+  });
 }

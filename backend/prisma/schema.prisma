@@ -79,12 +79,17 @@ model User {
   auditLogs    AuditLog[]
   aiConversations AIConversation[]
   aiDocuments  AIDocument[]
+<<<<<<< HEAD
   ragTraces    AIRAGTrace[]
   aiFeedbacks  AIFeedback[]
   aiGeneratedQuestions AIGeneratedQuestion[] @relation("CreatedAIGeneratedQuestions")
   aiQuestionTraces    AIQuestionGenerationTrace[] @relation("CreatedAIQuestionTraces")
   aiSolutions         AISolution[] @relation("CreatedAISolutions")
   aiExamAssemblyTraces AIExamAssemblyTrace[] @relation("CreatedAIExamAssemblyTraces")
+=======
+  aiPracticeAttempts AIPracticeAttempt[]
+  invigilatorAssignments InvigilatorAssignment[]
+>>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 }
 
 model Subject {
@@ -140,6 +145,11 @@ model Question {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
+  generatedByAI   Boolean                 @default(false)
+  generationModel String?
+  reviewStatus    AIQuestionReviewStatus?
+  aiSources       QuestionAISource[]
+
   mockTestQuestions MockTestQuestion[]
   responses         QuestionResponse[]
   aiSolutions       AISolution[]
@@ -158,6 +168,7 @@ model MockTest {
   targetYear         Int?
   targetSection      String?
   isPublished        Boolean            @default(false)
+  status             ExamStatus         @default(DRAFT)
   resultVisibility   ResultVisibility   @default(AFTER_EXAM_ENDS)
   solutionVisibility SolutionVisibility @default(SHOW_AFTER_RESULT)
   shuffleQuestions   Boolean            @default(true)
@@ -171,7 +182,14 @@ model MockTest {
 
   testQuestions      MockTestQuestion[]
   assignments        TestAssignment[]
+<<<<<<< HEAD
   aiExamTrace        AIExamAssemblyTrace?
+=======
+  invigilators       InvigilatorAssignment[]
+
+  @@index([createdById])
+  @@index([status])
+>>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 }
 
 model MockTestQuestion {
@@ -203,6 +221,8 @@ model TestAssignment {
 
   responses       QuestionResponse[]
   violations      ViolationLog[]
+
+  @@index([testId])
 }
 
 model QuestionResponse {
@@ -335,6 +355,7 @@ model AIDocument {
 
   uploadedBy User              @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
   chunks     AIDocumentChunk[]
+  aiSources  QuestionAISource[]
 
   @@index([status])
   @@index([visibility])
@@ -357,6 +378,7 @@ model AIDocumentChunk {
   @@index([documentId])
 }
 
+<<<<<<< HEAD
 enum AIRAGDecision {
   USED
   SKIPPED_GENERAL_KNOWLEDGE
@@ -461,10 +483,16 @@ enum AIGeneratedQuestionStatus {
   GENERATED
   VALIDATED
   PENDING_REVIEW
+=======
+enum AIQuestionReviewStatus {
+  AI_DRAFT
+  REVIEWED
+>>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
   APPROVED
   REJECTED
 }
 
+<<<<<<< HEAD
 enum AIQuestionQualityStatus {
   PASS
   REVIEW
@@ -639,6 +667,60 @@ model AIExamAssemblyTrace {
 
 
 
+=======
+model QuestionAISource {
+  id         String     @id @default(uuid())
+  questionId String
+  documentId String
+  chunkId    String?
+  createdAt  DateTime   @default(now())
+
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  document   AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@index([documentId])
+}
+
+model AIPracticeAttempt {
+  id            String   @id @default(uuid())
+  studentId     String
+  subject       String
+  topic         String
+  difficulty    Difficulty
+  questionCount Int
+  score         Float
+  totalMarks    Float
+  startedAt     DateTime @default(now())
+  completedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  student       User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+enum ExamStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  LIVE
+  COMPLETED
+  ARCHIVED
+}
+
+model InvigilatorAssignment {
+  id        String   @id @default(uuid())
+  testId    String
+  facultyId String
+  createdAt DateTime @default(now())
+
+  test      MockTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  faculty   User     @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@unique([testId, facultyId])
+  @@index([testId])
+  @@index([facultyId])
+}
+>>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 
 
 

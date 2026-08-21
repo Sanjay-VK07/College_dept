@@ -22,10 +22,13 @@ import {
   CheckCircle,
   AlertCircle,
   FileText,
+  Bot,
+  LayoutGrid,
 } from 'lucide-react';
 import io from 'socket.io-client';
 import api from '@/lib/api';
 import { RiskTierTable, LiveStudent } from '@/components/invigilator/RiskTierTable';
+import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 
 export default function InvigilatorDashboard() {
   const router = useRouter();
@@ -36,8 +39,8 @@ export default function InvigilatorDashboard() {
   const [testTitle, setTestTitle] = useState('CS8601 Database Management Systems - Mid-Semester CBT Assessment');
   const [socketConnected, setSocketConnected] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    'LIVE' | 'CREATE_EXAM' | 'QUESTION_BANK' | 'STUDENT_ROSTER' | 'ATTENDANCE' | 'RESULTS' | 'REPORTS'
-  >('LIVE');
+    'OVERVIEW' | 'LIVE' | 'CREATE_EXAM' | 'QUESTION_BANK' | 'STUDENT_ROSTER' | 'ATTENDANCE' | 'RESULTS' | 'REPORTS' | 'AI_ASSISTANT'
+  >('OVERVIEW');
 
   const socketRef = useRef<any>(null);
 
@@ -94,7 +97,10 @@ export default function InvigilatorDashboard() {
 
   useEffect(() => {
     const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
-    const socket = io(socketUrl);
+    const token = localStorage.getItem('gsmas_token');
+    const socket = io(socketUrl, {
+      auth: { token }
+    });
     socketRef.current = socket;
 
     socket.on('connect', () => {
@@ -168,6 +174,9 @@ export default function InvigilatorDashboard() {
 
   const [dbStudents, setDbStudents] = useState<any[]>([]);
   const [dbResults, setDbResults] = useState<any[]>([]);
+  const [dashboardStats, setDashboardStats] = useState<any>(null);
+  const [examsList, setExamsList] = useState<any[]>([]);
+  const [statsLoading, setStatsLoading] = useState(true);
 
   useEffect(() => {
     fetchFacultyData();
@@ -201,17 +210,38 @@ export default function InvigilatorDashboard() {
   };
 
   const fetchFacultyData = async () => {
+    setStatsLoading(true);
     try {
-      const [qRes, sRes, rRes] = await Promise.all([
+      const [qRes, sRes, rRes, overviewRes, examsRes] = await Promise.all([
         api.get('/admin/questions'),
         api.get('/admin/students'),
         api.get('/admin/results-ledger'),
+        api.get('/admin/overview'),
+        api.get('/admin/exams'),
       ]);
       if (qRes.data?.success) setQuestionsList(qRes.data.data);
       if (sRes.data?.success) setDbStudents(sRes.data.data);
       if (rRes.data?.success) setDbResults(rRes.data.data);
+      if (overviewRes.data?.success) setDashboardStats(overviewRes.data.data);
+      if (examsRes.data?.success) setExamsList(examsRes.data.data);
     } catch (e) {
       console.error('Error loading faculty datasets:', e);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
+  const handleStatusTransition = async (examId: string, newStatus: string) => {
+    try {
+      const res = await api.put(`/admin/exams/${examId}/status`, { status: newStatus });
+      if (res.data?.success) {
+        await fetchFacultyData();
+        if (examId === testId) {
+          await fetchAttendanceData();
+        }
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to update exam status.');
     }
   };
 
@@ -327,6 +357,7 @@ export default function InvigilatorDashboard() {
         {/* Navigation Tabs */}
         <div className="flex overflow-x-auto border-b border-slate-200 space-x-1 pb-1">
           {[
+            { id: 'OVERVIEW', label: 'Dashboard Overview', icon: LayoutGrid },
             { id: 'LIVE', label: 'Live Invigilation Monitor', icon: Radio, badge: students.length },
             { id: 'CREATE_EXAM', label: 'Create Examination', icon: Plus },
             { id: 'QUESTION_BANK', label: 'Question Bank', icon: BookOpen, badge: questionsList.length },
@@ -358,6 +389,183 @@ export default function InvigilatorDashboard() {
             );
           })}
         </div>
+
+        {/* TAB 0: DASHBOARD OVERVIEW */}
+        {activeTab === 'OVERVIEW' && (
+          <div className="space-y-6">
+            {/* Stat Widgets */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="erp-card p-4 space-y-2">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Assigned Exams</span>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-extrabold text-slate-900">{dashboardStats?.assignedExams ?? 0}</span>
+                  <span className="text-[10px] text-slate-400">Total papers</span>
+                </div>
+              </div>
+              <div className="erp-card p-4 space-y-2">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Active Live Session</span>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-extrabold text-emerald-600">{dashboardStats?.liveExams ?? 0}</span>
+                  <span className="text-[10px] text-emerald-600 font-semibold animate-pulse">● Live Now</span>
+                </div>
+              </div>
+              <div className="erp-card p-4 space-y-2">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Assigned Candidates</span>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-extrabold text-slate-900">{dashboardStats?.students ?? 0}</span>
+                  <span className="text-[10px] text-slate-400">Registered</span>
+                </div>
+              </div>
+              <div className="erp-card p-4 space-y-2">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Avg Attendance Rate</span>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-extrabold text-[#1E40AF]">{dashboardStats?.attendanceRate ?? 100}%</span>
+                  <span className="text-[10px] text-slate-400">Turnout</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Examinations List Table */}
+            <div className="erp-card p-0 overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 flex justify-between items-center">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Assigned Institutional Examinations</h3>
+                  <p className="text-[11px] text-slate-500">Select an exam to open the live invigilation panel or manage its lifecycle status.</p>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-[10px] uppercase font-bold tracking-wider text-slate-500 border-b border-slate-200">
+                      <th className="px-5 py-3">Exam / Course</th>
+                      <th className="px-5 py-3">Target Department</th>
+                      <th className="px-5 py-3">Duration & Marks</th>
+                      <th className="px-5 py-3">Status</th>
+                      <th className="px-5 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {examsList.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-5 py-8 text-center text-slate-400">
+                          No examinations found. Select "Create Examination" to add a new exam paper.
+                        </td>
+                      </tr>
+                    ) : (
+                      examsList.map((exam) => {
+                        const statusColors: Record<string, string> = {
+                          DRAFT: 'bg-slate-100 text-slate-700',
+                          SCHEDULED: 'bg-blue-100 text-blue-800',
+                          PUBLISHED: 'bg-amber-100 text-amber-800',
+                          LIVE: 'bg-emerald-100 text-emerald-800 animate-pulse',
+                          COMPLETED: 'bg-purple-100 text-purple-800',
+                          ARCHIVED: 'bg-slate-200 text-slate-800',
+                        };
+
+                        return (
+                          <tr key={exam.id} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="px-5 py-3.5">
+                              <span className="font-bold text-slate-950 block">{exam.title}</span>
+                              <span className="text-[10px] text-slate-400 font-mono block">ID: {exam.id}</span>
+                            </td>
+                            <td className="px-5 py-3.5 text-slate-600">{exam.targetDepartment}</td>
+                            <td className="px-5 py-3.5">
+                              <span className="font-semibold text-slate-800 block">{exam.durationMinutes} Mins</span>
+                              <span className="text-[10px] text-slate-500 block">{exam.totalMarks} Marks ({exam._count?.testQuestions ?? 0} Questions)</span>
+                            </td>
+                            <td className="px-5 py-3.5">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusColors[exam.status] || 'bg-slate-100 text-slate-800'}`}>
+                                {exam.status}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3.5 text-right space-x-1 whitespace-nowrap">
+                              {/* Status transitions actions */}
+                              {exam.status === 'DRAFT' && (
+                                <>
+                                  <button
+                                    onClick={() => handleStatusTransition(exam.id, 'PUBLISHED')}
+                                    className="px-2 py-1 bg-amber-600 text-white font-semibold rounded hover:bg-amber-700 transition-colors text-[10px]"
+                                  >
+                                    Publish
+                                  </button>
+                                  <button
+                                    onClick={() => handleStatusTransition(exam.id, 'SCHEDULED')}
+                                    className="px-2 py-1 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 transition-colors text-[10px]"
+                                  >
+                                    Schedule
+                                  </button>
+                                </>
+                              )}
+                              {exam.status === 'SCHEDULED' && (
+                                <>
+                                  <button
+                                    onClick={() => handleStatusTransition(exam.id, 'PUBLISHED')}
+                                    className="px-2 py-1 bg-amber-600 text-white font-semibold rounded hover:bg-amber-700 transition-colors text-[10px]"
+                                  >
+                                    Publish
+                                  </button>
+                                  <button
+                                    onClick={() => handleStatusTransition(exam.id, 'DRAFT')}
+                                    className="px-2 py-1 bg-slate-600 text-white font-semibold rounded hover:bg-slate-700 transition-colors text-[10px]"
+                                  >
+                                    Revert to Draft
+                                  </button>
+                                </>
+                              )}
+                              {exam.status === 'PUBLISHED' && (
+                                <>
+                                  <button
+                                    onClick={() => handleStatusTransition(exam.id, 'LIVE')}
+                                    className="px-2 py-1 bg-emerald-600 text-white font-semibold rounded hover:bg-emerald-700 transition-colors text-[10px]"
+                                  >
+                                    Start Live Test
+                                  </button>
+                                  <button
+                                    onClick={() => handleStatusTransition(exam.id, 'DRAFT')}
+                                    className="px-2 py-1 bg-slate-600 text-white font-semibold rounded hover:bg-slate-700 transition-colors text-[10px]"
+                                  >
+                                    Revert to Draft
+                                  </button>
+                                </>
+                              )}
+                              {exam.status === 'LIVE' && (
+                                <button
+                                  onClick={() => handleStatusTransition(exam.id, 'COMPLETED')}
+                                  className="px-2 py-1 bg-purple-600 text-white font-semibold rounded hover:bg-purple-700 transition-colors text-[10px]"
+                                >
+                                  End Exam
+                                </button>
+                              )}
+                              {exam.status === 'COMPLETED' && (
+                                <button
+                                  onClick={() => handleStatusTransition(exam.id, 'ARCHIVED')}
+                                  className="px-2 py-1 bg-slate-700 text-white font-semibold rounded hover:bg-slate-800 transition-colors text-[10px]"
+                                >
+                                  Archive
+                                </button>
+                              )}
+
+                              {/* Launch Live Monitor */}
+                              <button
+                                onClick={() => {
+                                  router.push(`/faculty/invigilator/${exam.id}`);
+                                  setActiveTab('LIVE');
+                                }}
+                                className="px-2 py-1 border border-slate-300 text-slate-700 font-semibold rounded hover:bg-slate-50 transition-colors text-[10px]"
+                              >
+                                Launch Monitor
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* TAB 1: LIVE INVIGILATION MONITOR */}
         {activeTab === 'LIVE' && (
@@ -516,11 +724,28 @@ export default function InvigilatorDashboard() {
                   <div key={q.id} className="erp-card space-y-2">
                     <div className="flex justify-between items-center pb-2 border-b border-slate-200">
                       <div className="flex items-center space-x-2">
-                        <span className="erp-badge-blue">{q.code}</span>
+                        <span className="erp-badge-blue">{q.code || 'GATE'}</span>
                         <span className="erp-badge-gray">{q.type}</span>
                         <span className="erp-badge-gray">Difficulty: {q.difficulty}</span>
                       </div>
-                      <span className="text-xs font-mono font-bold text-emerald-700">+{q.marks} Marks</span>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-mono font-bold text-emerald-700">+{q.marks} Marks</span>
+                        <button
+                          onClick={async () => {
+                            if (confirm('Are you sure you want to delete this question from the database?')) {
+                              try {
+                                await api.delete(`/admin/questions/${q.id}`);
+                                fetchFacultyData();
+                              } catch (e: any) {
+                                alert(e.response?.data?.message || 'Failed to delete question.');
+                              }
+                            }
+                          }}
+                          className="text-red-500 hover:text-red-700 transition-colors p-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                     <p className="text-xs text-slate-800 leading-relaxed font-medium">{q.text}</p>
                   </div>
@@ -565,9 +790,10 @@ export default function InvigilatorDashboard() {
                           <button
                             onClick={async () => {
                               try {
-                                await api.post(`/admin/students/${s.id}/reset-attempts`);
+                                await api.post(`/admin/students/${s.id}/reset-attempts`, { testId });
                                 alert(`Reset attempts for candidate ${s.name}`);
-                              } catch (e) {
+                              } catch (e: any) {
+                                alert(e.response?.data?.message || 'Failed to reset attempts.');
                                 console.error(e);
                               }
                             }}
