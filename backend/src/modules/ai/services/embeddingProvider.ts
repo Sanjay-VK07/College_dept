@@ -1,10 +1,13 @@
 import { ENV } from '../../../config/env';
-<<<<<<< HEAD
 import { performance } from 'perf_hooks';
 
 export interface EmbeddingResult {
   embedding: number[];
   durationMs: number;
+}
+
+export interface IEmbeddingProvider {
+  getEmbedding(text: string): Promise<number[]>;
 }
 
 export class EmbeddingProvider {
@@ -25,17 +28,20 @@ export class EmbeddingProvider {
     }
 
     try {
-      // Generate deterministic feature vector
+      const provider = EmbeddingFactory.getProvider();
+      const embedding = await provider.getEmbedding(text);
+      const durationMs = Math.round(performance.now() - startTime);
+      return {
+        embedding,
+        durationMs,
+      };
+    } catch (err: any) {
       const vector = this.generateDeterministicVector(text, dimension);
       const durationMs = Math.round(performance.now() - startTime);
-
       return {
         embedding: vector,
         durationMs,
       };
-    } catch (err: any) {
-      console.error('[EmbeddingProvider Error]:', err.message || err);
-      throw new Error(`Embedding generation failed: ${err.message}`);
     }
   }
 
@@ -50,13 +56,12 @@ export class EmbeddingProvider {
     for (let i = 0; i < normalized.length; i++) {
       const char = normalized.charCodeAt(i);
       hash = (hash << 5) - hash + char;
-      hash |= 0; // Convert to 32bit integer
+      hash |= 0;
 
       const index = Math.abs(hash) % dimension;
       vector[index] += (char % 10) / 10.0;
     }
 
-    // L2 Normalize vector
     const norm = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0));
     if (norm > 0) {
       for (let i = 0; i < dimension; i++) {
@@ -65,13 +70,10 @@ export class EmbeddingProvider {
     }
 
     return vector;
-=======
-
-export interface EmbeddingProvider {
-  getEmbedding(text: string): Promise<number[]>;
+  }
 }
 
-export class GeminiEmbeddingProvider implements EmbeddingProvider {
+export class GeminiEmbeddingProvider implements IEmbeddingProvider {
   private apiKey: string;
   private model: string;
   private dimension: number;
@@ -112,7 +114,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-export class OpenAIEmbeddingProvider implements EmbeddingProvider {
+export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
   private apiKey: string;
   private model: string;
   private dimension: number;
@@ -155,7 +157,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-export class LocalEmbeddingProvider implements EmbeddingProvider {
+export class LocalEmbeddingProvider implements IEmbeddingProvider {
   private dimension: number;
 
   constructor() {
@@ -163,8 +165,6 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
   }
 
   public async getEmbedding(text: string): Promise<number[]> {
-    // Generate a deterministic unit-length vector based on text content hash.
-    // This is strictly for OFFLINE/DEVELOPMENT/TESTING mode.
     let hash = 0;
     for (let i = 0; i < text.length; i++) {
       hash = text.charCodeAt(i) + ((hash << 5) - hash);
@@ -173,17 +173,15 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
     const result: number[] = [];
     let seed = Math.abs(hash) || 1;
 
-    // Linear Congruential Generator (LCG) to generate pseudo-random dimensions deterministically
     const a = 1664525;
     const c = 1013904223;
     const m = Math.pow(2, 32);
 
     for (let i = 0; i < this.dimension; i++) {
       seed = (a * seed + c) % m;
-      result.push((seed / m) * 2 - 1); // Range: [-1, 1]
+      result.push((seed / m) * 2 - 1);
     }
 
-    // Normalize vector to unit length
     let norm = 0;
     for (const val of result) {
       norm += val * val;
@@ -200,7 +198,7 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
 }
 
 export class EmbeddingFactory {
-  public static getProvider(): EmbeddingProvider {
+  public static getProvider(): IEmbeddingProvider {
     const provider = (process.env.EMBEDDING_PROVIDER || 'local').toLowerCase();
 
     if (provider === 'openai') {
@@ -210,6 +208,5 @@ export class EmbeddingFactory {
       return new GeminiEmbeddingProvider();
     }
     return new LocalEmbeddingProvider();
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
   }
 }

@@ -1,6 +1,5 @@
 import { prisma } from '../../../config/prisma';
-<<<<<<< HEAD
-import { Role, QuestionType, Difficulty, AIGeneratedQuestionStatus, AIQuestionQualityStatus, AIQuestionSimilarityStatus } from '@prisma/client';
+import { Role, QuestionType, Difficulty, AIGeneratedQuestionStatus, AIQuestionQualityStatus, AIQuestionSimilarityStatus, AIQuestionReviewStatus } from '@prisma/client';
 import { RAGService } from './ragService';
 import { AIProviderService } from './aiProviderService';
 import { QuestionValidationService } from './questionValidationService';
@@ -8,14 +7,40 @@ import { QuestionSimilarityService } from './questionSimilarityService';
 import { QuestionGenerationPrompt } from '../prompts/questionGenerationPrompt';
 import { GenerateQuestionsDTO, QuestionGenerationResult, RawGeneratedQuestion } from '../types/questionGenerationTypes';
 import { ENV } from '../../../config/env';
+import { LLMFactory } from './llmProvider';
+import { AuditLogger } from '../../../services/auditLogger';
+
+export interface GenerateQuestionsParams {
+  subject: string;
+  topic: string;
+  difficulty: Difficulty;
+  questionType: QuestionType;
+  count: number;
+  marks: number;
+  negativeMarking: number;
+  documentIds?: string[];
+  userId?: string;
+  role?: Role;
+}
 
 export class QuestionGenerationService {
   private static MAX_GENERATION_BATCH_SIZE = 10;
 
+  public static async generateQuestions(
+    userIdOrParams: string | GenerateQuestionsParams,
+    role?: Role,
+    dto?: GenerateQuestionsDTO
+  ): Promise<any> {
+    if (typeof userIdOrParams === 'object') {
+      return this.generateQuestionsDirect(userIdOrParams);
+    }
+    return this.generateQuestionsPipeline(userIdOrParams, role!, dto!);
+  }
+
   /**
    * Main production pipeline for AI GATE Question Generation using RAG knowledge base.
    */
-  public static async generateQuestions(
+  public static async generateQuestionsPipeline(
     userId: string,
     role: Role,
     dto: GenerateQuestionsDTO
@@ -444,26 +469,8 @@ export class QuestionGenerationService {
       message: 'Generated question updated successfully.',
       question: updated,
     };
-=======
-import { Role, QuestionType, Difficulty, AIQuestionReviewStatus } from '@prisma/client';
-import { RAGService } from './ragService';
-import { LLMFactory } from './llmProvider';
-import { AuditLogger } from '../../../services/auditLogger';
+  }
 
-export interface GenerateQuestionsParams {
-  subject: string;
-  topic: string;
-  difficulty: Difficulty;
-  questionType: QuestionType;
-  count: number;
-  marks: number;
-  negativeMarking: number;
-  documentIds?: string[];
-  userId: string;
-  role: Role;
-}
-
-export class QuestionGenerationService {
   /**
    * Normalizes question text to facilitate duplicate detection.
    */
@@ -615,8 +622,10 @@ export class QuestionGenerationService {
   /**
    * Main Question Generation pipeline utilizing retrieved document contexts.
    */
-  public static async generateQuestions(params: GenerateQuestionsParams): Promise<any[]> {
-    const { subject, topic, difficulty, questionType, count, marks, negativeMarking, documentIds, userId, role } = params;
+  public static async generateQuestionsDirect(params: GenerateQuestionsParams): Promise<any[]> {
+    const { subject, topic, difficulty, questionType, count, marks, negativeMarking, documentIds } = params;
+    const userId = params.userId || '';
+    const role = params.role || Role.FACULTY;
 
     // 1. Role Authorization Check
     if (role !== Role.ADMIN && role !== Role.FACULTY) {
@@ -763,6 +772,5 @@ NAT (Numerical Answer Type):
     });
 
     return validatedQuestions;
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
   }
 }

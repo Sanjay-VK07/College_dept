@@ -22,13 +22,9 @@ export interface ChatResponse {
   conversationId?: string;
   title?: string;
   message?: AIMessage;
-<<<<<<< HEAD
-  sources?: Array<{ documentId: string; title: string }>;
-=======
   answer?: string;
-  sources?: any[];
+  sources?: Array<{ documentId: string; title: string }> | any[];
   messageId?: string;
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
   error?: string;
 }
 
@@ -36,6 +32,23 @@ export interface AIFeedbackPayload {
   rating: 'HELPFUL' | 'NOT_HELPFUL';
   category?: 'INCORRECT' | 'NOT_RELEVANT' | 'INSUFFICIENT_CONTEXT' | 'GOOD_ANSWER' | 'OTHER';
   comment?: string;
+}
+
+export interface GenerateQuestionsParams {
+  subjectId?: string;
+  moduleId?: string;
+  topicId?: string;
+  subtopicId?: string;
+  questionType?: string;
+  difficulty?: string;
+  count?: number;
+  documentId?: string;
+  generationRequestId?: string;
+  subject?: string;
+  topic?: string;
+  marks?: number;
+  negativeMarking?: number;
+  documentIds?: string[];
 }
 
 export const aiService = {
@@ -154,20 +167,14 @@ export const aiService = {
   },
 
   /**
-   * AI Question Generation & Faculty Review APIs
+   * AI Question Generation (supports RAG/Faculty review & Phase 2D direct generation)
    */
-  async generateQuestions(params: {
-    subjectId?: string;
-    moduleId?: string;
-    topicId?: string;
-    subtopicId?: string;
-    questionType?: string;
-    difficulty?: string;
-    count?: number;
-    documentId?: string;
-    generationRequestId?: string;
-  }) {
-    const res = await api.post('/ai/questions/generate', params);
+  async generateQuestions(params: GenerateQuestionsParams) {
+    if ('generationRequestId' in params || 'subjectId' in params || 'moduleId' in params || !('marks' in params)) {
+      const res = await api.post('/ai/questions/generate', params);
+      return res.data;
+    }
+    const res = await api.post('/ai/generate-questions', params);
     return res.data;
   },
 
@@ -292,20 +299,6 @@ export const aiService = {
 
   async renameConversation(conversationId: string, title: string) {
     const res = await api.post(`/ai/conversations/${conversationId}/rename`, { title });
-    return res.data;
-  },
-
-  async generateQuestions(payload: {
-    subject: string;
-    topic: string;
-    difficulty: string;
-    questionType: string;
-    count: number;
-    marks: number;
-    negativeMarking: number;
-    documentIds?: string[];
-  }) {
-    const res = await api.post('/ai/generate-questions', payload);
     return res.data;
   },
 

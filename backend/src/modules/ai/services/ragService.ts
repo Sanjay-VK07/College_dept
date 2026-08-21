@@ -1,8 +1,10 @@
-<<<<<<< HEAD
-import { Role, AIRAGDecision, AIRAGQualityClassification } from '@prisma/client';
-import { EmbeddingProvider } from './embeddingProvider';
+import { prisma } from '../../../config/prisma';
+import { Role, AIRAGDecision, AIRAGQualityClassification, AIDocumentVisibility, AIDocumentStatus } from '@prisma/client';
+import { EmbeddingProvider, EmbeddingFactory } from './embeddingProvider';
 import { VectorSearchService } from './vectorSearchService';
 import { RAGEvaluationService, EvaluationResult, RetrievedChunk } from './ragEvaluationService';
+import { LLMFactory } from './llmProvider';
+import { AuditLogger } from '../../../services/auditLogger';
 import { performance } from 'perf_hooks';
 
 export interface RAGOrchestrationResult {
@@ -16,12 +18,7 @@ export interface RAGOrchestrationResult {
   contextAssemblyDurationMs: number;
   fallbackReason?: string;
   errorCode?: string;
-=======
-import { prisma } from '../../../config/prisma';
-import { Role, AIDocumentVisibility, AIDocumentStatus } from '@prisma/client';
-import { EmbeddingFactory } from './embeddingProvider';
-import { LLMFactory } from './llmProvider';
-import { AuditLogger } from '../../../services/auditLogger';
+}
 
 export interface RAGSource {
   documentId: string;
@@ -34,12 +31,10 @@ export interface RAGSource {
 export interface RAGResult {
   answer: string;
   sources: RAGSource[];
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 }
 
 export class RAGService {
   /**
-<<<<<<< HEAD
    * Orchestrates full RAG Pipeline: query embedding -> vector search -> quality evaluation -> provenance validation.
    */
   public static async executeRAGPipeline(params: {
@@ -173,7 +168,10 @@ export class RAGService {
       embeddingDurationMs,
       vectorSearchDurationMs,
       contextAssemblyDurationMs,
-=======
+    };
+  }
+
+  /**
    * Calculates cosine similarity between two float vectors.
    */
   private static cosineSimilarity(vecA: number[], vecB: number[]): number {
@@ -363,7 +361,6 @@ ${contextText}
     return {
       answer: rawAnswerText,
       sources,
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
     };
   }
 }

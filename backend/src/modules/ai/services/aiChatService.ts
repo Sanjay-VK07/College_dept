@@ -11,12 +11,8 @@ import { buildStudentPrompt } from '../prompts/studentPrompt';
 import { buildFacultyPrompt } from '../prompts/facultyPrompt';
 import { buildAdminPrompt } from '../prompts/adminPrompt';
 import { ChatResponseData } from '../types/ai.types';
-<<<<<<< HEAD
 import { performance } from 'perf_hooks';
-=======
-import { RAGService } from './ragService';
 import { AIStatsService } from './aiStatsService';
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 
 export class AIChatService {
   /**
@@ -144,7 +140,6 @@ export class AIChatService {
       userMsg = await ConversationService.saveUserMessage(conversation.id, trimmedMsg, requestId);
     }
 
-<<<<<<< HEAD
     // 4. Initialize AIRAGTrace (status = PROCESSING) with dual-path upsert/create logic
     let trace: any = null;
     try {
@@ -160,8 +155,6 @@ export class AIChatService {
 
     const traceId = trace ? trace.id : '';
 
-    // 5. Intent Classification
-=======
     // --- Phase 2D Intent Routing ---
     
     // A. Predefined Database Query statistics routing
@@ -265,8 +258,7 @@ export class AIChatService {
 
     // --- End Phase 2D Routing (Fallback to Phase 1 General Chat) ---
 
-    // 4. Intent Classification
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
+    // 5. Intent Classification
     const intent = IntentService.classifyIntent(trimmedMsg);
 
     // 6. RAG Pipeline Execution (If applicable)

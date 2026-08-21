@@ -16,13 +16,24 @@ export class FacultyRecommendationService {
    * Generates evidence-based actionable recommendations for Faculty & Admins.
    */
   public static async generateRecommendations(department: string = 'Computer Science and Engineering'): Promise<FacultyRecommendation[]> {
-    const recommendations: FacultyRecommendation[] = [];
-
     const [qbHealth, cohortOverview, examsIntelligence] = await Promise.all([
       QuestionBankIntelligenceService.getQuestionBankHealth(),
       CohortIntelligenceService.getCohortIntelligence(department),
       ExamIntelligenceService.getAllExamsIntelligence(),
     ]);
+
+    return this.generateRecommendationsFromData(qbHealth, cohortOverview, examsIntelligence);
+  }
+
+  /**
+   * Generates recommendations from pre-fetched metrics without triggering duplicate queries.
+   */
+  public static generateRecommendationsFromData(
+    qbHealth: any,
+    cohortOverview: any,
+    examsIntelligence: any[]
+  ): FacultyRecommendation[] {
+    const recommendations: FacultyRecommendation[] = [];
 
     // 1. Recommendation for Pending AI Questions needing review
     if (qbHealth.pendingAiQuestions > 0) {
@@ -37,7 +48,7 @@ export class FacultyRecommendationService {
     }
 
     // 2. Recommendation for Academic Gaps
-    const weakTopics = cohortOverview.academicGaps.filter((g) => g.status === 'WEAK_ACADEMIC_AREA');
+    const weakTopics = (cohortOverview.academicGaps || []).filter((g: any) => g.status === 'WEAK_ACADEMIC_AREA');
     if (weakTopics.length > 0) {
       const topWeak = weakTopics[0];
       recommendations.push({
@@ -51,7 +62,7 @@ export class FacultyRecommendationService {
     }
 
     // 3. Recommendation for Question Bank Coverage
-    const lowCoverageSubject = qbHealth.subjectCoverage.find((s) => s.questionCount < 5);
+    const lowCoverageSubject = (qbHealth.subjectCoverage || []).find((s: any) => s.questionCount < 5);
     if (lowCoverageSubject) {
       recommendations.push({
         id: `rec_low_coverage_${Date.now()}`,

@@ -105,26 +105,14 @@ export class AdminController {
         });
       }
 
-      // Perform real database queries for every metric & widget
-      const [
-        totalStudents,
-        totalFaculty,
-        totalQuestions,
-        totalExams,
-        activeExams,
-        todaysExamsCount,
-        pendingApprovalsCount,
-        completedAssignments,
-        activeSessions,
-        deptCounts,
-        difficultyCounts,
-        recentLogs,
-        todaysExamsList,
-        pendingStudentVerifications,
-      ] = await Promise.all([
+      // Perform database queries in controlled small batches (max 3 concurrent queries) to prevent connection pool starvation
+      const [totalStudents, totalFaculty, totalQuestions] = await Promise.all([
         prisma.user.count({ where: { role: Role.STUDENT } }),
         prisma.user.count({ where: { role: Role.FACULTY } }),
         prisma.question.count(),
+      ]);
+
+      const [totalExams, activeExams, todaysExamsCount] = await Promise.all([
         prisma.mockTest.count(),
         prisma.mockTest.count({ where: { isPublished: true } }),
         prisma.mockTest.count({
@@ -132,9 +120,15 @@ export class AdminController {
             startTime: { gte: startOfDay, lte: endOfDay },
           },
         }),
+      ]);
+
+      const [pendingApprovalsCount, completedAssignments, activeSessions] = await Promise.all([
         prisma.mockTest.count({ where: { isPublished: false } }),
         prisma.testAssignment.count({ where: { status: 'COMPLETED' } }),
         prisma.testAssignment.count({ where: { status: 'IN_PROGRESS' } }),
+      ]);
+
+      const [deptCounts, difficultyCounts, recentLogs] = await Promise.all([
         prisma.user.groupBy({
           by: ['department'],
           where: { role: Role.STUDENT },
@@ -151,6 +145,9 @@ export class AdminController {
             user: { select: { name: true, registerNo: true, role: true } },
           },
         }),
+      ]);
+
+      const [todaysExamsList, pendingStudentVerifications] = await Promise.all([
         prisma.mockTest.findMany({
           take: 5,
           where: { isPublished: true },

@@ -1,6 +1,5 @@
-import { PrismaClient, ExamStatus } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { ExamStatus } from '@prisma/client';
+import { prisma } from '../src/config/prisma';
 
 async function run() {
   console.log('🔄 Running data migration for existing MockTest records...');

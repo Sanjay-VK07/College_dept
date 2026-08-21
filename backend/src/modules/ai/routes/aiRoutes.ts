@@ -46,8 +46,6 @@ router.post('/chat', AIChatController.postChatMessage);
 router.get('/conversations', AIChatController.getConversations);
 router.get('/conversations/:conversationId', AIChatController.getConversationById);
 router.delete('/conversations/:conversationId', AIChatController.deleteConversation);
-
-<<<<<<< HEAD
 // User Feedback routes on Assistant messages
 router.post('/messages/:messageId/feedback', AIChatController.postMessageFeedback);
 router.get('/messages/:messageId/feedback', AIChatController.getMessageFeedback);

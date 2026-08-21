@@ -1,6 +1,5 @@
-import { PrismaClient, Role, ExamType, QuestionType, Difficulty, ResultVisibility, SolutionVisibility, RiskLevel } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { Role, ExamType, QuestionType, Difficulty, ResultVisibility, SolutionVisibility, RiskLevel } from '@prisma/client';
+import { prisma } from '../src/config/prisma';
 
 async function main() {
   console.log('🌱 Starting database seed for GSMAS...');

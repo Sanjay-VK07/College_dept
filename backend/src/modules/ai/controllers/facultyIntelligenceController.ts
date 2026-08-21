@@ -15,12 +15,17 @@ export class FacultyIntelligenceController {
 
       const department = req.user.department || 'Computer Science and Engineering';
 
-      const [questionBankHealth, cohortOverview, examsIntelligence, recommendations] = await Promise.all([
+      const [questionBankHealth, cohortOverview, examsIntelligence] = await Promise.all([
         QuestionBankIntelligenceService.getQuestionBankHealth(),
         CohortIntelligenceService.getCohortIntelligence(department),
         ExamIntelligenceService.getAllExamsIntelligence(),
-        FacultyRecommendationService.generateRecommendations(department),
       ]);
+
+      const recommendations = FacultyRecommendationService.generateRecommendationsFromData(
+        questionBankHealth,
+        cohortOverview,
+        examsIntelligence
+      );
 
       return res.status(200).json({
         success: true,

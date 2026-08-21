@@ -81,10 +81,10 @@ export default function StudentDashboard() {
     const clockInterval = setInterval(updateClock, 1000);
 
     fetchDashboardData();
-    // Reactive background polling every 15s to keep timetable and analytics updated without page reload
+    // Reactive background polling every 30s to keep timetable and analytics updated without page reload
     const pollInterval = setInterval(() => {
       fetchDashboardData(true);
-    }, 15000);
+    }, 30000);
 
     return () => {
       clearInterval(clockInterval);

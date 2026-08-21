@@ -79,17 +79,14 @@ model User {
   auditLogs    AuditLog[]
   aiConversations AIConversation[]
   aiDocuments  AIDocument[]
-<<<<<<< HEAD
-  ragTraces    AIRAGTrace[]
-  aiFeedbacks  AIFeedback[]
-  aiGeneratedQuestions AIGeneratedQuestion[] @relation("CreatedAIGeneratedQuestions")
-  aiQuestionTraces    AIQuestionGenerationTrace[] @relation("CreatedAIQuestionTraces")
-  aiSolutions         AISolution[] @relation("CreatedAISolutions")
-  aiExamAssemblyTraces AIExamAssemblyTrace[] @relation("CreatedAIExamAssemblyTraces")
-=======
-  aiPracticeAttempts AIPracticeAttempt[]
+  ragTraces            AIRAGTrace[]
+  aiFeedbacks          AIFeedback[]
+  aiGeneratedQuestions AIGeneratedQuestion[]       @relation("CreatedAIGeneratedQuestions")
+  aiQuestionTraces     AIQuestionGenerationTrace[] @relation("CreatedAIQuestionTraces")
+  aiSolutions          AISolution[]                @relation("CreatedAISolutions")
+  aiExamAssemblyTraces AIExamAssemblyTrace[]        @relation("CreatedAIExamAssemblyTraces")
+  aiPracticeAttempts   AIPracticeAttempt[]
   invigilatorAssignments InvigilatorAssignment[]
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 }
 
 model Subject {
@@ -182,14 +179,11 @@ model MockTest {
 
   testQuestions      MockTestQuestion[]
   assignments        TestAssignment[]
-<<<<<<< HEAD
   aiExamTrace        AIExamAssemblyTrace?
-=======
   invigilators       InvigilatorAssignment[]
 
   @@index([createdById])
   @@index([status])
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 }
 
 model MockTestQuestion {
@@ -378,7 +372,6 @@ model AIDocumentChunk {
   @@index([documentId])
 }
 
-<<<<<<< HEAD
 enum AIRAGDecision {
   USED
   SKIPPED_GENERAL_KNOWLEDGE
@@ -483,16 +476,17 @@ enum AIGeneratedQuestionStatus {
   GENERATED
   VALIDATED
   PENDING_REVIEW
-=======
-enum AIQuestionReviewStatus {
-  AI_DRAFT
-  REVIEWED
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
   APPROVED
   REJECTED
 }
 
-<<<<<<< HEAD
+enum AIQuestionReviewStatus {
+  AI_DRAFT
+  REVIEWED
+  APPROVED
+  REJECTED
+}
+
 enum AIQuestionQualityStatus {
   PASS
   REVIEW
@@ -667,7 +661,6 @@ model AIExamAssemblyTrace {
 
 
 
-=======
 model QuestionAISource {
   id         String     @id @default(uuid())
   questionId String
@@ -720,7 +713,6 @@ model InvigilatorAssignment {
   @@index([testId])
   @@index([facultyId])
 }
->>>>>>> 3f760070b07f9bf338f83776cadbc80c79b61d54
 
 
 

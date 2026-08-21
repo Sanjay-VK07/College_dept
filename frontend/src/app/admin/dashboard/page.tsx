@@ -218,10 +218,10 @@ export default function AdminDashboard() {
     const clockInterval = setInterval(updateClock, 1000);
 
     fetchInitialData();
-    // Reactive background polling every 15 seconds without full page reload or flashing loading screen
+    // Reactive background polling every 30 seconds to update overview and notifications without flashing
     const pollInterval = setInterval(() => {
       fetchInitialData(true);
-    }, 15000);
+    }, 30000);
 
     return () => {
       clearInterval(clockInterval);
@@ -446,28 +446,42 @@ export default function AdminDashboard() {
     if (!silent) setLoading(true);
     setErrorState('');
     try {
-      const [overviewRes, studentsRes, facultyRes, questionsRes, examsRes, resultsRes, settingsRes, notifRes] = await Promise.all([
+      // Group 1: Core overview & notifications
+      const [overviewRes, notifRes] = await Promise.all([
         api.get('/admin/overview'),
-        api.get('/admin/students'),
-        api.get('/admin/faculty'),
-        api.get('/admin/questions'),
-        api.get('/admin/exams'),
-        api.get('/admin/results-ledger'),
-        api.get('/admin/settings'),
         api.get('/notifications'),
       ]);
 
       if (overviewRes.data?.success) setOverview(overviewRes.data.data);
-      if (studentsRes.data?.success) setStudents(studentsRes.data.data);
-      if (facultyRes.data?.success) setFaculty(facultyRes.data.data);
-      if (questionsRes.data?.success) setQuestions(questionsRes.data.data);
-      if (examsRes.data?.success) setExams(examsRes.data.data);
-      if (resultsRes.data?.success) setResultsLedger(resultsRes.data.data);
-      if (settingsRes.data?.success) setSystemSettings(settingsRes.data.data);
       if (notifRes.data?.success) {
         setDbNotifications(notifRes.data.data.notifications || []);
         setUnreadCount(notifRes.data.data.unreadCount || 0);
       }
+
+      // If silent poll, update core stats only
+      if (silent) return;
+
+      // Group 2: Management directories
+      const [studentsRes, facultyRes, questionsRes, examsRes] = await Promise.all([
+        api.get('/admin/students'),
+        api.get('/admin/faculty'),
+        api.get('/admin/questions'),
+        api.get('/admin/exams'),
+      ]);
+
+      if (studentsRes.data?.success) setStudents(studentsRes.data.data);
+      if (facultyRes.data?.success) setFaculty(facultyRes.data.data);
+      if (questionsRes.data?.success) setQuestions(questionsRes.data.data);
+      if (examsRes.data?.success) setExams(examsRes.data.data);
+
+      // Group 3: System settings & ledger
+      const [resultsRes, settingsRes] = await Promise.all([
+        api.get('/admin/results-ledger'),
+        api.get('/admin/settings'),
+      ]);
+
+      if (resultsRes.data?.success) setResultsLedger(resultsRes.data.data);
+      if (settingsRes.data?.success) setSystemSettings(settingsRes.data.data);
     } catch (err: any) {
       console.error('Error fetching admin dashboard data:', err);
       if (!silent) {
