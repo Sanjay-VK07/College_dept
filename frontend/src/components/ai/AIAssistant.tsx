@@ -1,11 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { usePathname } from 'next/navigation';
 import { AIChatButton } from './AIChatButton';
 import { AIChatWindow } from './AIChatWindow';
 import { aiService, AIMessage } from '@/services/aiService';
 
 export const AIAssistant: React.FC = () => {
+  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
@@ -97,7 +99,7 @@ export const AIAssistant: React.FC = () => {
     }
   };
 
-  if (!isAuthenticated || userRole === 'STUDENT') {
+  if (!isAuthenticated || userRole !== 'ADMIN' || !pathname || !pathname.startsWith('/admin')) {
     return null;
   }
 

@@ -1992,8 +1992,8 @@ export default function AdminDashboard() {
                 <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Central Question Bank ({questions.length} Items)</h3>
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="erp-btn-secondary py-1 text-xs cursor-pointer">
-                    <span>Import File (Excel/CSV)</span>
-                    <input type="file" accept=".xlsx,.xls,.csv" onChange={handleQuestionFileUpload} className="hidden" />
+                    <span>Import File (Excel/CSV/PDF)</span>
+                    <input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={handleQuestionFileUpload} className="hidden" />
                   </label>
                   <button onClick={() => setIsAddQuestionOpen(true)} className="erp-btn-primary py-1 text-xs">
                     <Plus className="w-3.5 h-3.5" />

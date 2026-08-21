@@ -822,7 +822,35 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
                           </button>
                         </div>
 
-                        <div className="text-xs text-slate-200 font-semibold">{q.question}</div>
+                        <div className="text-xs text-slate-200 font-semibold">
+                          {(() => {
+                            const text = q.question || q.stem || '';
+                            const imgRegex = /!\[.*?\]\((.*?)\)/;
+                            const match = text.match(imgRegex);
+                            if (match) {
+                              const imageUrl = match[1];
+                              const cleanText = text.replace(imgRegex, '').trim();
+                              return (
+                                <div className="space-y-4">
+                                  <div>{cleanText}</div>
+                                  <div className="flex justify-center p-4 bg-slate-900 border border-slate-800 rounded-lg">
+                                    <img src={imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return (
+                              <div className="space-y-4">
+                                <div>{text}</div>
+                                {q.imageUrl && (
+                                  <div className="flex justify-center p-4 bg-slate-900 border border-slate-800 rounded-lg">
+                                    <img src={q.imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
 
                         {/* Options */}
                         {q.options && q.options.length > 0 && (

@@ -247,6 +247,40 @@ export class DocumentController {
   }
 
   /**
+   * Handles GET /api/ai/documents/:documentId/diagrams
+   */
+  public static async getDocumentDiagrams(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Unauthenticated.' });
+      }
+
+      const { documentId } = req.params;
+      const fs = require('fs');
+      const path = require('path');
+      const uploadDir = path.join(__dirname, '../../../../public/uploads/diagrams');
+      const imageUrls: string[] = [];
+      
+      if (fs.existsSync(uploadDir)) {
+        const files = fs.readdirSync(uploadDir);
+        for (const file of files) {
+          if (file.startsWith(`doc_${documentId}_`)) {
+            imageUrls.push(`/uploads/diagrams/${file}`);
+          }
+        }
+      }
+      
+      return res.status(200).json({
+        success: true,
+        diagrams: imageUrls,
+      });
+    } catch (err: any) {
+      console.error('Controller error in getDocumentDiagrams:', err.message);
+      return res.status(500).json({ success: false, message: err.message || 'Failed to get document diagrams.' });
+    }
+  }
+
+  /**
    * Express error handler helper for multer upload limits
    */
   public static handleMulterError(err: any, req: any, res: any, next: any) {

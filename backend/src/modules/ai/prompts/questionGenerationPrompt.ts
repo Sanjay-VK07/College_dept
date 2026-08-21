@@ -19,6 +19,7 @@ QUESTION SCHEMAS FOR JSON OUTPUT:
    - "correctAnswer": [0] (array containing exactly ONE 0-based index corresponding to the correct option)
    - "explanation": "Detailed step-by-step academic explanation."
    - "difficulty": "EASY" | "MEDIUM" | "HARD"
+   - "imageUrl": "Optional string path to a diagram/image from the available list, or null"
 
 2. MSQ (Multiple Select Question):
    - "type": "MSQ"
@@ -27,6 +28,7 @@ QUESTION SCHEMAS FOR JSON OUTPUT:
    - "correctAnswer": [0, 2] (array containing ONE OR MORE 0-based indices of all correct options)
    - "explanation": "Detailed explanation addressing each option."
    - "difficulty": "EASY" | "MEDIUM" | "HARD"
+   - "imageUrl": "Optional string path to a diagram/image from the available list, or null"
 
 3. NAT (Numerical Answer Type):
    - "type": "NAT"
@@ -34,7 +36,8 @@ QUESTION SCHEMAS FOR JSON OUTPUT:
    - "options": null
    - "correctAnswer": { "value": 15.5, "min": 15.0, "max": 16.0 }
    - "explanation": "Detailed mathematical derivation and step-by-step calculation."
-   - "difficulty": "EASY" | "MEDIUM" | "HARD"`;
+   - "difficulty": "EASY" | "MEDIUM" | "HARD"
+   - "imageUrl": "Optional string path to a diagram/image from the available list, or null"`;
   }
 
   public static buildUserPrompt(params: {
@@ -44,8 +47,9 @@ QUESTION SCHEMAS FOR JSON OUTPUT:
     count: number;
     subjectName?: string;
     topicName?: string;
+    imageUrls?: string[];
   }): string {
-    const { contextText, questionType, difficulty, count, subjectName, topicName } = params;
+    const { contextText, questionType, difficulty, count, subjectName, topicName, imageUrls } = params;
 
     return `Generate exactly ${count} GATE-style question(s) based on the academic context below.
 
@@ -53,6 +57,8 @@ ${subjectName ? `Subject Domain: ${subjectName}` : ''}
 ${topicName ? `Topic Domain: ${topicName}` : ''}
 ${questionType ? `Requested Question Type: ${questionType}` : 'Question Type: Mix of MCQ, MSQ, or NAT'}
 ${difficulty ? `Target Difficulty Level: ${difficulty}` : 'Target Difficulty Level: MEDIUM'}
+
+${imageUrls && imageUrls.length > 0 ? `AVAILABLE DOCUMENT IMAGES FOR DIAGRAMS:\n${imageUrls.map(url => `- ${url}`).join('\n')}\n(If a question refers to a figure/diagram in the context, you can set the "imageUrl" field in your JSON response to one of these image paths.)\n` : ''}
 
 ACADEMIC CONTEXT:
 ---
@@ -68,7 +74,8 @@ Return a valid JSON object matching this structure:
       "options": ["Option A", "Option B", "Option C", "Option D"],
       "correctAnswer": [0],
       "explanation": "Detailed explanation...",
-      "difficulty": "${difficulty || 'MEDIUM'}"
+      "difficulty": "${difficulty || 'MEDIUM'}",
+      "imageUrl": null
     }
   ]
 }`;

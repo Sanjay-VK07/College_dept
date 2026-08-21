@@ -24,4 +24,7 @@ router.get('/:documentId/download', DocumentController.downloadDocument);
 // Route for deleting a document
 router.delete('/:documentId', DocumentController.deleteDocument);
 
+// Route for getting extracted diagrams
+router.get('/:documentId/diagrams', DocumentController.getDocumentDiagrams);
+
 export default router;

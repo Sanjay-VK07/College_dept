@@ -48,6 +48,52 @@ export class DocumentProcessingService {
         const pdfInstance = new pdfParse.PDFParse(new Uint8Array(fileBuffer));
         const parsed = await pdfInstance.getText();
         extractedText = parsed.text;
+
+        // Extract raw image streams from PDF and save to public uploads directory
+        try {
+          const uploadDir = path.join(__dirname, '../../../../public/uploads/diagrams');
+          if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+          }
+
+          let imgIndex = 0;
+          let searchOffset = 0;
+          while (true) {
+            const streamIdx = fileBuffer.indexOf('stream', searchOffset);
+            if (streamIdx === -1) break;
+            
+            const endStreamIdx = fileBuffer.indexOf('endstream', streamIdx);
+            if (endStreamIdx === -1) break;
+            
+            const headerChunk = fileBuffer.slice(Math.max(0, streamIdx - 300), streamIdx).toString();
+            
+            if (headerChunk.includes('/Subtype /Image') || headerChunk.includes('/Image')) {
+              let cleanData = fileBuffer.slice(streamIdx + 6, endStreamIdx);
+              if (cleanData[0] === 0x0d && cleanData[1] === 0x0a) {
+                cleanData = cleanData.slice(2);
+              } else if (cleanData[0] === 0x0a) {
+                cleanData = cleanData.slice(1);
+              }
+              
+              if (cleanData[cleanData.length - 1] === 0x0a) {
+                cleanData = cleanData.slice(0, -1);
+              }
+              if (cleanData[cleanData.length - 1] === 0x0d) {
+                cleanData = cleanData.slice(0, -1);
+              }
+
+              if (cleanData.length > 2000) {
+                const imgPath = path.join(uploadDir, `doc_${documentId}_img_${imgIndex}.jpg`);
+                fs.writeFileSync(imgPath, cleanData);
+                imgIndex++;
+              }
+            }
+            searchOffset = endStreamIdx + 9;
+          }
+          console.log(`[DocumentProcessingService] Extracted ${imgIndex} embedded diagrams/images from PDF.`);
+        } catch (imgErr) {
+          console.error('[DocumentProcessingService] Failed to extract PDF images:', imgErr);
+        }
       } else if (
         mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
         document.fileName.endsWith('.docx')

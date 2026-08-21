@@ -180,6 +180,27 @@ export class QuestionGenerationService {
 
     // 6. Invoke AI Provider for Structured JSON Question Generation
     const systemPrompt = QuestionGenerationPrompt.buildSystemPrompt();
+
+    // Check for any extracted diagrams associated with this documentId
+    const imageUrls: string[] = [];
+    if (documentId) {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const uploadDir = path.join(__dirname, '../../../../public/uploads/diagrams');
+        if (fs.existsSync(uploadDir)) {
+          const files = fs.readdirSync(uploadDir);
+          for (const file of files) {
+            if (file.startsWith(`doc_${documentId}_`)) {
+              imageUrls.push(`/uploads/diagrams/${file}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[QuestionGenerationService] Failed to scan document diagrams:', err);
+      }
+    }
+
     const userPrompt = QuestionGenerationPrompt.buildUserPrompt({
       contextText,
       questionType,
@@ -187,6 +208,7 @@ export class QuestionGenerationService {
       count: requestedCount,
       subjectName: targetSubjectName,
       topicName: targetTopicName,
+      imageUrls,
     });
 
     const genStartTime = performance.now();
@@ -222,6 +244,12 @@ export class QuestionGenerationService {
     const savedGeneratedQuestions: any[] = [];
 
     for (const rawQ of parsedRawQuestions) {
+      // If rawQ contains imageUrl, append it to rawQ.stem as markdown image
+      const imgUrl = (rawQ as any).imageUrl || (rawQ as any).image_url || (rawQ as any).image;
+      if (imgUrl && rawQ.stem && !rawQ.stem.includes('![diagram]')) {
+        rawQ.stem = `${rawQ.stem}\n\n![diagram](${imgUrl})`;
+      }
+
       // Validate Structure & Quality
       const valResult = QuestionValidationService.validateQuestion(rawQ);
 
@@ -772,5 +800,148 @@ NAT (Numerical Answer Type):
     });
 
     return validatedQuestions;
+  }
+
+  /**
+   * Reads an uploaded PDF document, parses its chunks and extracted diagrams,
+   * extracts all questions verbatim via LLM, and inserts them directly into the Question Bank.
+   */
+  public static async importQuestionsFromPDF(
+    documentId: string,
+    subtopicId: string,
+    userId: string
+  ): Promise<any[]> {
+    // 1. Retrieve all parsed chunks for this document
+    const chunks = await prisma.aIDocumentChunk.findMany({
+      where: { documentId },
+      orderBy: { chunkIndex: 'asc' },
+    });
+
+    if (chunks.length === 0) {
+      throw new Error('No text chunks found for the uploaded PDF document.');
+    }
+
+    const contextText = chunks
+      .map((c: any, i: number) => `[Page Chunk ${i + 1}]:\n${c.content}`)
+      .join('\n\n');
+
+    // 2. Scan for extracted diagrams in public/uploads/diagrams/
+    const fs = require('fs');
+    const path = require('path');
+    const uploadDir = path.join(__dirname, '../../../../public/uploads/diagrams');
+    const imageUrls: string[] = [];
+    if (fs.existsSync(uploadDir)) {
+      const files = fs.readdirSync(uploadDir);
+      for (const file of files) {
+        if (file.startsWith(`doc_${documentId}_`)) {
+          imageUrls.push(`/uploads/diagrams/${file}`);
+        }
+      }
+    }
+
+    // 3. Build prompts for verbatim extraction
+    const systemPrompt = `You are a high-fidelity GATE Exam Question Parser. Your task is to extract all questions from the provided PDF text verbatim.
+
+CRITICAL RULES:
+1. Grounding: Do NOT invent new questions. Extract the existing questions from the text exactly as they are.
+2. Structure: Determine the type (MCQ, MSQ, NAT), options (exactly 4 options for MCQ/MSQ), correct answer, and explanation.
+3. Diagrams matching: Match each question with the correct diagram from the available list of images: [${imageUrls.join(', ')}]. If a question references a figure or diagram (e.g., "as shown in the figure", "in the given figure", "diagram below"), select the corresponding image path from the list and set the "imageUrl" field. If no image matches, set "imageUrl" to null.
+4. Output format: Return only a strict JSON object with a "questions" array. No markdown, no formatting backticks.
+
+QUESTION SCHEMAS:
+MCQ/MSQ:
+- "type": "MCQ" | "MSQ"
+- "stem": "Question text..."
+- "options": ["Option A", "Option B", "Option C", "Option D"]
+- "correctAnswer": [index] (0-based)
+- "explanation": "Detailed explanation..."
+- "imageUrl": "/uploads/diagrams/..." or null
+
+NAT:
+- "type": "NAT"
+- "stem": "NAT problem text..."
+- "options": null
+- "correctAnswer": { "value": 15.5, "min": 15.0, "max": 16.0 }
+- "explanation": "Detailed explanation..."
+- "imageUrl": "/uploads/diagrams/..." or null`;
+
+    const userPrompt = `Extract all questions from the PDF text below:
+
+ACADEMIC TEXT:
+---
+${contextText}
+---
+
+Return a valid JSON object matching:
+{
+  "questions": [
+    {
+      "type": "MCQ",
+      "stem": "Question text...",
+      "options": ["A", "B", "C", "D"],
+      "correctAnswer": [0],
+      "explanation": "Explanation...",
+      "imageUrl": null
+    }
+  ]
+}`;
+
+    // 4. Generate response using AI
+    const aiResponse = await AIProviderService.generateResponse(systemPrompt, [], userPrompt);
+    if (!aiResponse.success || !aiResponse.content) {
+      throw new Error(`AI extraction failed: ${aiResponse.message || 'Unknown error'}`);
+    }
+
+    // 5. Parse output JSON
+    let parsedQuestions: any[] = [];
+    try {
+      let cleanJsonText = aiResponse.content.trim();
+      if (cleanJsonText.startsWith('```')) {
+        cleanJsonText = cleanJsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+      }
+      const jsonObj = JSON.parse(cleanJsonText);
+      parsedQuestions = Array.isArray(jsonObj) ? jsonObj : jsonObj.questions || [jsonObj];
+    } catch (parseErr: any) {
+      throw new Error(`Failed to parse AI question extraction output: ${parseErr.message}`);
+    }
+
+    const importedQuestions: any[] = [];
+
+    // 6. Validate and insert questions directly into the database Question table (Question Bank)
+    for (const rawQ of parsedQuestions) {
+      const valResult = QuestionValidationService.validateQuestion(rawQ);
+      if (!valResult.isValid) {
+        console.warn(`[importQuestionsFromPDF] Skipping invalid question:`, valResult.errors);
+        continue;
+      }
+
+      // Append image URL markdown if imageUrl is set
+      let finalStem = valResult.sanitizedStem;
+      const imgUrl = (rawQ as any).imageUrl || (rawQ as any).image_url || (rawQ as any).image;
+      if (imgUrl && !finalStem.includes('![diagram]')) {
+        finalStem = `${finalStem}\n\n![diagram](${imgUrl})`;
+      }
+
+      const createdQ = await prisma.question.create({
+        data: {
+          text: finalStem,
+          type: rawQ.type,
+          difficulty: rawQ.difficulty || Difficulty.MEDIUM,
+          marks: rawQ.type === QuestionType.NAT ? 2.0 : 1.0,
+          negativeMarks: rawQ.type === QuestionType.MCQ ? 0.33 : 0.0,
+          options: valResult.normalizedOptions || [],
+          correctAnswer: valResult.normalizedCorrectAnswer,
+          explanation: valResult.sanitizedExplanation,
+          subtopicId,
+          createdById: userId,
+          imageUrl: imgUrl || null,
+          generatedByAI: true,
+        },
+      });
+
+      importedQuestions.push(createdQ);
+    }
+
+    return importedQuestions;
   }
 }

@@ -313,7 +313,33 @@ export default function ExamPage() {
 
           {/* Question Statement */}
           <div className="text-slate-900 text-base leading-relaxed mb-6 whitespace-pre-wrap font-medium">
-            {currentQ.text}
+            {(() => {
+              const text = currentQ.text;
+              const imgRegex = /!\[.*?\]\((.*?)\)/;
+              const match = text.match(imgRegex);
+              if (match) {
+                const imageUrl = match[1];
+                const cleanText = text.replace(imgRegex, '').trim();
+                return (
+                  <div className="space-y-4">
+                    <div>{cleanText}</div>
+                    <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                      <img src={imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-4">
+                  <div>{text}</div>
+                  {currentQ.imageUrl && (
+                    <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                      <img src={currentQ.imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Options Display */}

@@ -744,7 +744,35 @@ export default function InvigilatorDashboard() {
                         </button>
                       </div>
                     </div>
-                    <p className="text-xs text-slate-800 leading-relaxed font-medium">{q.text}</p>
+                    <div className="text-xs text-slate-800 leading-relaxed font-medium">
+                      {(() => {
+                        const text = q.text;
+                        const imgRegex = /!\[.*?\]\((.*?)\)/;
+                        const match = text.match(imgRegex);
+                        if (match) {
+                          const imageUrl = match[1];
+                          const cleanText = text.replace(imgRegex, '').trim();
+                          return (
+                            <div className="space-y-3">
+                              <div>{cleanText}</div>
+                              <div className="flex justify-center p-3 bg-slate-50 border border-slate-200 rounded-md">
+                                <img src={imageUrl} alt="Question Diagram" className="max-h-48 object-contain" />
+                              </div>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="space-y-3">
+                            <div>{text}</div>
+                            {(q as any).imageUrl && (
+                              <div className="flex justify-center p-3 bg-slate-50 border border-slate-200 rounded-md">
+                                <img src={(q as any).imageUrl} alt="Question Diagram" className="max-h-48 object-contain" />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
                 ))}
             </div>

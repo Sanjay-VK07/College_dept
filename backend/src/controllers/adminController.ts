@@ -4,9 +4,12 @@ import { prisma } from '../config/prisma';
 import { ExcelImportService } from '../services/excelImportService';
 import { ReportExportService } from '../services/reportExportService';
 import { AuditLogger } from '../services/auditLogger';
-import { Role, QuestionType, Difficulty, ExamType, ExamStatus } from '@prisma/client';
+import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus } from '@prisma/client';
 import { ENV } from '../config/env';
 import { NotificationController } from './notificationController';
+import { LocalStorageProvider } from '../modules/ai/services/documentStorageService';
+import { DocumentProcessingService } from '../modules/ai/services/documentProcessingService';
+import { QuestionGenerationService } from '../modules/ai/services/questionGenerationService';
 
 export class AdminController {
   /**
@@ -871,6 +874,51 @@ export class AdminController {
       const defaultSubtopic = await prisma.subtopic.findFirst();
       if (!defaultSubtopic) {
         return res.status(400).json({ success: false, message: 'Please create a subject/subtopic in taxonomy before importing questions.' });
+      }
+
+      // If PDF file is uploaded, extract questions and diagrams
+      if (req.file.mimetype === 'application/pdf' || req.file.originalname.endsWith('.pdf')) {
+        const storageProvider = new LocalStorageProvider();
+        const storageKey = await storageProvider.upload(req.file.buffer, req.file.originalname, req.file.mimetype);
+
+        const docId = `import_${Date.now()}`;
+        const document = await prisma.aIDocument.create({
+          data: {
+            id: docId,
+            title: req.file.originalname,
+            fileName: req.file.originalname,
+            mimeType: req.file.mimetype,
+            fileSize: req.file.size,
+            storageKey,
+            visibility: 'PRIVATE',
+            status: AIDocumentStatus.UPLOADED,
+            uploadedById: req.user!.id,
+          },
+        });
+
+        // Process the document (extracts text and diagrams)
+        await DocumentProcessingService.processDocument(document.id);
+
+        // Extract questions from PDF verbatim
+        const questions = await QuestionGenerationService.importQuestionsFromPDF(
+          document.id,
+          defaultSubtopic.id,
+          req.user!.id
+        );
+
+        await AuditLogger.log({
+          userId: req.user?.id,
+          action: 'BULK_UPLOAD_QUESTIONS',
+          resource: 'Question',
+          details: `Imported ${questions.length} questions and diagrams from PDF: ${req.file.originalname}`,
+          ipAddress: req.ip,
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: `Successfully extracted and imported ${questions.length} questions (with diagrams) from PDF!`,
+          count: questions.length,
+        });
       }
 
       const questions = await ExcelImportService.importQuestions(

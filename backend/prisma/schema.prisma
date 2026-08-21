@@ -8,6 +8,488 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model User {
+  id                     String                      @id @default(uuid())
+  registerNo             String?                     @unique
+  name                   String
+  email                  String                      @unique
+  passwordHash           String?
+  googleId               String?
+  role                   Role                        @default(STUDENT)
+  department             String
+  year                   Int?
+  semester               Int?
+  section                String?
+  avatar                 String?
+  sessionId              String?
+  fingerprint            String?
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
+  aiConversations        AIConversation[]
+  aiDocuments            AIDocument[]
+  aiExamAssemblyTraces   AIExamAssemblyTrace[]       @relation("CreatedAIExamAssemblyTraces")
+  aiFeedbacks            AIFeedback[]
+  aiGeneratedQuestions   AIGeneratedQuestion[]       @relation("CreatedAIGeneratedQuestions")
+  aiPracticeAttempts     AIPracticeAttempt[]
+  aiQuestionTraces       AIQuestionGenerationTrace[] @relation("CreatedAIQuestionTraces")
+  ragTraces              AIRAGTrace[]
+  aiSolutions            AISolution[]                @relation("CreatedAISolutions")
+  auditLogs              AuditLog[]
+  invigilatorAssignments InvigilatorAssignment[]
+  createdTests           MockTest[]                  @relation("CreatedBy")
+  questions              Question[]                  @relation("CreatedQuestions")
+  assignments            TestAssignment[]
+}
+
+model Subject {
+  id         String   @id @default(uuid())
+  name       String
+  code       String   @unique
+  department String
+  modules    Module[]
+}
+
+model Module {
+  id        String  @id @default(uuid())
+  name      String
+  subjectId String
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topics    Topic[]
+}
+
+model Topic {
+  id        String     @id @default(uuid())
+  name      String
+  moduleId  String
+  subtopics Subtopic[]
+  module    Module     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+}
+
+model Subtopic {
+  id                   String                @id @default(uuid())
+  name                 String
+  topicId              String
+  aiGeneratedQuestions AIGeneratedQuestion[]
+  questions            Question[]
+  topic                Topic                 @relation(fields: [topicId], references: [id], onDelete: Cascade)
+}
+
+model Question {
+  id                String                  @id @default(uuid())
+  text              String
+  type              QuestionType
+  difficulty        Difficulty              @default(MEDIUM)
+  marks             Float                   @default(1.0)
+  negativeMarks     Float                   @default(0.33)
+  options           Json
+  correctAnswer     Json
+  explanation       String?
+  reference         String?
+  previousYear      String?
+  imageUrl          String?
+  subtopicId        String
+  createdById       String
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  generatedByAI     Boolean                 @default(false)
+  generationModel   String?
+  reviewStatus      AIQuestionReviewStatus?
+  aiSolutions       AISolution[]
+  mockTestQuestions MockTestQuestion[]
+  createdBy         User                    @relation("CreatedQuestions", fields: [createdById], references: [id])
+  subtopic          Subtopic                @relation(fields: [subtopicId], references: [id])
+  aiSources         QuestionAISource[]
+  responses         QuestionResponse[]
+}
+
+model MockTest {
+  id                 String                  @id @default(uuid())
+  title              String
+  description        String?
+  examType           ExamType                @default(SCHEDULED)
+  durationMinutes    Int                     @default(180)
+  totalMarks         Float                   @default(100.0)
+  startTime          DateTime
+  endTime            DateTime
+  targetDepartment   String
+  targetYear         Int?
+  targetSection      String?
+  isPublished        Boolean                 @default(false)
+  resultVisibility   ResultVisibility        @default(AFTER_EXAM_ENDS)
+  solutionVisibility SolutionVisibility      @default(SHOW_AFTER_RESULT)
+  shuffleQuestions   Boolean                 @default(true)
+  shuffleOptions     Boolean                 @default(true)
+  maxViolations      Int                     @default(5)
+  instructions       String?
+  createdById        String
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  status             ExamStatus              @default(DRAFT)
+  aiExamTrace        AIExamAssemblyTrace?
+  invigilators       InvigilatorAssignment[]
+  createdBy          User                    @relation("CreatedBy", fields: [createdById], references: [id])
+  testQuestions      MockTestQuestion[]
+  assignments        TestAssignment[]
+
+  @@index([createdById])
+  @@index([status])
+}
+
+model MockTestQuestion {
+  id         String   @id @default(uuid())
+  mockTestId String
+  questionId String
+  order      Int      @default(1)
+  mockTest   MockTest @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
+  question   Question @relation(fields: [questionId], references: [id])
+
+  @@unique([mockTestId, questionId])
+}
+
+model TestAssignment {
+  id             String             @id @default(uuid())
+  testId         String
+  studentId      String
+  status         String             @default("SCHEDULED")
+  score          Float?
+  totalMarks     Float?
+  accuracy       Float?
+  timeTakenSec   Int                @default(0)
+  riskLevel      RiskLevel          @default(SAFE)
+  violationCount Int                @default(0)
+  startedAt      DateTime?
+  submittedAt    DateTime?
+  responses      QuestionResponse[]
+  student        User               @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  test           MockTest           @relation(fields: [testId], references: [id], onDelete: Cascade)
+  violations     ViolationLog[]
+
+  @@index([testId])
+}
+
+model QuestionResponse {
+  id            String         @id @default(uuid())
+  assignmentId  String
+  questionId    String
+  chosenAnswer  Json?
+  status        String         @default("NOT_VISITED")
+  isCorrect     Boolean        @default(false)
+  marksObtained Float          @default(0.0)
+  timeSpentSec  Int            @default(0)
+  updatedAt     DateTime       @updatedAt
+  assignment    TestAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  question      Question       @relation(fields: [questionId], references: [id])
+
+  @@unique([assignmentId, questionId])
+}
+
+model ViolationLog {
+  id           String         @id @default(uuid())
+  assignmentId String
+  type         String
+  timestamp    DateTime       @default(now())
+  details      String?
+  assignment   TestAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  resource  String
+  ipAddress String?
+  details   String?
+  timestamp DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  title     String
+  message   String
+  type      String   @default("info")
+  userId    String?
+  role      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model AIConversation {
+  id        String       @id @default(uuid())
+  userId    String
+  title     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  AIMessage[]
+  ragTraces AIRAGTrace[]
+}
+
+model AIMessage {
+  id                  String          @id @default(uuid())
+  conversationId      String
+  role                AIMessageRole
+  content             String
+  createdAt           DateTime        @default(now())
+  requestId           String?         @unique
+  parentUserMessageId String?         @unique
+  processingStartedAt DateTime?
+  status              AIRequestStatus @default(COMPLETED)
+  feedbacks           AIFeedback[]
+  conversation        AIConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  parentUserMessage   AIMessage?      @relation("UserToAssistantMessage", fields: [parentUserMessageId], references: [id], onDelete: Cascade)
+  assistantMessage    AIMessage?      @relation("UserToAssistantMessage")
+  assistantTraces     AIRAGTrace[]    @relation("AssistantMessageTrace")
+  userTraces          AIRAGTrace[]    @relation("UserMessageTrace")
+}
+
+model AIDocument {
+  id              String               @id @default(uuid())
+  title           String
+  fileName        String
+  mimeType        String
+  fileSize        Int?
+  visibility      AIDocumentVisibility
+  status          AIDocumentStatus     @default(UPLOADED)
+  storageKey      String               @unique
+  uploadedById    String
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  metadata        Json?
+  processedAt     DateTime?
+  processingError String?
+  uploadedBy      User                 @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  chunks          AIDocumentChunk[]
+  aiSources       QuestionAISource[]
+
+  @@index([status])
+  @@index([visibility])
+  @@index([uploadedById])
+}
+
+model AIDocumentChunk {
+  id         String     @id @default(uuid())
+  documentId String
+  chunkIndex Int
+  content    String
+  createdAt  DateTime   @default(now())
+  embedding  Float[]
+  metadata   Json?
+  tokenCount Int?
+  document   AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+}
+
+model AIRAGTrace {
+  id                        String                      @id @default(uuid())
+  requestId                 String?                     @unique
+  conversationId            String
+  userId                    String
+  userMessageId             String?
+  assistantMessageId        String?
+  ragDecision               AIRAGDecision
+  ragUsed                   Boolean                     @default(false)
+  status                    AIRAGTraceStatus            @default(PROCESSING)
+  embeddingDurationMs       Int                         @default(0)
+  vectorSearchDurationMs    Int                         @default(0)
+  contextAssemblyDurationMs Int                         @default(0)
+  providerDurationMs        Int                         @default(0)
+  totalDurationMs           Int                         @default(0)
+  authorizedChunksFound     Int                         @default(0)
+  relevantChunksUsed        Int                         @default(0)
+  sourceDocumentCount       Int                         @default(0)
+  qualityScore              Float?
+  qualityClassification     AIRAGQualityClassification?
+  fallbackReason            String?
+  errorCode                 String?
+  createdAt                 DateTime                    @default(now())
+  assistantMessage          AIMessage?                  @relation("AssistantMessageTrace", fields: [assistantMessageId], references: [id], onDelete: Cascade)
+  conversation              AIConversation              @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user                      User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userMessage               AIMessage?                  @relation("UserMessageTrace", fields: [userMessageId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([status])
+  @@index([ragUsed])
+}
+
+model AIFeedback {
+  id        String              @id @default(uuid())
+  messageId String
+  userId    String
+  rating    AIFeedbackRating
+  category  AIFeedbackCategory?
+  comment   String?
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  message   AIMessage           @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+}
+
+model AIGeneratedQuestion {
+  id                  String                     @id @default(uuid())
+  generationRequestId String?
+  stem                String
+  type                QuestionType
+  difficulty          Difficulty                 @default(MEDIUM)
+  marks               Float                      @default(1.0)
+  negativeMarks       Float                      @default(0.33)
+  options             Json?
+  correctAnswer       Json
+  explanation         String?
+  subjectId           String?
+  moduleId            String?
+  topicId             String?
+  subtopicId          String?
+  status              AIGeneratedQuestionStatus  @default(PENDING_REVIEW)
+  qualityStatus       AIQuestionQualityStatus    @default(REVIEW)
+  qualityScore        Float?
+  similarityStatus    AIQuestionSimilarityStatus @default(UNIQUE)
+  similarQuestionId   String?
+  sourceDocumentIds   String[]
+  sourceChunkIds      String[]
+  createdQuestionId   String?                    @unique
+  createdById         String
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  createdBy           User                       @relation("CreatedAIGeneratedQuestions", fields: [createdById], references: [id], onDelete: Cascade)
+  subtopic            Subtopic?                  @relation(fields: [subtopicId], references: [id])
+
+  @@index([status])
+  @@index([createdById])
+  @@index([generationRequestId])
+}
+
+model AIQuestionGenerationTrace {
+  id                     String        @id @default(uuid())
+  generationRequestId    String        @unique
+  generatedById          String
+  subjectId              String?
+  moduleId               String?
+  topicId                String?
+  subtopicId             String?
+  questionType           QuestionType?
+  requestedDifficulty    Difficulty?
+  requestedCount         Int           @default(1)
+  generatedCount         Int           @default(0)
+  validationStatus       String?
+  qualityStatus          String?
+  sourceDocumentCount    Int           @default(0)
+  sourceChunkCount       Int           @default(0)
+  generationDurationMs   Int           @default(0)
+  verificationDurationMs Int           @default(0)
+  totalDurationMs        Int           @default(0)
+  createdAt              DateTime      @default(now())
+  generatedBy            User          @relation("CreatedAIQuestionTraces", fields: [generatedById], references: [id], onDelete: Cascade)
+
+  @@index([generatedById])
+  @@index([createdAt])
+}
+
+model AISolution {
+  id                  String                       @id @default(uuid())
+  questionId          String
+  generationRequestId String                       @unique
+  draftAnswer         Json
+  draftExplanation    String
+  verifiedAnswer      Json?
+  verifiedExplanation String?
+  status              AISolutionStatus             @default(PENDING_REVIEW)
+  verificationStatus  AISolutionVerificationStatus @default(UNVERIFIED)
+  qualityScore        Float?
+  sourceDocumentIds   String[]
+  sourceChunkIds      String[]
+  generatedById       String
+  createdAt           DateTime                     @default(now())
+  updatedAt           DateTime                     @updatedAt
+  generatedBy         User                         @relation("CreatedAISolutions", fields: [generatedById], references: [id], onDelete: Cascade)
+  question            Question                     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@index([status])
+  @@index([generatedById])
+}
+
+model AIExamAssemblyTrace {
+  id                           String            @id @default(uuid())
+  examGenerationRequestId      String            @unique
+  mockTestId                   String?           @unique
+  generatedById                String
+  subjectId                    String?
+  requestedQuestionCount       Int
+  selectedQuestionCount        Int
+  requestedDifficulty          Json?
+  actualDifficultyDistribution Json?
+  topicCoverage                Json?
+  status                       AIExamDraftStatus @default(DRAFT)
+  validationStatus             String?
+  assemblyDurationMs           Int               @default(0)
+  createdAt                    DateTime          @default(now())
+  updatedAt                    DateTime          @updatedAt
+  generatedBy                  User              @relation("CreatedAIExamAssemblyTraces", fields: [generatedById], references: [id], onDelete: Cascade)
+  mockTest                     MockTest?         @relation(fields: [mockTestId], references: [id])
+
+  @@index([generatedById])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model QuestionAISource {
+  id         String     @id @default(uuid())
+  questionId String
+  documentId String
+  chunkId    String?
+  createdAt  DateTime   @default(now())
+  document   AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@index([documentId])
+}
+
+model AIPracticeAttempt {
+  id            String     @id @default(uuid())
+  studentId     String
+  subject       String
+  topic         String
+  difficulty    Difficulty
+  questionCount Int
+  score         Float
+  totalMarks    Float
+  startedAt     DateTime   @default(now())
+  completedAt   DateTime   @default(now())
+  createdAt     DateTime   @default(now())
+  student       User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+model InvigilatorAssignment {
+  id        String   @id @default(uuid())
+  testId    String
+  facultyId String
+  createdAt DateTime @default(now())
+  faculty   User     @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  test      MockTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@unique([testId, facultyId])
+  @@index([testId])
+  @@index([facultyId])
+}
+
 enum Role {
   STUDENT
   FACULTY
@@ -55,225 +537,6 @@ enum RiskLevel {
   HIGH_RISK
 }
 
-model User {
-  id           String      @id @default(uuid())
-  registerNo   String?     @unique
-  name         String
-  email        String      @unique
-  passwordHash String?
-  googleId     String?
-  role         Role        @default(STUDENT)
-  department   String      // e.g. CSE, ECE, IT, EEE, MECH
-  year         Int?        // 1, 2, 3, 4
-  semester     Int?        // 1..8
-  section      String?     // A, B, C
-  avatar       String?
-  sessionId    String?
-  fingerprint  String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-
-  assignments  TestAssignment[]
-  createdTests MockTest[]       @relation("CreatedBy")
-  questions    Question[]       @relation("CreatedQuestions")
-  auditLogs    AuditLog[]
-  aiConversations AIConversation[]
-  aiDocuments  AIDocument[]
-  ragTraces            AIRAGTrace[]
-  aiFeedbacks          AIFeedback[]
-  aiGeneratedQuestions AIGeneratedQuestion[]       @relation("CreatedAIGeneratedQuestions")
-  aiQuestionTraces     AIQuestionGenerationTrace[] @relation("CreatedAIQuestionTraces")
-  aiSolutions          AISolution[]                @relation("CreatedAISolutions")
-  aiExamAssemblyTraces AIExamAssemblyTrace[]        @relation("CreatedAIExamAssemblyTraces")
-  aiPracticeAttempts   AIPracticeAttempt[]
-  invigilatorAssignments InvigilatorAssignment[]
-}
-
-model Subject {
-  id           String      @id @default(uuid())
-  name         String
-  code         String      @unique
-  department   String
-  modules      Module[]
-}
-
-model Module {
-  id           String      @id @default(uuid())
-  name         String
-  subjectId    String
-  subject      Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  topics       Topic[]
-}
-
-model Topic {
-  id           String      @id @default(uuid())
-  name         String
-  moduleId     String
-  module       Module      @relation(fields: [moduleId], references: [id], onDelete: Cascade)
-  subtopics    Subtopic[]
-}
-
-model Subtopic {
-  id           String      @id @default(uuid())
-  name         String
-  topicId      String
-  topic        Topic       @relation(fields: [topicId], references: [id], onDelete: Cascade)
-  questions    Question[]
-  aiGeneratedQuestions AIGeneratedQuestion[]
-}
-
-model Question {
-  id             String       @id @default(uuid())
-  text           String
-  type           QuestionType
-  difficulty     Difficulty   @default(MEDIUM)
-  marks          Float        @default(1.0)
-  negativeMarks  Float        @default(0.33)
-  options        Json         // Options array: [{ text: "", latex: "", image: "" }]
-  correctAnswer  Json         // Array of indices for MCQ/MSQ, or { min: 1.5, max: 1.6, value: 1.55 } for NAT
-  explanation    String?
-  reference      String?
-  previousYear   String?      // e.g., "GATE CS 2023"
-  imageUrl       String?
-  subtopicId     String
-  subtopic       Subtopic     @relation(fields: [subtopicId], references: [id])
-  createdById    String
-  createdBy      User         @relation("CreatedQuestions", fields: [createdById], references: [id])
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-
-  generatedByAI   Boolean                 @default(false)
-  generationModel String?
-  reviewStatus    AIQuestionReviewStatus?
-  aiSources       QuestionAISource[]
-
-  mockTestQuestions MockTestQuestion[]
-  responses         QuestionResponse[]
-  aiSolutions       AISolution[]
-}
-
-model MockTest {
-  id                 String             @id @default(uuid())
-  title              String
-  description        String?
-  examType           ExamType           @default(SCHEDULED)
-  durationMinutes    Int                @default(180)
-  totalMarks         Float              @default(100.0)
-  startTime          DateTime
-  endTime            DateTime
-  targetDepartment   String
-  targetYear         Int?
-  targetSection      String?
-  isPublished        Boolean            @default(false)
-  status             ExamStatus         @default(DRAFT)
-  resultVisibility   ResultVisibility   @default(AFTER_EXAM_ENDS)
-  solutionVisibility SolutionVisibility @default(SHOW_AFTER_RESULT)
-  shuffleQuestions   Boolean            @default(true)
-  shuffleOptions     Boolean            @default(true)
-  maxViolations      Int                @default(5)
-  instructions       String?
-  createdById        String
-  createdBy          User               @relation("CreatedBy", fields: [createdById], references: [id])
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-
-  testQuestions      MockTestQuestion[]
-  assignments        TestAssignment[]
-  aiExamTrace        AIExamAssemblyTrace?
-  invigilators       InvigilatorAssignment[]
-
-  @@index([createdById])
-  @@index([status])
-}
-
-model MockTestQuestion {
-  id         String   @id @default(uuid())
-  mockTestId String
-  mockTest   MockTest @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
-  questionId String
-  question   Question @relation(fields: [questionId], references: [id])
-  order      Int      @default(1)
-
-  @@unique([mockTestId, questionId])
-}
-
-model TestAssignment {
-  id              String             @id @default(uuid())
-  testId          String
-  test            MockTest           @relation(fields: [testId], references: [id], onDelete: Cascade)
-  studentId       String
-  student         User               @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  status          String             @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, COMPLETED, AUTO_SUBMITTED
-  score           Float?
-  totalMarks      Float?
-  accuracy        Float?
-  timeTakenSec    Int                @default(0)
-  riskLevel       RiskLevel          @default(SAFE)
-  violationCount  Int                @default(0)
-  startedAt       DateTime?
-  submittedAt     DateTime?
-
-  responses       QuestionResponse[]
-  violations      ViolationLog[]
-
-  @@index([testId])
-}
-
-model QuestionResponse {
-  id              String          @id @default(uuid())
-  assignmentId    String
-  assignment      TestAssignment  @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  questionId      String
-  question        Question        @relation(fields: [questionId], references: [id])
-  chosenAnswer    Json?           // Selected option index/indices or numerical value string
-  status          String          @default("NOT_VISITED") // NOT_VISITED, VISITED, ANSWERED, SKIPPED, MARKED_FOR_REVIEW, ANSWERED_AND_MARKED
-  isCorrect       Boolean         @default(false)
-  marksObtained   Float           @default(0.0)
-  timeSpentSec    Int             @default(0)
-  updatedAt       DateTime        @updatedAt
-
-  @@unique([assignmentId, questionId])
-}
-
-model ViolationLog {
-  id              String          @id @default(uuid())
-  assignmentId    String
-  assignment      TestAssignment  @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  type            String          // FULLSCREEN_EXIT, TAB_SWITCH, BLUR, DEVTOOLS, REFRESH
-  timestamp       DateTime        @default(now())
-  details         String?
-}
-
-model SystemSetting {
-  id                String   @id @default(uuid())
-  key               String   @unique
-  value             String
-  description       String?
-  updatedAt         DateTime @updatedAt
-}
-
-model AuditLog {
-  id          String   @id @default(uuid())
-  userId      String?
-  user        User?    @relation(fields: [userId], references: [id])
-  action      String
-  resource    String
-  ipAddress   String?
-  details     String?
-  timestamp   DateTime @default(now())
-}
-
-model Notification {
-  id        String   @id @default(uuid())
-  title     String
-  message   String
-  type      String   @default("info") // info, success, warning, error
-  userId    String?
-  role      String?  // Admin, Faculty, Student or ALL
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
-}
-
 enum AIMessageRole {
   USER
   ASSISTANT
@@ -285,43 +548,12 @@ enum AIRequestStatus {
   FAILED
 }
 
-model AIConversation {
-  id        String      @id @default(uuid())
-  userId    String
-  title     String?
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
-
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages  AIMessage[]
-  ragTraces AIRAGTrace[]
-}
-
-model AIMessage {
-  id                  String          @id @default(uuid())
-  requestId           String?         @unique
-  conversationId      String
-  parentUserMessageId String?         @unique
-  role                AIMessageRole
-  status              AIRequestStatus @default(COMPLETED)
-  processingStartedAt DateTime?
-  content             String          @db.Text
-  createdAt           DateTime        @default(now())
-
-  conversation      AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  parentUserMessage AIMessage?     @relation("UserToAssistantMessage", fields: [parentUserMessageId], references: [id], onDelete: Cascade)
-  assistantMessage  AIMessage?     @relation("UserToAssistantMessage")
-  feedbacks         AIFeedback[]
-  userTraces        AIRAGTrace[]   @relation("UserMessageTrace")
-  assistantTraces   AIRAGTrace[]   @relation("AssistantMessageTrace")
-}
-
 enum AIDocumentVisibility {
   PUBLIC
+  PRIVATE
   STUDENT
   FACULTY
   ADMIN
-  PRIVATE
 }
 
 enum AIDocumentStatus {
@@ -329,47 +561,6 @@ enum AIDocumentStatus {
   PROCESSING
   READY
   FAILED
-}
-
-model AIDocument {
-  id              String               @id @default(uuid())
-  title           String
-  fileName        String
-  mimeType        String
-  fileSize        Int?
-  visibility      AIDocumentVisibility
-  status          AIDocumentStatus     @default(UPLOADED)
-  storageKey      String               @unique
-  processingError String?              @db.Text
-  processedAt     DateTime?
-  uploadedById    String
-  metadata        Json?
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-
-  uploadedBy User              @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
-  chunks     AIDocumentChunk[]
-  aiSources  QuestionAISource[]
-
-  @@index([status])
-  @@index([visibility])
-  @@index([uploadedById])
-}
-
-model AIDocumentChunk {
-  id         String     @id @default(uuid())
-  documentId String
-  content    String     @db.Text
-  chunkIndex Int
-  tokenCount Int?
-  embedding  Float[]
-  metadata   Json?
-  createdAt  DateTime   @default(now())
-
-  document AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
-
-  @@unique([documentId, chunkIndex])
-  @@index([documentId])
 }
 
 enum AIRAGDecision {
@@ -409,69 +600,6 @@ enum AIFeedbackCategory {
   OTHER
 }
 
-model AIRAGTrace {
-  id                        String                      @id @default(uuid())
-  requestId                 String?                     @unique
-
-  conversationId            String
-  userId                    String
-  userMessageId             String?
-  assistantMessageId        String?
-
-  ragDecision               AIRAGDecision
-  ragUsed                   Boolean                     @default(false)
-  status                    AIRAGTraceStatus            @default(PROCESSING)
-
-  embeddingDurationMs       Int                         @default(0)
-  vectorSearchDurationMs    Int                         @default(0)
-  contextAssemblyDurationMs Int                         @default(0)
-  providerDurationMs        Int                         @default(0)
-  totalDurationMs           Int                         @default(0)
-
-  authorizedChunksFound     Int                         @default(0)
-  relevantChunksUsed        Int                         @default(0)
-  sourceDocumentCount       Int                         @default(0)
-
-  qualityScore              Float?
-  qualityClassification     AIRAGQualityClassification?
-
-  fallbackReason            String?
-  errorCode                 String?
-
-  createdAt                 DateTime                    @default(now())
-
-  conversation              AIConversation              @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  user                      User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userMessage               AIMessage?                  @relation("UserMessageTrace", fields: [userMessageId], references: [id], onDelete: Cascade)
-  assistantMessage          AIMessage?                  @relation("AssistantMessageTrace", fields: [assistantMessageId], references: [id], onDelete: Cascade)
-
-  @@index([conversationId])
-  @@index([userId])
-  @@index([createdAt])
-  @@index([status])
-  @@index([ragUsed])
-}
-
-model AIFeedback {
-  id        String              @id @default(uuid())
-
-  messageId String
-  userId    String
-
-  rating    AIFeedbackRating
-  category  AIFeedbackCategory?
-  comment   String?             @db.Text
-
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
-
-  message   AIMessage           @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, userId])
-  @@index([userId])
-}
-
 enum AIGeneratedQuestionStatus {
   GENERATED
   VALIDATED
@@ -499,82 +627,6 @@ enum AIQuestionSimilarityStatus {
   DUPLICATE
 }
 
-model AIGeneratedQuestion {
-  id                  String                     @id @default(uuid())
-  generationRequestId String?
-
-  stem                String                     @db.Text
-  type                QuestionType
-  difficulty          Difficulty                 @default(MEDIUM)
-  marks               Float                      @default(1.0)
-  negativeMarks       Float                      @default(0.33)
-
-  options             Json?
-  correctAnswer       Json
-  explanation         String?                    @db.Text
-
-  subjectId           String?
-  moduleId            String?
-  topicId             String?
-  subtopicId          String?
-  subtopic            Subtopic?                  @relation(fields: [subtopicId], references: [id], onDelete: SetNull)
-
-  status              AIGeneratedQuestionStatus  @default(PENDING_REVIEW)
-  qualityStatus       AIQuestionQualityStatus    @default(REVIEW)
-  qualityScore        Float?
-
-  similarityStatus    AIQuestionSimilarityStatus @default(UNIQUE)
-  similarQuestionId   String?
-
-  sourceDocumentIds   String[]
-  sourceChunkIds      String[]
-
-  createdQuestionId   String?                    @unique
-  createdById         String
-  createdBy           User                       @relation("CreatedAIGeneratedQuestions", fields: [createdById], references: [id], onDelete: Cascade)
-
-  createdAt           DateTime                   @default(now())
-  updatedAt           DateTime                   @updatedAt
-
-  @@index([status])
-  @@index([createdById])
-  @@index([generationRequestId])
-}
-
-model AIQuestionGenerationTrace {
-  id                    String        @id @default(uuid())
-  generationRequestId   String        @unique
-
-  generatedById         String
-  generatedBy           User          @relation("CreatedAIQuestionTraces", fields: [generatedById], references: [id], onDelete: Cascade)
-
-  subjectId             String?
-  moduleId              String?
-  topicId               String?
-  subtopicId            String?
-
-  questionType          QuestionType?
-  requestedDifficulty   Difficulty?
-
-  requestedCount        Int           @default(1)
-  generatedCount        Int           @default(0)
-
-  validationStatus      String?
-  qualityStatus         String?
-
-  sourceDocumentCount   Int           @default(0)
-  sourceChunkCount      Int           @default(0)
-
-  generationDurationMs  Int           @default(0)
-  verificationDurationMs Int          @default(0)
-  totalDurationMs       Int           @default(0)
-
-  createdAt             DateTime      @default(now())
-
-  @@index([generatedById])
-  @@index([createdAt])
-}
-
 enum AISolutionStatus {
   GENERATED
   VERIFYING
@@ -600,95 +652,6 @@ enum AIExamDraftStatus {
   REJECTED
 }
 
-model AISolution {
-  id                  String                       @id @default(uuid())
-  questionId          String
-  generationRequestId String                       @unique
-
-  draftAnswer         Json
-  draftExplanation    String                       @db.Text
-  verifiedAnswer      Json?
-  verifiedExplanation String?                      @db.Text
-
-  status              AISolutionStatus             @default(PENDING_REVIEW)
-  verificationStatus  AISolutionVerificationStatus @default(UNVERIFIED)
-  qualityScore        Float?
-
-  sourceDocumentIds   String[]
-  sourceChunkIds      String[]
-
-  generatedById       String
-  createdAt           DateTime                     @default(now())
-  updatedAt           DateTime                     @updatedAt
-
-  question            Question                     @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  generatedBy         User                         @relation("CreatedAISolutions", fields: [generatedById], references: [id], onDelete: Cascade)
-
-  @@index([questionId])
-  @@index([status])
-  @@index([generatedById])
-}
-
-model AIExamAssemblyTrace {
-  id                            String            @id @default(uuid())
-  examGenerationRequestId       String            @unique
-
-  mockTestId                    String?           @unique
-  generatedById                 String
-  subjectId                     String?
-
-  requestedQuestionCount        Int
-  selectedQuestionCount         Int
-
-  requestedDifficulty           Json?
-  actualDifficultyDistribution  Json?
-  topicCoverage                 Json?
-
-  status                        AIExamDraftStatus @default(DRAFT)
-  validationStatus              String?
-
-  assemblyDurationMs            Int               @default(0)
-  createdAt                     DateTime          @default(now())
-  updatedAt                     DateTime          @updatedAt
-
-  mockTest                      MockTest?         @relation(fields: [mockTestId], references: [id], onDelete: SetNull)
-  generatedBy                   User              @relation("CreatedAIExamAssemblyTraces", fields: [generatedById], references: [id], onDelete: Cascade)
-
-  @@index([generatedById])
-  @@index([status])
-  @@index([createdAt])
-}
-
-model QuestionAISource {
-  id         String     @id @default(uuid())
-  questionId String
-  documentId String
-  chunkId    String?
-  createdAt  DateTime   @default(now())
-
-  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  document   AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
-
-  @@index([questionId])
-  @@index([documentId])
-}
-
-model AIPracticeAttempt {
-  id            String   @id @default(uuid())
-  studentId     String
-  subject       String
-  topic         String
-  difficulty    Difficulty
-  questionCount Int
-  score         Float
-  totalMarks    Float
-  startedAt     DateTime @default(now())
-  completedAt   DateTime @default(now())
-  createdAt     DateTime @default(now())
-
-  student       User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
-}
-
 enum ExamStatus {
   DRAFT
   SCHEDULED
@@ -697,20 +660,3 @@ enum ExamStatus {
   COMPLETED
   ARCHIVED
 }
-
-model InvigilatorAssignment {
-  id        String   @id @default(uuid())
-  testId    String
-  facultyId String
-  createdAt DateTime @default(now())
-
-  test      MockTest @relation(fields: [testId], references: [id], onDelete: Cascade)
-  faculty   User     @relation(fields: [facultyId], references: [id], onDelete: Cascade)
-
-  @@unique([testId, facultyId])
-  @@index([testId])
-  @@index([facultyId])
-}
-
-
-

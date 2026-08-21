@@ -1,4 +1,5 @@
 import { Role, AIRequestStatus, AIRAGDecision, AIRAGTraceStatus } from '@prisma/client';
+import { prisma } from '../../../config/prisma';
 import { IntentService } from './intentService';
 import { ContextService } from './contextService';
 import { ConversationService } from './conversationService';
@@ -204,7 +205,126 @@ export class AIChatService {
       }
     }
 
-    // B. RAG document search and Q&A routing
+    // B. PYQ / Variant Question Generation routing
+    const isVariantQuery = (role === Role.ADMIN || role === Role.FACULTY) &&
+      (trimmedMsg.toLowerCase().includes('variant') ||
+       trimmedMsg.toLowerCase().includes('pyq') ||
+       trimmedMsg.toLowerCase().includes('change values') ||
+       trimmedMsg.toLowerCase().includes('generate a question') ||
+       trimmedMsg.toLowerCase().includes('generate question'));
+
+    if (isVariantQuery) {
+      try {
+        let originalQuestionText = '';
+        
+        // Check if the user wants to pick a random question from bank
+        const isRandomRequest = trimmedMsg.toLowerCase().includes('random') || 
+                                trimmedMsg.toLowerCase().includes('from bank') || 
+                                trimmedMsg.toLowerCase().includes('from database');
+        
+        if (isRandomRequest) {
+          const qCount = await prisma.question.count();
+          if (qCount > 0) {
+            const randomIndex = Math.floor(Math.random() * qCount);
+            const randomQ = await prisma.question.findFirst({
+              skip: randomIndex,
+            });
+            if (randomQ) {
+              originalQuestionText = randomQ.text;
+            }
+          }
+        } else {
+          // Extract pasted question
+          const prefixes = [
+            'generate variant of:',
+            'generate variant of',
+            'generate variant for:',
+            'generate variant for',
+            'variant of:',
+            'variant of',
+            'pyq:',
+            'pyq'
+          ];
+          let foundPasted = '';
+          for (const prefix of prefixes) {
+            const idx = trimmedMsg.toLowerCase().indexOf(prefix);
+            if (idx !== -1) {
+              foundPasted = trimmedMsg.slice(idx + prefix.length).trim();
+              break;
+            }
+          }
+          if (foundPasted.length > 10) {
+            originalQuestionText = foundPasted;
+          } else {
+            if (trimmedMsg.length > 50) {
+              originalQuestionText = trimmedMsg;
+            } else {
+              const qCount = await prisma.question.count();
+              if (qCount > 0) {
+                const randomIndex = Math.floor(Math.random() * qCount);
+                const randomQ = await prisma.question.findFirst({
+                  skip: randomIndex,
+                });
+                if (randomQ) {
+                  originalQuestionText = randomQ.text;
+                }
+              }
+            }
+          }
+        }
+
+        if (!originalQuestionText) {
+          originalQuestionText = 'If a train runs at 60 km/h, how many seconds does it take to cross a 1.5 km long bridge? Options: A) 90s, B) 60s, C) 150s, D) 120s';
+        }
+
+        const variantPrompt = `
+You are an expert GATE exam question variant generator.
+The user has requested to generate a new question variant based on the following original question:
+"${originalQuestionText}"
+
+Your task:
+1. Identify the core concepts, subjects, and topic of the question.
+2. Change the numerical values, parameters, scenario details, or equations.
+3. Formulate a brand new question with these modified values.
+4. Generate new option choices (A, B, C, D) based on the new values.
+5. Calculate the exact new correct option and write a detailed, step-by-step mathematical explanation showing how the solution is derived.
+6. Return your response as a beautifully formatted markdown message. Show the Original Question, the New Generated Variant, the Option Choices, the Correct Answer, and the detailed Explanation.
+`;
+
+        const providerResult = await AIProviderService.generateResponse(
+          variantPrompt,
+          [],
+          `Generate variant of: ${originalQuestionText}`
+        );
+
+        if (providerResult.success && providerResult.content) {
+          const assistantMsg = await ConversationService.saveAssistantMessage(
+            conversation.id,
+            userMsg.id,
+            providerResult.content
+          );
+
+          return {
+            success: true,
+            type: 'SUCCESS',
+            conversationId: conversation.id,
+            title: conversation.title || 'AI Consultation',
+            message: {
+              id: assistantMsg.id,
+              role: assistantMsg.role,
+              content: assistantMsg.content,
+              createdAt: assistantMsg.createdAt,
+            },
+            answer: assistantMsg.content,
+            messageId: assistantMsg.id,
+          };
+        }
+      } catch (err: any) {
+        console.error('[AIChatService.processChatMessage Variant Fallback Error]:', err);
+      }
+    }
+
+    // C. RAG document search and Q&A routing
     try {
       const matchedChunks = await RAGService.searchChunks({
         query: trimmedMsg,

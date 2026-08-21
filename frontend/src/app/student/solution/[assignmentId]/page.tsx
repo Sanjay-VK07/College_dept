@@ -170,7 +170,33 @@ export default function SolutionReviewPage({ params }: { params?: { assignmentId
 
                 {/* Question Statement */}
                 <div className="text-slate-900 text-sm leading-relaxed whitespace-pre-wrap font-medium">
-                  {q.text}
+                  {(() => {
+                    const text = q.text;
+                    const imgRegex = /!\[.*?\]\((.*?)\)/;
+                    const match = text.match(imgRegex);
+                    if (match) {
+                      const imageUrl = match[1];
+                      const cleanText = text.replace(imgRegex, '').trim();
+                      return (
+                        <div className="space-y-4">
+                          <div>{cleanText}</div>
+                          <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                            <img src={imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="space-y-4">
+                        <div>{text}</div>
+                        {q.imageUrl && (
+                          <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                            <img src={q.imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Answer Details */}

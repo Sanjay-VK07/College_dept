@@ -1,5 +1,6 @@
 import { QuestionGenerationService } from '../services/questionGenerationService';
 import { AIProviderService } from '../services/aiProviderService';
+import { RAGService } from '../services/ragService';
 import { EmbeddingProvider } from '../services/embeddingProvider';
 import { prisma } from '../../../config/prisma';
 import { Role, QuestionType, Difficulty, AIGeneratedQuestionStatus, AIDocumentVisibility, AIDocumentStatus } from '@prisma/client';
@@ -16,8 +17,40 @@ describe('QuestionGenerationService Integration & Review Pipeline Tests', () => 
   const testReqId = 'gen-test-req-' + Date.now();
 
   let providerSpy: jest.SpyInstance;
+  let ragSpy: jest.SpyInstance;
 
   beforeAll(async () => {
+    // Spy on RAGService to return validated chunk
+    ragSpy = jest.spyOn(RAGService, 'executeRAGPipeline').mockResolvedValue({
+      ragDecision: 'SEARCH_SUCCESS' as any,
+      ragUsed: true,
+      contextText: 'Bottom-up heap building builds a heap of N elements in O(N) time.',
+      sources: [{ documentId: testDocId, title: 'Data Structures Lecture Notes - Heaps' }],
+      evaluation: {
+        qualityClassification: 'HIGH_CONFIDENCE' as any,
+        qualityScore: 0.9,
+        averageSimilarity: 0.9,
+        authorizedChunksFound: 1,
+        relevantChunksUsed: 1,
+        sourceDocumentCount: 1,
+        duplicateChunkRatio: 0,
+        contextUtilization: 1,
+        validatedChunks: [
+          {
+            chunkId: 'chunk-1',
+            documentId: testDocId,
+            documentTitle: 'Data Structures Lecture Notes - Heaps',
+            content: 'Bottom-up heap building builds a heap of N elements in O(N) time.',
+            similarityScore: 0.9,
+          },
+        ],
+        validatedSources: [{ documentId: testDocId, title: 'Data Structures Lecture Notes - Heaps' }],
+      },
+      embeddingDurationMs: 10,
+      vectorSearchDurationMs: 10,
+      contextAssemblyDurationMs: 10,
+    });
+
     // Spy on AIProviderService to return valid GATE MCQ structured JSON
     providerSpy = jest.spyOn(AIProviderService, 'generateResponse').mockResolvedValue({
       success: true,
@@ -90,6 +123,7 @@ describe('QuestionGenerationService Integration & Review Pipeline Tests', () => 
 
   afterAll(async () => {
     providerSpy.mockRestore();
+    if (ragSpy) ragSpy.mockRestore();
     await prisma.aIGeneratedQuestion.deleteMany({ where: { createdById: testUserId } });
     await prisma.aIQuestionGenerationTrace.deleteMany({ where: { generatedById: testUserId } });
     await prisma.aIDocument.deleteMany({ where: { id: testDocId } });
