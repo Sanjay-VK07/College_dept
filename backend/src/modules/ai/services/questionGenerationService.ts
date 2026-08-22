@@ -4,6 +4,9 @@ import { RAGService } from './ragService';
 import { AIProviderService } from './aiProviderService';
 import { QuestionValidationService } from './questionValidationService';
 import { QuestionSimilarityService } from './questionSimilarityService';
+import { AnswerVerificationService } from './answerVerificationService';
+import { EmbeddingProvider } from './embeddingProvider';
+import { AIGenerationSettingsService } from './aiGenerationSettingsService';
 import { QuestionGenerationPrompt } from '../prompts/questionGenerationPrompt';
 import { GenerateQuestionsDTO, QuestionGenerationResult, RawGeneratedQuestion } from '../types/questionGenerationTypes';
 import { ENV } from '../../../config/env';
@@ -256,6 +259,24 @@ export class QuestionGenerationService {
       // Check Duplicate / Similarity in Question Bank
       const simResult = await QuestionSimilarityService.checkSimilarity(valResult.sanitizedStem, validatedSubtopicId);
 
+      // Independent Answer Verification — a second, independent pass that re-derives the
+      // answer against the same source context rather than trusting the generator's own answer.
+      const verResult = valResult.isValid
+        ? await AnswerVerificationService.verifyAnswer({
+            stem: valResult.sanitizedStem,
+            type: (rawQ.type || questionType) as QuestionType,
+            options: valResult.normalizedOptions,
+            proposedAnswer: valResult.normalizedCorrectAnswer,
+            explanation: valResult.sanitizedExplanation || '',
+            sourceContext: contextText,
+          })
+        : null;
+
+      const finalStatus =
+        !valResult.isValid || verResult?.verificationStatus === 'FAIL'
+          ? AIGeneratedQuestionStatus.REJECTED
+          : AIGeneratedQuestionStatus.PENDING_REVIEW;
+
       // Save AIGeneratedQuestion Record
       const createdRecord = await prisma.aIGeneratedQuestion.create({
         data: {
@@ -268,11 +289,16 @@ export class QuestionGenerationService {
           options: valResult.normalizedOptions ? valResult.normalizedOptions : undefined,
           correctAnswer: valResult.normalizedCorrectAnswer,
           explanation: valResult.sanitizedExplanation,
+          generatedAnswer: valResult.normalizedCorrectAnswer,
+          verifiedAnswer: verResult?.verifiedAnswer ?? null,
+          verificationStatus: verResult?.verificationStatus ?? 'UNVERIFIED',
+          ambiguityDetected: verResult?.ambiguityDetected ?? false,
+          provenanceValid: verResult?.sourceSupported ?? false,
           subjectId,
           moduleId,
           topicId,
           subtopicId: validatedSubtopicId,
-          status: valResult.isValid ? AIGeneratedQuestionStatus.PENDING_REVIEW : AIGeneratedQuestionStatus.REJECTED,
+          status: finalStatus,
           qualityStatus: valResult.qualityStatus,
           qualityScore: valResult.qualityScore,
           similarityStatus: simResult.status,
@@ -405,6 +431,10 @@ export class QuestionGenerationService {
       targetSubtopicId = fallbackSubtopic.id;
     }
 
+    // Computed outside the transaction — an embedding-provider network call inside a Prisma
+    // transaction risks the transaction's own timeout.
+    const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(genQuestion.stem);
+
     // Transactionally create live Question Bank record and update AIGeneratedQuestion status
     const [liveQuestion] = await prisma.$transaction(async (tx) => {
       const newLiveQuestion = await tx.question.create({
@@ -419,6 +449,8 @@ export class QuestionGenerationService {
           explanation: genQuestion.explanation,
           subtopicId: targetSubtopicId!,
           createdById: userId,
+          generatedByAI: true,
+          embedding,
         },
       });
 
@@ -430,8 +462,17 @@ export class QuestionGenerationService {
         },
       });
 
+      // Link the live question back to whatever document(s) grounded its generation/extraction,
+      // so the Question Bank UI can group by source PDF and exam assembly can pull a random
+      // subset scoped to one specific uploaded document (see adminController.createExam).
+      if (genQuestion.sourceDocumentIds && genQuestion.sourceDocumentIds.length > 0) {
+        await tx.questionAISource.createMany({
+          data: genQuestion.sourceDocumentIds.map((docId) => ({ questionId: newLiveQuestion.id, documentId: docId })),
+        });
+      }
+
       return [newLiveQuestion];
-    });
+    }, { timeout: 20000 }); // this DB connection has consistently taken 1s+ per query this session — Prisma's 5s default is too tight for 3 sequential writes
 
     return {
       success: true,
@@ -768,6 +809,19 @@ NAT (Numerical Answer Type):
         };
       }
 
+      // Independent Answer Verification — same second-opinion check used by the main RAG
+      // pipeline, so this legacy draft flow doesn't hand faculty an unverified answer to review.
+      const verResult = contextText
+        ? await AnswerVerificationService.verifyAnswer({
+            stem: q.question,
+            type: questionType,
+            options: q.options,
+            proposedAnswer: formattedCorrectAnswer,
+            explanation: q.explanation || '',
+            sourceContext: contextText,
+          })
+        : null;
+
       validatedQuestions.push({
         text: q.question,
         type: questionType,
@@ -779,6 +833,11 @@ NAT (Numerical Answer Type):
         explanation: q.explanation,
         subtopicId,
         isDuplicate: isDupe,
+        verificationStatus: verResult?.verificationStatus ?? 'UNVERIFIED',
+        verifiedAnswer: verResult?.verifiedAnswer ?? null,
+        ambiguityDetected: verResult?.ambiguityDetected ?? false,
+        sourceSupported: verResult?.sourceSupported ?? false,
+        verificationNotes: verResult?.verificationNotes ?? 'No source document context supplied — independent verification not run.',
         sources: fetchedChunks.map((c) => ({
           documentId: c.documentId,
           documentTitle: c.title,
@@ -803,145 +862,96 @@ NAT (Numerical Answer Type):
   }
 
   /**
-   * Reads an uploaded PDF document, parses its chunks and extracted diagrams,
-   * extracts all questions verbatim via LLM, and inserts them directly into the Question Bank.
+   * Shared safety pipeline for a single extracted (not generated) question: structural
+   * validation -> semantic duplicate check -> independent answer verification -> conditional
+   * auto-publish. Used by pdfQuestionImportService.ts so PDF extraction is held to the same bar
+   * as AI-generated content, and reusable anywhere else that imports verbatim source content.
+   *
+   * Extracted content differs from AI-generated content in one important way: the correct answer
+   * here comes from the source document's own official answer key, not from the AI, so a FAILed
+   * independent re-derivation is treated as "needs human review", never as grounds to discard
+   * real exam content the AI itself may have gotten wrong.
    */
-  public static async importQuestionsFromPDF(
-    documentId: string,
-    subtopicId: string,
-    userId: string
-  ): Promise<any[]> {
-    // 1. Retrieve all parsed chunks for this document
-    const chunks = await prisma.aIDocumentChunk.findMany({
-      where: { documentId },
-      orderBy: { chunkIndex: 'asc' },
+  public static async importExtractedQuestion(params: {
+    rawQ: { type: QuestionType; stem?: string; text?: string; options?: any; correctAnswer?: any; explanation?: string; difficulty?: Difficulty; imageUrl?: string | null };
+    subtopicId: string;
+    userId: string;
+    generationRequestId: string;
+    sourceDocumentIds: string[];
+  }): Promise<{ outcome: 'IMPORTED' | 'SKIPPED'; skipReason?: string; record?: any; autoPublished?: boolean }> {
+    const { rawQ, subtopicId, userId, generationRequestId, sourceDocumentIds } = params;
+
+    const normalizedRawQ = { ...rawQ, stem: rawQ.stem ?? rawQ.text ?? '' };
+    const valResult = QuestionValidationService.validateQuestion(normalizedRawQ as any);
+    if (!valResult.isValid) {
+      return { outcome: 'SKIPPED', skipReason: valResult.errors.join('; ') };
+    }
+
+    let finalStem = valResult.sanitizedStem;
+    if (rawQ.imageUrl && !finalStem.includes('![diagram]')) {
+      finalStem = `${finalStem}\n\n![diagram](${rawQ.imageUrl})`;
+    }
+
+    const simResult = await QuestionSimilarityService.checkSimilarity(finalStem, subtopicId);
+    if (simResult.status === AIQuestionSimilarityStatus.DUPLICATE) {
+      return { outcome: 'SKIPPED', skipReason: `Duplicate of an existing Question Bank entry (${simResult.similarQuestionId}).` };
+    }
+
+    const verResult = await AnswerVerificationService.verifyAnswer({
+      stem: finalStem,
+      type: rawQ.type,
+      options: valResult.normalizedOptions,
+      proposedAnswer: valResult.normalizedCorrectAnswer,
+      explanation: valResult.sanitizedExplanation || '',
+      sourceContext:
+        'This question and its stated correct answer were extracted verbatim from the uploaded source document\'s own official answer key — they are not AI-generated. No additional external reference text is available. Independently verify, using your own subject-matter expertise, whether the stated correct answer is actually correct for the given question and options.',
     });
 
-    if (chunks.length === 0) {
-      throw new Error('No text chunks found for the uploaded PDF document.');
-    }
+    const settings = await AIGenerationSettingsService.getSettings();
 
-    const contextText = chunks
-      .map((c: any, i: number) => `[Page Chunk ${i + 1}]:\n${c.content}`)
-      .join('\n\n');
+    const createdGenQ = await prisma.aIGeneratedQuestion.create({
+      data: {
+        generationRequestId,
+        stem: finalStem,
+        type: rawQ.type,
+        difficulty: rawQ.difficulty || Difficulty.MEDIUM,
+        marks: rawQ.type === QuestionType.NAT ? 2.0 : 1.0,
+        negativeMarks: rawQ.type === QuestionType.MCQ ? 0.33 : 0.0,
+        options: valResult.normalizedOptions ? valResult.normalizedOptions : undefined,
+        correctAnswer: valResult.normalizedCorrectAnswer,
+        explanation: valResult.sanitizedExplanation,
+        generatedAnswer: valResult.normalizedCorrectAnswer,
+        verifiedAnswer: verResult.verifiedAnswer,
+        verificationStatus: verResult.verificationStatus,
+        ambiguityDetected: verResult.ambiguityDetected,
+        provenanceValid: true, // extracted verbatim from the real uploaded document
+        subtopicId,
+        status: AIGeneratedQuestionStatus.PENDING_REVIEW,
+        qualityStatus: valResult.qualityStatus,
+        qualityScore: valResult.qualityScore,
+        similarityStatus: simResult.status,
+        similarQuestionId: simResult.similarQuestionId || null,
+        sourceDocumentIds,
+        sourceChunkIds: [],
+        createdById: userId,
+      },
+    });
 
-    // 2. Scan for extracted diagrams in public/uploads/diagrams/
-    const fs = require('fs');
-    const path = require('path');
-    const uploadDir = path.join(__dirname, '../../../../public/uploads/diagrams');
-    const imageUrls: string[] = [];
-    if (fs.existsSync(uploadDir)) {
-      const files = fs.readdirSync(uploadDir);
-      for (const file of files) {
-        if (file.startsWith(`doc_${documentId}_`)) {
-          imageUrls.push(`/uploads/diagrams/${file}`);
+    let finalRecord: any = createdGenQ;
+    let autoPublished = false;
+
+    if (settings.autoPublishVerified && verResult.verificationStatus === 'PASS') {
+      try {
+        const approval = await QuestionGenerationService.approveQuestion(createdGenQ.id, userId, Role.ADMIN);
+        if (approval.success) {
+          autoPublished = true;
+          finalRecord = { ...createdGenQ, status: AIGeneratedQuestionStatus.APPROVED, createdQuestionId: (approval.question as any)?.id };
         }
+      } catch (err: any) {
+        console.error('[importExtractedQuestion] Auto-publish failed for', createdGenQ.id, err.message);
       }
     }
 
-    // 3. Build prompts for verbatim extraction
-    const systemPrompt = `You are a high-fidelity GATE Exam Question Parser. Your task is to extract all questions from the provided PDF text verbatim.
-
-CRITICAL RULES:
-1. Grounding: Do NOT invent new questions. Extract the existing questions from the text exactly as they are.
-2. Structure: Determine the type (MCQ, MSQ, NAT), options (exactly 4 options for MCQ/MSQ), correct answer, and explanation.
-3. Diagrams matching: Match each question with the correct diagram from the available list of images: [${imageUrls.join(', ')}]. If a question references a figure or diagram (e.g., "as shown in the figure", "in the given figure", "diagram below"), select the corresponding image path from the list and set the "imageUrl" field. If no image matches, set "imageUrl" to null.
-4. Output format: Return only a strict JSON object with a "questions" array. No markdown, no formatting backticks.
-
-QUESTION SCHEMAS:
-MCQ/MSQ:
-- "type": "MCQ" | "MSQ"
-- "stem": "Question text..."
-- "options": ["Option A", "Option B", "Option C", "Option D"]
-- "correctAnswer": [index] (0-based)
-- "explanation": "Detailed explanation..."
-- "imageUrl": "/uploads/diagrams/..." or null
-
-NAT:
-- "type": "NAT"
-- "stem": "NAT problem text..."
-- "options": null
-- "correctAnswer": { "value": 15.5, "min": 15.0, "max": 16.0 }
-- "explanation": "Detailed explanation..."
-- "imageUrl": "/uploads/diagrams/..." or null`;
-
-    const userPrompt = `Extract all questions from the PDF text below:
-
-ACADEMIC TEXT:
----
-${contextText}
----
-
-Return a valid JSON object matching:
-{
-  "questions": [
-    {
-      "type": "MCQ",
-      "stem": "Question text...",
-      "options": ["A", "B", "C", "D"],
-      "correctAnswer": [0],
-      "explanation": "Explanation...",
-      "imageUrl": null
-    }
-  ]
-}`;
-
-    // 4. Generate response using AI
-    const aiResponse = await AIProviderService.generateResponse(systemPrompt, [], userPrompt);
-    if (!aiResponse.success || !aiResponse.content) {
-      throw new Error(`AI extraction failed: ${aiResponse.message || 'Unknown error'}`);
-    }
-
-    // 5. Parse output JSON
-    let parsedQuestions: any[] = [];
-    try {
-      let cleanJsonText = aiResponse.content.trim();
-      if (cleanJsonText.startsWith('```')) {
-        cleanJsonText = cleanJsonText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-      }
-      const jsonObj = JSON.parse(cleanJsonText);
-      parsedQuestions = Array.isArray(jsonObj) ? jsonObj : jsonObj.questions || [jsonObj];
-    } catch (parseErr: any) {
-      throw new Error(`Failed to parse AI question extraction output: ${parseErr.message}`);
-    }
-
-    const importedQuestions: any[] = [];
-
-    // 6. Validate and insert questions directly into the database Question table (Question Bank)
-    for (const rawQ of parsedQuestions) {
-      const valResult = QuestionValidationService.validateQuestion(rawQ);
-      if (!valResult.isValid) {
-        console.warn(`[importQuestionsFromPDF] Skipping invalid question:`, valResult.errors);
-        continue;
-      }
-
-      // Append image URL markdown if imageUrl is set
-      let finalStem = valResult.sanitizedStem;
-      const imgUrl = (rawQ as any).imageUrl || (rawQ as any).image_url || (rawQ as any).image;
-      if (imgUrl && !finalStem.includes('![diagram]')) {
-        finalStem = `${finalStem}\n\n![diagram](${imgUrl})`;
-      }
-
-      const createdQ = await prisma.question.create({
-        data: {
-          text: finalStem,
-          type: rawQ.type,
-          difficulty: rawQ.difficulty || Difficulty.MEDIUM,
-          marks: rawQ.type === QuestionType.NAT ? 2.0 : 1.0,
-          negativeMarks: rawQ.type === QuestionType.MCQ ? 0.33 : 0.0,
-          options: valResult.normalizedOptions || [],
-          correctAnswer: valResult.normalizedCorrectAnswer,
-          explanation: valResult.sanitizedExplanation,
-          subtopicId,
-          createdById: userId,
-          imageUrl: imgUrl || null,
-          generatedByAI: true,
-        },
-      });
-
-      importedQuestions.push(createdQ);
-    }
-
-    return importedQuestions;
+    return { outcome: 'IMPORTED', record: finalRecord, autoPublished };
   }
 }

@@ -23,10 +23,19 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 
-export const AIBatchQuestionGeneratorStudio: React.FC = () => {
+interface AIBatchQuestionGeneratorStudioProps {
+  role?: string;
+}
+
+export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorStudioProps> = ({ role = 'FACULTY' }) => {
   // Config & Bounds
   const [minCount, setMinCount] = useState(50);
   const [maxCount, setMaxCount] = useState(500);
+
+  // Admin-configurable generation governance settings
+  const [autoPublishVerified, setAutoPublishVerified] = useState(true);
+  const [maxRegenerationAttempts, setMaxRegenerationAttempts] = useState(2);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   // Form Fields
   const [totalQuestions, setTotalQuestions] = useState(50);
@@ -64,6 +73,53 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
   const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
+  const pollTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, []);
+
+  const TERMINAL_STATUSES = ['COMPLETED', 'GENERATED_PARTIAL_BATCH', 'FAILED'];
+
+  const pollJobStatus = (generationRequestId: string) => {
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await aiService.getBatchJobStatus(generationRequestId);
+        if (!res.success) return;
+        const job = res.job;
+        setJobStatus(job.status);
+        setJobResult({
+          status: job.status,
+          message: job.statusMessage,
+          requestedCount: job.requestedCount,
+          generatedCount: job.generatedCount,
+          validatedCount: job.validatedCount,
+          verifiedCount: job.verifiedCount,
+          pendingReviewCount: job.pendingReviewCount,
+          autoPublishedCount: job.autoPublishedCount,
+          duplicateCount: job.duplicateCount,
+          failedCount: job.failedCount,
+          regenerationRounds: job.regenerationRounds,
+        });
+        setGeneratedQuestions(res.questions || []);
+
+        if (TERMINAL_STATUSES.includes(job.status)) {
+          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+          setIsGenerating(false);
+          if (job.status === 'FAILED') {
+            setErrorMsg(job.statusMessage || 'Batch generation failed.');
+          }
+        }
+      } catch (err: any) {
+        // Transient poll failure — keep polling, don't abort the job on a single network blip.
+        console.error('[AIBatchQuestionGeneratorStudio] Poll error:', err.message);
+      }
+    }, 3000);
+  };
 
   // Editing Question State
   const [editingQuestion, setEditingQuestion] = useState<any | null>(null);
@@ -91,8 +147,29 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
       if (subjRes.data?.success) {
         setSubjects(subjRes.data.data || []);
       }
+
+      const settingsRes = await aiService.getGenerationSettings();
+      if (settingsRes.success) {
+        setAutoPublishVerified(settingsRes.data.autoPublishVerified);
+        setMaxRegenerationAttempts(settingsRes.data.maxRegenerationAttempts);
+      }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const res = await aiService.updateGenerationSettings({ autoPublishVerified, maxRegenerationAttempts });
+      if (res.success) {
+        setAutoPublishVerified(res.data.autoPublishVerified);
+        setMaxRegenerationAttempts(res.data.maxRegenerationAttempts);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingSettings(false);
     }
   };
 
@@ -142,8 +219,9 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
     }
 
     setIsGenerating(true);
-    setJobStatus('GENERATING');
+    setJobStatus('QUEUED');
     setJobResult(null);
+    setGeneratedQuestions([]);
 
     const reqId = `gen_batch_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
@@ -166,15 +244,25 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
       if (!res.success) {
         setErrorMsg(res.message || 'Generation failed.');
         setJobStatus('FAILED');
-      } else {
-        setJobResult(res);
-        setJobStatus(res.status);
+        setIsGenerating(false);
+        return;
+      }
+
+      setJobResult(res);
+      setJobStatus(res.status);
+
+      // The batch is now QUEUED and processed by the backend's async worker (large batches
+      // involve many sequential LLM calls and would otherwise exceed a request timeout) — poll
+      // for real progress rather than waiting on a single blocking response.
+      if (TERMINAL_STATUSES.includes(res.status)) {
         setGeneratedQuestions(res.questions || []);
+        setIsGenerating(false);
+      } else {
+        pollJobStatus(reqId);
       }
     } catch (err: any) {
       setErrorMsg(err.response?.data?.message || err.message || 'Failed to initiate batch generation.');
       setJobStatus('FAILED');
-    } finally {
       setIsGenerating(false);
     }
   };
@@ -408,6 +496,41 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
             </div>
           </div>
 
+          {/* Exam Behavior Toggles */}
+          <div className="space-y-2.5 border-t border-slate-100 dark:border-slate-800 pt-4">
+            <span className="font-semibold text-xs uppercase tracking-wider text-slate-500 block">Exam Behavior</span>
+            <label className="flex items-center justify-between text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+              <span>Negative Marking</span>
+              <input
+                type="checkbox"
+                checked={negativeMarking}
+                onChange={(e) => setNegativeMarking(e.target.checked)}
+                className="rounded text-blue-600 focus:ring-blue-500"
+              />
+            </label>
+            <label className="flex items-center justify-between text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+              <span>Include Source References</span>
+              <input
+                type="checkbox"
+                checked={sourceReferences}
+                onChange={(e) => setSourceReferences(e.target.checked)}
+                className="rounded text-blue-600 focus:ring-blue-500"
+              />
+            </label>
+            <div>
+              <label className="block text-xs text-slate-700 dark:text-slate-300 mb-1">Solution Visibility to Students</label>
+              <select
+                value={solutionVisibility}
+                onChange={(e) => setSolutionVisibility(e.target.value)}
+                className="w-full text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5"
+              >
+                <option value="SHOW_AFTER_RESULT">Show After Result</option>
+                <option value="SHOW_IMMEDIATELY">Show Immediately After Submission</option>
+                <option value="HIDDEN">Hidden (Faculty Only)</option>
+              </select>
+            </div>
+          </div>
+
           <button
             type="button"
             disabled={isGenerating || diffSum !== 100 || typeSum !== 100}
@@ -417,7 +540,11 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
             {isGenerating ? (
               <>
                 <RefreshCw className="w-5 h-5 animate-spin" />
-                <span>Generating {totalQuestions} Questions...</span>
+                <span>
+                  {jobStatus === 'PROCESSING' && jobResult
+                    ? `Processing... ${jobResult.generatedCount}/${jobResult.requestedCount} generated`
+                    : 'Queued...'}
+                </span>
               </>
             ) : (
               <>
@@ -426,6 +553,41 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
               </>
             )}
           </button>
+
+          {/* Admin-configurable generation governance */}
+          {role === 'ADMIN' && (
+            <div className="space-y-2.5 border-t border-slate-100 dark:border-slate-800 pt-4">
+              <span className="font-semibold text-xs uppercase tracking-wider text-slate-500 block">Admin: Generation Governance</span>
+              <label className="flex items-center justify-between text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                <span>Auto-publish verified questions</span>
+                <input
+                  type="checkbox"
+                  checked={autoPublishVerified}
+                  onChange={(e) => setAutoPublishVerified(e.target.checked)}
+                  className="rounded text-blue-600 focus:ring-blue-500"
+                />
+              </label>
+              <div className="flex items-center justify-between text-xs text-slate-700 dark:text-slate-300">
+                <span>Max regeneration rounds on shortfall</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={5}
+                  value={maxRegenerationAttempts}
+                  onChange={(e) => setMaxRegenerationAttempts(Number(e.target.value))}
+                  className="w-14 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveSettings}
+                disabled={savingSettings}
+                className="text-xs font-semibold text-blue-600 hover:underline disabled:opacity-50"
+              >
+                {savingSettings ? 'Saving...' : 'Save Governance Settings'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -435,8 +597,12 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
           <div className="flex items-center justify-between border-b pb-4 dark:border-slate-800">
             <div>
               <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                Batch Generation Results
+                {TERMINAL_STATUSES.includes(jobResult.status) ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                ) : (
+                  <RefreshCw className="w-5 h-5 text-blue-500 animate-spin" />
+                )}
+                Batch Generation {TERMINAL_STATUSES.includes(jobResult.status) ? 'Results' : 'In Progress'}
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">{jobResult.message}</p>
             </div>
@@ -444,6 +610,8 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
               className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
                 jobResult.status === 'COMPLETED'
                   ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
+                  : jobResult.status === 'FAILED'
+                  ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300'
                   : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
               }`}
             >
@@ -451,7 +619,16 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          {!TERMINAL_STATUSES.includes(jobResult.status) && (
+            <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-blue-500 transition-all duration-500"
+                style={{ width: `${Math.min(100, Math.round(((jobResult.generatedCount || 0) / (jobResult.requestedCount || 1)) * 100))}%` }}
+              />
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
             <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl text-center">
               <span className="text-xs text-slate-500 block">Requested</span>
               <span className="text-lg font-bold text-slate-800 dark:text-slate-200">{jobResult.requestedCount}</span>
@@ -468,6 +645,14 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
               <span className="text-xs text-indigo-600 dark:text-indigo-400 block">Verified</span>
               <span className="text-lg font-bold text-indigo-700 dark:text-indigo-300">{jobResult.verifiedCount}</span>
             </div>
+            <div className="bg-teal-50 dark:bg-teal-900/20 p-3 rounded-xl text-center">
+              <span className="text-xs text-teal-600 dark:text-teal-400 block">Auto-Published</span>
+              <span className="text-lg font-bold text-teal-700 dark:text-teal-300">{jobResult.autoPublishedCount ?? 0}</span>
+            </div>
+            <div className="bg-sky-50 dark:bg-sky-900/20 p-3 rounded-xl text-center">
+              <span className="text-xs text-sky-600 dark:text-sky-400 block">Awaiting Review</span>
+              <span className="text-lg font-bold text-sky-700 dark:text-sky-300">{jobResult.pendingReviewCount ?? 0}</span>
+            </div>
             <div className="bg-amber-50 dark:bg-amber-900/20 p-3 rounded-xl text-center">
               <span className="text-xs text-amber-600 dark:text-amber-400 block">Duplicates</span>
               <span className="text-lg font-bold text-amber-700 dark:text-amber-300">{jobResult.duplicateCount}</span>
@@ -477,6 +662,11 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
               <span className="text-lg font-bold text-red-700 dark:text-red-300">{jobResult.failedCount}</span>
             </div>
           </div>
+          {jobResult.regenerationRounds > 0 && (
+            <p className="text-xs text-slate-500">
+              {jobResult.regenerationRounds} automatic regeneration round(s) attempted to make up shortfalls from rejected/duplicate questions.
+            </p>
+          )}
         </div>
       )}
 
@@ -567,25 +757,38 @@ export const AIBatchQuestionGeneratorStudio: React.FC = () => {
                 </div>
 
                 {/* Card Actions */}
-                <div className="flex items-center justify-end space-x-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => handleRejectQuestion(q.id)}
-                    disabled={q.status === 'REJECTED'}
-                    className="px-4 py-2 rounded-xl text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 transition border border-red-200 dark:border-red-800 disabled:opacity-50"
-                  >
-                    Reject
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleApproveQuestion(q.id)}
-                    disabled={q.status === 'APPROVED' || approvedIds.has(q.id)}
-                    className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm disabled:opacity-50 flex items-center space-x-1"
-                  >
-                    <Check className="w-4 h-4" />
-                    <span>{q.status === 'APPROVED' || approvedIds.has(q.id) ? 'Approved' : 'Approve'}</span>
-                  </button>
-                </div>
+                {q.status === 'APPROVED' ? (
+                  <div className="flex items-center justify-end pt-2">
+                    <span className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4" />
+                      {approvedIds.has(q.id) ? 'Approved' : 'Auto-published (verified)'}
+                    </span>
+                  </div>
+                ) : q.status === 'REJECTED' ? (
+                  <div className="flex items-center justify-end pt-2">
+                    <span className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300">
+                      Rejected
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-end space-x-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => handleRejectQuestion(q.id)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 transition border border-red-200 dark:border-red-800"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApproveQuestion(q.id)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm flex items-center space-x-1"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>Approve</span>
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>

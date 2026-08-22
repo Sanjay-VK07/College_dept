@@ -51,7 +51,7 @@ describe('Batch Question Generation Tests', () => {
   });
 
   it('1. Default generation count = 50', async () => {
-    const result = await AIBatchQuestionGenerationService.generateBatch(testUserId, Role.FACULTY, {
+    const result = await AIBatchQuestionGenerationService.enqueueBatch(testUserId, Role.FACULTY, {
       totalQuestions: 50,
       difficultyDistribution: { EASY: 20, MEDIUM: 50, HARD: 30 },
       typeDistribution: { MCQ: 60, MSQ: 10, NAT: 30 },
@@ -62,7 +62,7 @@ describe('Batch Question Generation Tests', () => {
   });
 
   it('2. Accepts valid 50 questions request', async () => {
-    const result = await AIBatchQuestionGenerationService.generateBatch(testUserId, Role.FACULTY, {
+    const result = await AIBatchQuestionGenerationService.enqueueBatch(testUserId, Role.FACULTY, {
       totalQuestions: 50,
       difficultyDistribution: { EASY: 20, MEDIUM: 50, HARD: 30 },
       typeDistribution: { MCQ: 60, MSQ: 10, NAT: 30 },
@@ -72,7 +72,7 @@ describe('Batch Question Generation Tests', () => {
   });
 
   it('3. Rejects count below 50', async () => {
-    const result = await AIBatchQuestionGenerationService.generateBatch(testUserId, Role.FACULTY, {
+    const result = await AIBatchQuestionGenerationService.enqueueBatch(testUserId, Role.FACULTY, {
       totalQuestions: 10,
       difficultyDistribution: { EASY: 20, MEDIUM: 50, HARD: 30 },
       typeDistribution: { MCQ: 60, MSQ: 10, NAT: 30 },
@@ -82,7 +82,7 @@ describe('Batch Question Generation Tests', () => {
   });
 
   it('4. Rejects count above configured maximum', async () => {
-    const result = await AIBatchQuestionGenerationService.generateBatch(testUserId, Role.FACULTY, {
+    const result = await AIBatchQuestionGenerationService.enqueueBatch(testUserId, Role.FACULTY, {
       totalQuestions: 2000,
       difficultyDistribution: { EASY: 20, MEDIUM: 50, HARD: 30 },
       typeDistribution: { MCQ: 60, MSQ: 10, NAT: 30 },

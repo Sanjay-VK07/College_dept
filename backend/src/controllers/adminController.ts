@@ -8,8 +8,9 @@ import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus 
 import { ENV } from '../config/env';
 import { NotificationController } from './notificationController';
 import { LocalStorageProvider } from '../modules/ai/services/documentStorageService';
-import { DocumentProcessingService } from '../modules/ai/services/documentProcessingService';
-import { QuestionGenerationService } from '../modules/ai/services/questionGenerationService';
+import { PDFQuestionImportService } from '../modules/ai/services/pdfQuestionImportService';
+import { QuestionVersionService } from '../services/questionVersionService';
+import { EmbeddingProvider } from '../modules/ai/services/embeddingProvider';
 
 export class AdminController {
   /**
@@ -611,11 +612,42 @@ export class AdminController {
             },
           },
           createdBy: { select: { name: true, department: true } },
+          aiSources: { select: { documentId: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
 
       return res.status(200).json({ success: true, data: questions });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Lists uploaded question-bank PDFs as grouped entries (one row per PDF),
+   * each with a count of the questions extracted from it, for the Question
+   * Bank UI and for exam-assembly source selection.
+   */
+  public static async getQuestionBankDocuments(req: AuthRequest, res: Response) {
+    try {
+      const documents = await prisma.aIDocument.findMany({
+        where: { aiSources: { some: {} } },
+        include: {
+          _count: { select: { aiSources: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const data = documents.map((doc) => ({
+        id: doc.id,
+        title: doc.title,
+        fileName: doc.fileName,
+        status: doc.status,
+        questionCount: doc._count.aiSources,
+        uploadedAt: doc.createdAt,
+      }));
+
+      return res.status(200).json({ success: true, data });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }
@@ -630,6 +662,8 @@ export class AdminController {
         return res.status(400).json({ success: false, message: 'No taxonomy subtopic found. Run seed script first.' });
       }
 
+      const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(text);
+
       const question = await prisma.question.create({
         data: {
           text,
@@ -643,6 +677,7 @@ export class AdminController {
           reference,
           subtopicId: subtopic.id,
           createdById: req.user!.id,
+          embedding,
         },
       });
 
@@ -736,7 +771,7 @@ export class AdminController {
 
   public static async createExam(req: AuthRequest, res: Response) {
     try {
-      const { title, description, examType, durationMinutes, totalMarks, targetDepartment, maxViolations, instructions } = req.body;
+      const { title, description, examType, durationMinutes, totalMarks, targetDepartment, maxViolations, instructions, questionCount, sourceDocumentId } = req.body;
 
       if (!title || String(title).trim().length < 5) {
         return res.status(400).json({ success: false, message: 'Exam title / course code is required and must be at least 5 characters.' });
@@ -757,6 +792,11 @@ export class AdminController {
         return res.status(400).json({ success: false, message: 'Max violations threshold must be a non-negative number.' });
       }
 
+      const parsedQuestionCount = Number(questionCount) || 0;
+      if (questionCount !== undefined && (isNaN(parsedQuestionCount) || parsedQuestionCount < 0)) {
+        return res.status(400).json({ success: false, message: 'Number of questions must be a non-negative number.' });
+      }
+
       const exam = await prisma.mockTest.create({
         data: {
           title,
@@ -775,11 +815,46 @@ export class AdminController {
         },
       });
 
+      let attachedCount = 0;
+      if (parsedQuestionCount > 0) {
+        const poolWhere: any = sourceDocumentId
+          ? { aiSources: { some: { documentId: String(sourceDocumentId) } } }
+          : {};
+
+        const pool = await prisma.question.findMany({ where: poolWhere, select: { id: true } });
+
+        // Fisher-Yates shuffle, then take the requested count (capped to pool size)
+        const shuffled = [...pool];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        const selected = shuffled.slice(0, parsedQuestionCount);
+
+        if (selected.length > 0) {
+          // Pin each question's current version at attach time so later edits/AI-solution
+          // approvals never retroactively change what this exam scores against.
+          const versionIds = await Promise.all(
+            selected.map((q) => QuestionVersionService.getCurrentVersionId(q.id))
+          );
+
+          await prisma.mockTestQuestion.createMany({
+            data: selected.map((q, idx) => ({
+              mockTestId: exam.id,
+              questionId: q.id,
+              questionVersionId: versionIds[idx],
+              order: idx + 1,
+            })),
+          });
+          attachedCount = selected.length;
+        }
+      }
+
       await AuditLogger.log({
         userId: req.user?.id,
         action: 'CREATE_EXAM',
         resource: 'MockTest',
-        details: `Scheduled and published exam: ${title}`,
+        details: `Scheduled and published exam: ${title}${parsedQuestionCount > 0 ? ` (${attachedCount}/${parsedQuestionCount} questions randomly attached)` : ''}`,
         ipAddress: req.ip,
       });
 
@@ -790,7 +865,12 @@ export class AdminController {
         'ALL'
       );
 
-      return res.status(201).json({ success: true, message: 'Exam created successfully', data: exam });
+      const message =
+        parsedQuestionCount > 0 && attachedCount < parsedQuestionCount
+          ? `Exam created, but only ${attachedCount} of the requested ${parsedQuestionCount} questions were available in the selected pool.`
+          : 'Exam created successfully';
+
+      return res.status(201).json({ success: true, message, data: { ...exam, attachedQuestionCount: attachedCount } });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }
@@ -876,7 +956,9 @@ export class AdminController {
         return res.status(400).json({ success: false, message: 'Please create a subject/subtopic in taxonomy before importing questions.' });
       }
 
-      // If PDF file is uploaded, extract questions and diagrams
+      // If PDF file is uploaded, enqueue background extraction (page-batched internally, so a
+      // large PDF never blocks this request or gets sent to the model in one shot) — poll
+      // GET /ai/questions/batch-status/:generationRequestId for progress.
       if (req.file.mimetype === 'application/pdf' || req.file.originalname.endsWith('.pdf')) {
         const storageProvider = new LocalStorageProvider();
         const storageKey = await storageProvider.upload(req.file.buffer, req.file.originalname, req.file.mimetype);
@@ -896,28 +978,30 @@ export class AdminController {
           },
         });
 
-        // Process the document (extracts text and diagrams)
-        await DocumentProcessingService.processDocument(document.id);
+        const targetCount = req.body.targetQuestionCount ? Number(req.body.targetQuestionCount) : undefined;
 
-        // Extract questions from PDF verbatim
-        const questions = await QuestionGenerationService.importQuestionsFromPDF(
-          document.id,
-          defaultSubtopic.id,
-          req.user!.id
-        );
+        const enqueued = await PDFQuestionImportService.enqueueImport({
+          userId: req.user!.id,
+          role: req.user!.role,
+          documentId: document.id,
+          subtopicId: defaultSubtopic.id,
+          targetCount,
+        });
 
         await AuditLogger.log({
           userId: req.user?.id,
           action: 'BULK_UPLOAD_QUESTIONS',
           resource: 'Question',
-          details: `Imported ${questions.length} questions and diagrams from PDF: ${req.file.originalname}`,
+          details: `Queued question extraction from PDF: ${req.file.originalname}${targetCount ? ` (target count: ${targetCount})` : ''} — job ${enqueued.generationRequestId}.`,
           ipAddress: req.ip,
         });
 
-        return res.status(200).json({
+        return res.status(202).json({
           success: true,
-          message: `Successfully extracted and imported ${questions.length} questions (with diagrams) from PDF!`,
-          count: questions.length,
+          message: `"${req.file.originalname}" uploaded — extracting questions in the background${targetCount ? ` (up to ${targetCount})` : ''}. This can take a few minutes for large documents.`,
+          documentId: document.id,
+          generationRequestId: enqueued.generationRequestId,
+          status: enqueued.status,
         });
       }
 

@@ -81,16 +81,23 @@ describe('Source Provenance Tests', () => {
   });
 
   it('1. Preserves source document and chunk IDs for provenance tracking', async () => {
-    const result = await AIBatchQuestionGenerationService.generateBatch(testUserId, Role.FACULTY, {
+    const enqueued = await AIBatchQuestionGenerationService.enqueueBatch(testUserId, Role.FACULTY, {
       totalQuestions: 50,
       difficultyDistribution: { EASY: 20, MEDIUM: 50, HARD: 30 },
       typeDistribution: { MCQ: 60, MSQ: 10, NAT: 30 },
       selectedResourceIds: [testDocId],
     });
 
-    expect(result.questions).toBeDefined();
-    if (result.questions.length > 0) {
-      const q = result.questions[0];
+    // Batch generation now runs on the async worker (see batchGenerationWorker.ts) rather than
+    // inline on the request — invoke the job processor directly here to exercise the same code
+    // path synchronously within the test.
+    await AIBatchQuestionGenerationService.processBatchJob(enqueued.generationRequestId);
+
+    const { questions } = await AIBatchQuestionGenerationService.getBatchJobStatus(enqueued.generationRequestId);
+
+    expect(questions).toBeDefined();
+    if (questions.length > 0) {
+      const q = questions[0];
       expect(q.sourceDocumentIds).toContain(testDocId);
       expect(q.sourceChunkIds).toContain(testChunkId);
     }

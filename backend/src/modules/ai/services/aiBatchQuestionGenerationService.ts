@@ -1,12 +1,15 @@
 import { prisma } from '../../../config/prisma';
-import { Role, QuestionType, Difficulty, AIGeneratedQuestionStatus, AIQuestionQualityStatus, AIQuestionSimilarityStatus } from '@prisma/client';
+import { Role, QuestionType, Difficulty, AIGeneratedQuestionStatus, AIQuestionSimilarityStatus } from '@prisma/client';
 import { GenerationDistributionService } from './generationDistributionService';
 import { AnswerVerificationService } from './answerVerificationService';
 import { QuestionValidationService } from './questionValidationService';
 import { QuestionSimilarityService } from './questionSimilarityService';
+import { QuestionGenerationService } from './questionGenerationService';
 import { AIProviderService } from './aiProviderService';
 import { RAGService } from './ragService';
 import { AICircuitBreakerService } from './aiCircuitBreakerService';
+import { AIGenerationSettingsService } from './aiGenerationSettingsService';
+import { AuditLogger } from '../../../services/auditLogger';
 
 export interface BatchGenerationConfig {
   totalQuestions: number;
@@ -25,7 +28,7 @@ export interface BatchGenerationConfig {
 
 export interface BatchGenerationResult {
   success: boolean;
-  status: 'COMPLETED' | 'GENERATED_PARTIAL_BATCH' | 'FAILED' | 'INVALID_GENERATION_COUNT';
+  status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'GENERATED_PARTIAL_BATCH' | 'FAILED' | 'INVALID_GENERATION_COUNT';
   message: string;
   generationRequestId: string;
   requestedCount: number;
@@ -33,30 +36,36 @@ export interface BatchGenerationResult {
   validatedCount: number;
   verifiedCount: number;
   pendingReviewCount: number;
+  autoPublishedCount: number;
   duplicateCount: number;
   failedCount: number;
   questions: any[];
+}
+
+interface PlanItem {
+  type: QuestionType;
+  difficulty: Difficulty;
 }
 
 export class AIBatchQuestionGenerationService {
   private static SUB_BATCH_SIZE = 10; // Number of questions generated per LLM provider call
 
   /**
-   * Main entry point for source-grounded batch GATE question generation.
+   * Validates the request and enqueues a QUEUED AIBatchGenerationJob, returning immediately.
+   * The actual generation work happens in processBatchJob(), picked up by the in-process
+   * batchGenerationWorker — large batches (50-500+ questions, many sequential LLM calls) must
+   * not run inline on the HTTP request thread, or they will exceed typical free-tier hosting
+   * request timeouts. Real progress is then observed via getBatchJobStatus() polling.
    */
-  public static async generateBatch(
+  public static async enqueueBatch(
     userId: string,
     role: Role,
     config: BatchGenerationConfig
   ): Promise<BatchGenerationResult> {
-    const startTime = Date.now();
-
-    // 1. Role-Based Access Control
     if (role !== Role.FACULTY && role !== Role.ADMIN) {
       throw new Error('Forbidden: Only Faculty and Admin users are authorized to generate questions.');
     }
 
-    // 2. Circuit Breaker Protection Check
     if (!AICircuitBreakerService.checkCircuitBreaker().allowed) {
       throw new Error('Circuit Breaker is OPEN: AI Question Generation is temporarily paused by System Admin.');
     }
@@ -73,34 +82,11 @@ export class AIBatchQuestionGenerationService {
       generationRequestId = `gen_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     } = config;
 
-    // 3. Idempotency Check
-    const existingJob = await prisma.aIBatchGenerationJob.findUnique({
-      where: { generationRequestId },
-    });
-
+    const existingJob = await prisma.aIBatchGenerationJob.findUnique({ where: { generationRequestId } });
     if (existingJob) {
-      const existingQuestions = await prisma.aIGeneratedQuestion.findMany({
-        where: { generationRequestId },
-        orderBy: { createdAt: 'asc' },
-      });
-
-      return {
-        success: existingJob.status !== 'FAILED',
-        status: existingJob.status as any,
-        message: existingJob.statusMessage || 'Returned previously generated batch for this request ID (idempotent replay).',
-        generationRequestId,
-        requestedCount: existingJob.requestedCount,
-        generatedCount: existingJob.generatedCount,
-        validatedCount: existingJob.validatedCount,
-        verifiedCount: existingJob.verifiedCount,
-        pendingReviewCount: existingJob.pendingReviewCount,
-        duplicateCount: existingJob.duplicateCount,
-        failedCount: existingJob.failedCount,
-        questions: existingQuestions,
-      };
+      return this.jobToResult(existingJob, await this.getJobQuestions(generationRequestId));
     }
 
-    // 4. Validate Distribution and Permissions Server-Side
     const distResult = await GenerationDistributionService.validateGenerationRequest({
       totalQuestions,
       difficultyDistribution,
@@ -121,19 +107,20 @@ export class AIBatchQuestionGenerationService {
         validatedCount: 0,
         verifiedCount: 0,
         pendingReviewCount: 0,
+        autoPublishedCount: 0,
         duplicateCount: 0,
         failedCount: totalQuestions,
         questions: [],
       };
     }
 
-    // Create Initial Batch Job Record
-    await prisma.aIBatchGenerationJob.create({
+    const job = await prisma.aIBatchGenerationJob.create({
       data: {
         generationRequestId,
         createdById: userId,
         requestedCount: totalQuestions,
-        status: 'PROCESSING',
+        status: 'QUEUED',
+        statusMessage: 'Queued for processing.',
         difficultyDistribution,
         typeDistribution,
         selectedResourceIds: distResult.authorizedResourceIds,
@@ -147,105 +134,178 @@ export class AIBatchQuestionGenerationService {
       },
     });
 
-    // 5. Retrieve Factual Grounding Context strictly from Uploaded Resources
-    let retrievedChunks: any[] = [];
+    return this.jobToResult(job, []);
+  }
 
-    if (distResult.authorizedResourceIds.length > 0) {
-      const chunks = await prisma.aIDocumentChunk.findMany({
-        where: {
-          documentId: { in: distResult.authorizedResourceIds },
-        },
-        include: { document: true },
-        take: 150,
-      });
-      retrievedChunks = chunks.map((c) => ({
-        chunkId: c.id,
-        documentId: c.documentId,
-        documentTitle: c.document.title,
-        content: c.content,
-        metadata: c.metadata,
-      }));
-    } else {
-      // General RAG context fallback across user's accessible documents
-      const ragRes = await RAGService.executeRAGPipeline({
-        userMessage: 'GATE Examination syllabus core concepts and textbook material',
+  /**
+   * Runs the actual generation pipeline for a QUEUED job. Called exclusively by
+   * batchGenerationWorker.ts's poll loop — never called directly from a controller.
+   */
+  public static async processBatchJob(generationRequestId: string): Promise<void> {
+    const job = await prisma.aIBatchGenerationJob.findUnique({ where: { generationRequestId } });
+    if (!job) return;
+
+    await prisma.aIBatchGenerationJob.update({
+      where: { generationRequestId },
+      data: { status: 'PROCESSING', statusMessage: 'Retrieving source context...' },
+    });
+
+    try {
+      const userId = job.createdById;
+      const role = Role.ADMIN; // job was already RBAC-checked at enqueue time
+      const totalQuestions = job.requestedCount;
+      const difficultyDistribution = (job.difficultyDistribution as any) || { EASY: 20, MEDIUM: 50, HARD: 30 };
+      const typeDistribution = (job.typeDistribution as any) || { MCQ: 60, MSQ: 10, NAT: 30 };
+      const selectedResourceIds = job.selectedResourceIds || [];
+
+      // 1. Retrieve grounding context — strictly from uploaded/authorized resources
+      const { contextText, sourceDocumentIds, sourceChunkIds, groundingAvailable } = await this.retrieveGroundingContext(
+        selectedResourceIds,
         userId,
-        role,
-      });
-      retrievedChunks = ragRes.evaluation?.validatedChunks || [];
-    }
+        role
+      );
 
-    // MANDATORY GROUNDING RULE: STOP generation if insufficient source content is available
-    if (retrievedChunks.length === 0) {
-      const msg = 'Insufficient source content is available to generate a verified question.';
+      if (!groundingAvailable) {
+        const msg = 'Insufficient source content is available to generate a verified question.';
+        await prisma.aIBatchGenerationJob.update({
+          where: { generationRequestId },
+          data: { status: 'FAILED', statusMessage: msg, failedCount: totalQuestions },
+        });
+        return;
+      }
+
+      // 2. Taxonomy resolution
+      let targetSubtopicId = job.subtopicId || undefined;
+      if (!targetSubtopicId && job.topicId) {
+        const sub = await prisma.subtopic.findFirst({ where: { topicId: job.topicId } });
+        if (sub) targetSubtopicId = sub.id;
+      }
+      if (!targetSubtopicId) {
+        const sub = await prisma.subtopic.findFirst();
+        if (sub) targetSubtopicId = sub.id;
+      }
+
+      const settings = await AIGenerationSettingsService.getSettings();
+
+      // 3. Initial generation round
+      const roundState = {
+        generatedQuestionsList: [] as any[],
+        duplicateCount: 0,
+        failedCount: 0,
+        autoPublishedCount: 0,
+      };
+
+      const initialPlan = this.buildPlan(totalQuestions, difficultyDistribution, typeDistribution);
+      await this.runGenerationRound(initialPlan, {
+        generationRequestId,
+        contextText,
+        sourceDocumentIds,
+        sourceChunkIds,
+        subtopicId: targetSubtopicId,
+        subjectId: job.subjectId || undefined,
+        moduleId: job.moduleId || undefined,
+        topicId: job.topicId || undefined,
+        userId,
+        settings,
+        state: roundState,
+      });
+
+      await this.persistProgress(generationRequestId, roundState, totalQuestions, 0);
+
+      // 4. Automatic regeneration on shortfall — never fabricate the missing count, only
+      // re-attempt real generation up to the configured retry limit, then report honestly.
+      let round = 0;
+      let acceptedCount = this.countAccepted(roundState.generatedQuestionsList);
+      while (acceptedCount < totalQuestions && round < settings.maxRegenerationAttempts) {
+        round++;
+        const shortfall = totalQuestions - acceptedCount;
+        const regenPlan = this.buildPlan(shortfall, difficultyDistribution, typeDistribution);
+
+        await this.runGenerationRound(regenPlan, {
+          generationRequestId,
+          contextText,
+          sourceDocumentIds,
+          sourceChunkIds,
+          subtopicId: targetSubtopicId,
+          subjectId: job.subjectId || undefined,
+          moduleId: job.moduleId || undefined,
+          topicId: job.topicId || undefined,
+          userId,
+          settings,
+          state: roundState,
+        });
+
+        acceptedCount = this.countAccepted(roundState.generatedQuestionsList);
+        await this.persistProgress(generationRequestId, roundState, totalQuestions, round);
+      }
+
+      // 5. Finalize
+      const generatedCount = roundState.generatedQuestionsList.length;
+      const validatedCount = roundState.generatedQuestionsList.filter((q) => q.status !== AIGeneratedQuestionStatus.REJECTED).length;
+      const verifiedCount = roundState.generatedQuestionsList.filter((q) => q.verificationStatus === 'PASS').length;
+      const pendingReviewCount = roundState.generatedQuestionsList.filter((q) => q.status === AIGeneratedQuestionStatus.PENDING_REVIEW).length;
+
+      const isPartial = acceptedCount < totalQuestions;
+      const finalBatchStatus = isPartial ? 'GENERATED_PARTIAL_BATCH' : 'COMPLETED';
+      const statusMsg = isPartial
+        ? `Generated ${acceptedCount} out of ${totalQuestions} requested questions after ${round} regeneration round(s). Remaining ${totalQuestions - acceptedCount} could not be generated with sufficient confidence from the available source material.`
+        : `Successfully generated and verified ${acceptedCount} GATE questions grounded in uploaded resources (${roundState.autoPublishedCount} auto-published, ${pendingReviewCount} awaiting manual review).`;
+
       await prisma.aIBatchGenerationJob.update({
         where: { generationRequestId },
-        data: { status: 'FAILED', statusMessage: msg },
+        data: {
+          generatedCount,
+          validatedCount,
+          verifiedCount,
+          pendingReviewCount,
+          autoPublishedCount: roundState.autoPublishedCount,
+          failedCount: roundState.failedCount,
+          duplicateCount: roundState.duplicateCount,
+          regenerationRounds: round,
+          status: finalBatchStatus,
+          statusMessage: statusMsg,
+        },
       });
 
-      return {
-        success: false,
-        status: 'FAILED',
-        message: msg,
-        generationRequestId,
-        requestedCount: totalQuestions,
-        generatedCount: 0,
-        validatedCount: 0,
-        verifiedCount: 0,
-        pendingReviewCount: 0,
-        duplicateCount: 0,
-        failedCount: totalQuestions,
-        questions: [],
-      };
+      await AuditLogger.log({
+        userId,
+        action: 'AI_BATCH_GENERATION_COMPLETED',
+        resource: 'AIBatchGenerationJob',
+        details: `${generationRequestId}: ${statusMsg}`,
+      });
+    } catch (err: any) {
+      console.error('[AIBatchQuestionGenerationService] processBatchJob failed:', err);
+      await prisma.aIBatchGenerationJob.update({
+        where: { generationRequestId },
+        data: { status: 'FAILED', statusMessage: `Batch generation failed: ${err.message}` },
+      });
     }
+  }
 
-    const contextText = retrievedChunks
-      .map((c, i) => `[Source Document: "${c.documentTitle}" | Chunk: ${c.chunkId}]:\n${c.content}`)
-      .join('\n\n---\n\n');
-
-    const sourceDocumentIds = Array.from(new Set(retrievedChunks.map((c) => c.documentId)));
-    const sourceChunkIds = Array.from(new Set(retrievedChunks.map((c) => c.chunkId)));
-
-    // Taxonomy lookup
-    let targetSubtopicId = subtopicId;
-    if (!targetSubtopicId && topicId) {
-      const sub = await prisma.subtopic.findFirst({ where: { topicId } });
-      if (sub) targetSubtopicId = sub.id;
+  /**
+   * Runs one generation round (a target plan of type/difficulty slots) through: LLM generation
+   * in sub-batches -> structural validation -> semantic duplicate check -> independent answer
+   * verification -> optional auto-publish. Mutates `state` in place so regeneration rounds can
+   * keep appending to the same running totals.
+   */
+  private static async runGenerationRound(
+    plan: PlanItem[],
+    ctx: {
+      generationRequestId: string;
+      contextText: string;
+      sourceDocumentIds: string[];
+      sourceChunkIds: string[];
+      subtopicId?: string;
+      subjectId?: string;
+      moduleId?: string;
+      topicId?: string;
+      userId: string;
+      settings: { autoPublishVerified: boolean; maxRegenerationAttempts: number };
+      state: { generatedQuestionsList: any[]; duplicateCount: number; failedCount: number; autoPublishedCount: number };
     }
-    if (!targetSubtopicId) {
-      const sub = await prisma.subtopic.findFirst();
-      if (sub) targetSubtopicId = sub.id;
-    }
+  ): Promise<void> {
+    const { generationRequestId, contextText, sourceDocumentIds, sourceChunkIds, subtopicId, subjectId, moduleId, topicId, userId, settings, state } = ctx;
 
-    // 6. Sub-Batch Generation Loop
-    const generatedQuestionsList: any[] = [];
-    let duplicateCount = 0;
-    let failedCount = 0;
-
-    // Expand target generation plan (e.g. 30 MCQ, 10 MSQ, 10 NAT | 10 Easy, 25 Med, 15 Hard)
-    const plan: Array<{ type: QuestionType; difficulty: Difficulty }> = [];
-    const typeCounts: Record<string, number> = { ...distResult.allocatedTypeCounts };
-    const diffCounts: Record<string, number> = { ...distResult.allocatedDifficultyCounts };
-
-    const types: QuestionType[] = ['MCQ', 'MSQ', 'NAT'];
-    const diffs: Difficulty[] = ['EASY', 'MEDIUM', 'HARD'];
-
-    for (const t of types) {
-      for (let i = 0; i < (typeCounts[t] || 0); i++) {
-        // Assign difficulty sequentially based on diffCounts remaining
-        let chosenDiff: Difficulty = 'MEDIUM';
-        for (const d of diffs) {
-          if ((diffCounts[d] || 0) > 0) {
-            chosenDiff = d;
-            diffCounts[d] -= 1;
-            break;
-          }
-        }
-        plan.push({ type: t, difficulty: chosenDiff });
-      }
-    }
-
-    // Process plan in chunks of SUB_BATCH_SIZE (e.g. 10 at a time)
     for (let batchStart = 0; batchStart < plan.length; batchStart += this.SUB_BATCH_SIZE) {
       const currentBatchPlan = plan.slice(batchStart, batchStart + this.SUB_BATCH_SIZE);
 
@@ -273,7 +333,7 @@ Return a JSON array of ${currentBatchPlan.length} question objects:
     "type": "MCQ" | "MSQ" | "NAT",
     "difficulty": "EASY" | "MEDIUM" | "HARD",
     "options": ["Option A", "Option B", "Option C", "Option D"], // Required for MCQ & MSQ (exactly 4 options). Omit or null for NAT.
-    "correctAnswer": 0 (for MCQ index 0..3) | [0, 2] (for MSQ indices) | 42.5 (for NAT number or {"value": 42.5, "tolerance": 0.1}),
+    "correctAnswer": [0] (for MCQ, an array with exactly one index 0..3) | [0, 2] (for MSQ, an array of one or more indices) | 42.5 (for NAT number or {"value": 42.5, "tolerance": 0.1}),
     "explanation": "Step-by-step derivation and source justification",
     "sourceQuote": "Exact quote from context supporting this question"
   }
@@ -288,7 +348,7 @@ Return a JSON array of ${currentBatchPlan.length} question objects:
         );
 
         if (!aiResponse.success || !aiResponse.content) {
-          failedCount += currentBatchPlan.length;
+          state.failedCount += currentBatchPlan.length;
           continue;
         }
 
@@ -301,25 +361,18 @@ Return a JSON array of ${currentBatchPlan.length} question objects:
         const qArray = Array.isArray(rawQuestions) ? rawQuestions : [rawQuestions];
 
         for (const rawQ of qArray) {
-          // Structural Validation
           const valResult = QuestionValidationService.validateQuestion(rawQ);
           if (!valResult.isValid) {
-            failedCount++;
+            state.failedCount++;
             continue;
           }
 
-          // Deduplication Check
-          const simResult = await QuestionSimilarityService.checkSimilarity(
-            valResult.sanitizedStem,
-            targetSubtopicId
-          );
-
+          const simResult = await QuestionSimilarityService.checkSimilarity(valResult.sanitizedStem, subtopicId);
           if (simResult.status === AIQuestionSimilarityStatus.DUPLICATE) {
-            duplicateCount++;
+            state.duplicateCount++;
             continue;
           }
 
-          // Independent Answer Verification
           const verResult = await AnswerVerificationService.verifyAnswer({
             stem: valResult.sanitizedStem,
             type: rawQ.type as QuestionType,
@@ -329,13 +382,11 @@ Return a JSON array of ${currentBatchPlan.length} question objects:
             sourceContext: contextText,
           });
 
-          // Determine final review status
           const finalStatus =
             verResult.verificationStatus === 'FAIL'
               ? AIGeneratedQuestionStatus.REJECTED
               : AIGeneratedQuestionStatus.PENDING_REVIEW;
 
-          // Save AIGeneratedQuestion record
           const createdQ = await prisma.aIGeneratedQuestion.create({
             data: {
               generationRequestId,
@@ -356,7 +407,7 @@ Return a JSON array of ${currentBatchPlan.length} question objects:
               subjectId,
               moduleId,
               topicId,
-              subtopicId: targetSubtopicId,
+              subtopicId,
               status: finalStatus,
               qualityStatus: valResult.qualityStatus,
               qualityScore: valResult.qualityScore,
@@ -368,27 +419,51 @@ Return a JSON array of ${currentBatchPlan.length} question objects:
             },
           });
 
-          generatedQuestionsList.push(createdQ);
+          let finalRecord = createdQ;
+
+          // Auto-publish: a question that independently PASSED verification does not need a
+          // human to re-click approve — publish it straight to the live Question Bank. Anything
+          // short of PASS (REQUIRES_REVIEW / ANSWER_CONFLICT, or PASS with auto-publish disabled
+          // by admin) still lands in the faculty review queue, never silently.
+          if (settings.autoPublishVerified && verResult.verificationStatus === 'PASS') {
+            try {
+              const approval = await QuestionGenerationService.approveQuestion(createdQ.id, userId, Role.ADMIN);
+              if (approval.success) {
+                state.autoPublishedCount++;
+                finalRecord = { ...createdQ, status: AIGeneratedQuestionStatus.APPROVED, createdQuestionId: (approval.question as any)?.id };
+              }
+            } catch (err: any) {
+              console.error('[AIBatchQuestionGenerationService] Auto-publish failed for', createdQ.id, err.message);
+            }
+          }
+
+          state.generatedQuestionsList.push(finalRecord);
         }
       } catch (err: any) {
         console.error('[AIBatchQuestionGenerationService] Sub-batch processing error:', err.message);
-        failedCount += currentBatchPlan.length;
+        state.failedCount += currentBatchPlan.length;
       }
+
+      // Real incremental progress — updated after every sub-batch, not faked.
+      await this.persistProgress(generationRequestId, state, undefined, undefined);
     }
+  }
 
-    // 7. Calculate Final Batch Status
-    const generatedCount = generatedQuestionsList.length;
-    const validatedCount = generatedQuestionsList.filter((q) => q.status !== AIGeneratedQuestionStatus.REJECTED).length;
-    const verifiedCount = generatedQuestionsList.filter((q) => q.verificationStatus === 'PASS').length;
-    const pendingReviewCount = generatedQuestionsList.filter((q) => q.status === AIGeneratedQuestionStatus.PENDING_REVIEW).length;
+  private static countAccepted(list: any[]): number {
+    return list.filter((q) => q.status !== AIGeneratedQuestionStatus.REJECTED).length;
+  }
 
-    const isPartial = generatedCount < totalQuestions;
-    const finalBatchStatus = isPartial ? 'GENERATED_PARTIAL_BATCH' : 'COMPLETED';
-    const statusMsg = isPartial
-      ? `Generated ${generatedCount} out of ${totalQuestions} requested questions. Insufficient source context for remaining ${totalQuestions - generatedCount} questions.`
-      : `Successfully generated and verified ${generatedCount} GATE questions grounded in uploaded resources.`;
+  private static async persistProgress(
+    generationRequestId: string,
+    state: { generatedQuestionsList: any[]; duplicateCount: number; failedCount: number; autoPublishedCount: number },
+    _totalQuestions: number | undefined,
+    regenerationRounds: number | undefined
+  ): Promise<void> {
+    const generatedCount = state.generatedQuestionsList.length;
+    const validatedCount = state.generatedQuestionsList.filter((q) => q.status !== AIGeneratedQuestionStatus.REJECTED).length;
+    const verifiedCount = state.generatedQuestionsList.filter((q) => q.verificationStatus === 'PASS').length;
+    const pendingReviewCount = state.generatedQuestionsList.filter((q) => q.status === AIGeneratedQuestionStatus.PENDING_REVIEW).length;
 
-    // Update Batch Job Record
     await prisma.aIBatchGenerationJob.update({
       where: { generationRequestId },
       data: {
@@ -396,26 +471,144 @@ Return a JSON array of ${currentBatchPlan.length} question objects:
         validatedCount,
         verifiedCount,
         pendingReviewCount,
-        failedCount,
-        duplicateCount,
-        status: finalBatchStatus,
-        statusMessage: statusMsg,
+        autoPublishedCount: state.autoPublishedCount,
+        failedCount: state.failedCount,
+        duplicateCount: state.duplicateCount,
+        ...(regenerationRounds !== undefined ? { regenerationRounds } : {}),
       },
     });
+  }
 
+  /**
+   * Expands a type/difficulty distribution into a concrete list of generation slots via the
+   * existing deterministic Hamilton apportionment. Used both for the initial plan and for each
+   * regeneration round's smaller shortfall plan, so retries stay proportional to the originally
+   * requested mix rather than drifting.
+   */
+  private static buildPlan(
+    count: number,
+    difficultyDistribution: { EASY: number; MEDIUM: number; HARD: number },
+    typeDistribution: { MCQ: number; MSQ: number; NAT: number }
+  ): PlanItem[] {
+    if (count <= 0) return [];
+
+    const typeCounts = GenerationDistributionService.allocateIntegerCounts(count, typeDistribution);
+    const diffCounts = { ...GenerationDistributionService.allocateIntegerCounts(count, difficultyDistribution) } as Record<string, number>;
+
+    const plan: PlanItem[] = [];
+    const types: QuestionType[] = ['MCQ', 'MSQ', 'NAT'];
+    const diffs: Difficulty[] = ['EASY', 'MEDIUM', 'HARD'];
+
+    for (const t of types) {
+      for (let i = 0; i < ((typeCounts as any)[t] || 0); i++) {
+        let chosenDiff: Difficulty = 'MEDIUM';
+        for (const d of diffs) {
+          if ((diffCounts[d] || 0) > 0) {
+            chosenDiff = d;
+            diffCounts[d] -= 1;
+            break;
+          }
+        }
+        plan.push({ type: t, difficulty: chosenDiff });
+      }
+    }
+    return plan;
+  }
+
+  /**
+   * Retrieves factual grounding context strictly from authorized uploaded resources. Where a
+   * selected document has already been through Phase 1 structure extraction with resolved
+   * question/answer mappings (ExtractedQuestion.answerMappingStatus === 'MAPPED'), those verified
+   * Q&A pairs are included as high-confidence grounding alongside the raw RAG chunk text — this
+   * is real source material with a known-correct answer already deterministically matched, not a
+   * chunk the generator has to interpret from scratch.
+   */
+  private static async retrieveGroundingContext(
+    selectedResourceIds: string[],
+    userId: string,
+    role: Role
+  ): Promise<{ contextText: string; sourceDocumentIds: string[]; sourceChunkIds: string[]; groundingAvailable: boolean }> {
+    let retrievedChunks: any[] = [];
+
+    if (selectedResourceIds.length > 0) {
+      const chunks = await prisma.aIDocumentChunk.findMany({
+        where: { documentId: { in: selectedResourceIds } },
+        include: { document: true },
+        take: 150,
+      });
+      retrievedChunks = chunks.map((c) => ({
+        chunkId: c.id,
+        documentId: c.documentId,
+        documentTitle: c.document.title,
+        content: c.content,
+      }));
+    } else {
+      const ragRes = await RAGService.executeRAGPipeline({
+        userMessage: 'GATE Examination syllabus core concepts and textbook material',
+        userId,
+        role,
+      });
+      retrievedChunks = ragRes.evaluation?.validatedChunks || [];
+    }
+
+    let extractedSection = '';
+    if (selectedResourceIds.length > 0) {
+      const mappedQuestions = await prisma.extractedQuestion.findMany({
+        where: { documentId: { in: selectedResourceIds }, answerMappingStatus: 'MAPPED' },
+        include: { mappedAnswer: true },
+        take: 100,
+      });
+
+      if (mappedQuestions.length > 0) {
+        extractedSection =
+          '\n\n=== VERIFIED SOURCE QUESTION/ANSWER PAIRS (deterministically mapped, high confidence) ===\n' +
+          mappedQuestions
+            .map(
+              (q) =>
+                `Q[${q.rawQuestionId}]: ${q.questionText}\nAnswer: ${JSON.stringify(q.mappedAnswer?.answerValue)}${
+                  q.mappedAnswer?.explanation ? `\nExplanation: ${q.mappedAnswer.explanation}` : ''
+                }`
+            )
+            .join('\n\n');
+      }
+    }
+
+    if (retrievedChunks.length === 0 && !extractedSection) {
+      return { contextText: '', sourceDocumentIds: [], sourceChunkIds: [], groundingAvailable: false };
+    }
+
+    const contextText =
+      retrievedChunks.map((c) => `[Source Document: "${c.documentTitle}" | Chunk: ${c.chunkId}]:\n${c.content}`).join('\n\n---\n\n') +
+      extractedSection;
+
+    const sourceDocumentIds = Array.from(new Set(retrievedChunks.map((c) => c.documentId)));
+    const sourceChunkIds = Array.from(new Set(retrievedChunks.map((c) => c.chunkId)));
+
+    return { contextText, sourceDocumentIds, sourceChunkIds, groundingAvailable: true };
+  }
+
+  private static async getJobQuestions(generationRequestId: string) {
+    return prisma.aIGeneratedQuestion.findMany({
+      where: { generationRequestId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  private static jobToResult(job: any, questions: any[]): BatchGenerationResult {
     return {
-      success: true,
-      status: finalBatchStatus,
-      message: statusMsg,
-      generationRequestId,
-      requestedCount: totalQuestions,
-      generatedCount,
-      validatedCount,
-      verifiedCount,
-      pendingReviewCount,
-      duplicateCount,
-      failedCount,
-      questions: generatedQuestionsList,
+      success: job.status !== 'FAILED',
+      status: job.status,
+      message: job.statusMessage || 'Batch generation job status.',
+      generationRequestId: job.generationRequestId,
+      requestedCount: job.requestedCount,
+      generatedCount: job.generatedCount,
+      validatedCount: job.validatedCount,
+      verifiedCount: job.verifiedCount,
+      pendingReviewCount: job.pendingReviewCount,
+      autoPublishedCount: job.autoPublishedCount ?? 0,
+      duplicateCount: job.duplicateCount,
+      failedCount: job.failedCount,
+      questions,
     };
   }
 
@@ -434,10 +627,7 @@ Return a JSON array of ${currentBatchPlan.length} question objects:
       throw new Error(`Batch generation job '${generationRequestId}' not found.`);
     }
 
-    const questions = await prisma.aIGeneratedQuestion.findMany({
-      where: { generationRequestId },
-      orderBy: { createdAt: 'asc' },
-    });
+    const questions = await this.getJobQuestions(generationRequestId);
 
     return {
       success: true,

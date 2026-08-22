@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import { prisma } from '../config/prisma';
 import { QuestionType, Difficulty } from '@prisma/client';
+import { EmbeddingProvider } from '../modules/ai/services/embeddingProvider';
 
 export class QuestionController {
   public static async createQuestion(req: AuthRequest, res: Response) {
@@ -21,6 +22,8 @@ export class QuestionController {
         subtopicId,
       } = req.body;
 
+      const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(text);
+
       const question = await prisma.question.create({
         data: {
           text,
@@ -36,6 +39,7 @@ export class QuestionController {
           imageUrl,
           subtopicId,
           createdById: req.user!.id,
+          embedding,
         },
       });
 

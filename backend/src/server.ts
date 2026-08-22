@@ -4,6 +4,8 @@ import app from './app';
 import { ENV } from './config/env';
 import { prisma } from './config/prisma';
 import { setupInvigilatorHub } from './socket/invigilatorHub';
+import { startDocumentProcessingWorker, stopDocumentProcessingWorker } from './jobs/documentProcessingWorker';
+import { startBatchGenerationWorker, stopBatchGenerationWorker } from './jobs/batchGenerationWorker';
 
 const server = http.createServer(app);
 
@@ -20,6 +22,8 @@ setupInvigilatorHub(io);
 server.listen(ENV.PORT, () => {
   console.log(`🚀 GSMAS Backend API & Socket.IO server running on port ${ENV.PORT} [${ENV.NODE_ENV}]`);
   console.log(`🔒 Domain Enforcement Active for: ${ENV.ALLOWED_DOMAINS.join(', ')}`);
+  startDocumentProcessingWorker();
+  startBatchGenerationWorker();
 });
 
 // Graceful Server Lifecycle & Shutdown Handler
@@ -30,6 +34,9 @@ const gracefulShutdown = async (signal: string) => {
   isShuttingDown = true;
 
   console.log(`\n[Server Lifecycle] Received ${signal}. Starting graceful shutdown...`);
+
+  stopDocumentProcessingWorker();
+  stopBatchGenerationWorker();
 
   // 1. Close HTTP server (stop receiving new connections)
   server.close(() => {

@@ -8,6 +8,7 @@ import { ConversationService } from '../services/conversationService';
 import { prisma } from '../../../config/prisma';
 import { Role, QuestionType, Difficulty, AIQuestionReviewStatus } from '@prisma/client';
 import { AuditLogger } from '../../../services/auditLogger';
+import { EmbeddingProvider } from '../services/embeddingProvider';
 
 export class AIAssistantController {
   /**
@@ -174,6 +175,8 @@ export class AIAssistantController {
       }
 
       // Save question
+      const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(question.text);
+
       const newQuestion = await prisma.question.create({
         data: {
           text: question.text,
@@ -189,6 +192,7 @@ export class AIAssistantController {
           generatedByAI: true,
           generationModel: process.env.AI_MODEL || 'gemini-1.5-flash',
           reviewStatus: AIQuestionReviewStatus.APPROVED, // Review approved by Faculty/Admin
+          embedding,
         },
       });
 

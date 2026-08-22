@@ -95,12 +95,41 @@ model Question {
   generatedByAI     Boolean                 @default(false)
   generationModel   String?
   reviewStatus      AIQuestionReviewStatus?
+  currentVersion    Int                     @default(1)
+  embedding         Float[]
   aiSolutions       AISolution[]
   mockTestQuestions MockTestQuestion[]
   createdBy         User                    @relation("CreatedQuestions", fields: [createdById], references: [id])
   subtopic          Subtopic                @relation(fields: [subtopicId], references: [id])
   aiSources         QuestionAISource[]
   responses         QuestionResponse[]
+  versions          QuestionVersion[]
+}
+
+// Immutable point-in-time snapshot of a Question's gradable content. Created whenever the
+// answer/options/text/marks change (see questionVersionService.ts). MockTestQuestion pins the
+// version active at exam-assembly time, so scoring/solution-review never drift when the live
+// Question row is edited later — see examController.ts submitExam/getSolutionReview.
+model QuestionVersion {
+  id                String             @id @default(uuid())
+  questionId        String
+  versionNumber     Int
+  text              String
+  type              QuestionType
+  difficulty        Difficulty
+  marks             Float
+  negativeMarks     Float
+  options           Json
+  correctAnswer     Json
+  explanation       String?
+  imageUrl          String?
+  createdAt         DateTime           @default(now())
+  createdById       String?
+  question          Question           @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  mockTestQuestions MockTestQuestion[]
+
+  @@unique([questionId, versionNumber])
+  @@index([questionId])
 }
 
 model MockTest {
@@ -137,12 +166,14 @@ model MockTest {
 }
 
 model MockTestQuestion {
-  id         String   @id @default(uuid())
-  mockTestId String
-  questionId String
-  order      Int      @default(1)
-  mockTest   MockTest @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
-  question   Question @relation(fields: [questionId], references: [id])
+  id                String           @id @default(uuid())
+  mockTestId        String
+  questionId        String
+  questionVersionId String?
+  order             Int              @default(1)
+  mockTest          MockTest         @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
+  question          Question         @relation(fields: [questionId], references: [id])
+  questionVersion   QuestionVersion? @relation(fields: [questionVersionId], references: [id])
 
   @@unique([mockTestId, questionId])
 }
@@ -253,17 +284,17 @@ model AIMessage {
 }
 
 model AIDocument {
-  id                       String               @id @default(uuid())
+  id                       String                 @id @default(uuid())
   title                    String
   fileName                 String
   mimeType                 String
   fileSize                 Int?
   visibility               AIDocumentVisibility
-  status                   AIDocumentStatus     @default(UPLOADED)
-  storageKey               String               @unique
+  status                   AIDocumentStatus       @default(UPLOADED)
+  storageKey               String                 @unique
   uploadedById             String
-  createdAt                DateTime             @default(now())
-  updatedAt                DateTime             @updatedAt
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
   metadata                 Json?
   processedAt              DateTime?
   processingError          String?
@@ -272,15 +303,106 @@ model AIDocument {
   topicId                  String?
   subtopicId               String?
   classificationConfidence Float?
-  classificationStatus     String?              @default("REQUIRES_CLASSIFICATION")
-  ocrStatus                String?              @default("NONE")
-  uploadedBy               User                 @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  classificationStatus     String?                @default("REQUIRES_CLASSIFICATION")
+  ocrStatus                String?                @default("NONE")
+  uploadedBy               User                   @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
   chunks                   AIDocumentChunk[]
   aiSources                QuestionAISource[]
+  pages                    DocumentPage[]
+  extractedQuestions       ExtractedQuestion[]
+  extractedAnswers         ExtractedAnswer[]
+  processingJob            DocumentProcessingJob?
 
   @@index([status])
   @@index([visibility])
   @@index([uploadedById])
+}
+
+// One row per page of an uploaded document, with its extraction method and structural
+// classification (theory/question/answer-key/etc) — the foundation the question/answer-key
+// extraction and mapping below is built on. Dynamically discovered per document; never assumes
+// a fixed page range for any section.
+model DocumentPage {
+  id                       String              @id @default(uuid())
+  documentId               String
+  pageNumber               Int
+  rawText                  String?             @db.Text
+  extractionMethod         String // 'TEXT_LAYER' | 'VISION_OCR'
+  pageType                 String? // 'THEORY' | 'QUESTION' | 'ANSWER_KEY' | 'REFERENCE' | 'APPENDIX' | 'UNKNOWN'
+  classificationConfidence Float?
+  createdAt                DateTime            @default(now())
+  document                 AIDocument          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  extractedQuestions       ExtractedQuestion[]
+  extractedAnswers         ExtractedAnswer[]
+
+  @@unique([documentId, pageNumber])
+  @@index([documentId])
+  @@index([pageType])
+}
+
+// A question found in the source document, with its identifier exactly as printed (e.g.
+// "1.1.10(a)") and a normalized form used for deterministic matching against ExtractedAnswer —
+// never matched by page proximity.
+model ExtractedQuestion {
+  id                   String           @id @default(uuid())
+  documentId           String
+  rawQuestionId        String
+  normalizedQuestionId String
+  questionText         String           @db.Text
+  options              Json?
+  questionType         String? // 'MCQ' | 'MSQ' | 'NAT' | 'UNKNOWN'
+  sourcePageId         String
+  imageRefs            String[]
+  answerMappingStatus  String           @default("PENDING") // PENDING | MAPPED | ANSWER_MAPPING_UNCERTAIN | NO_ANSWER_FOUND
+  mappedAnswerId       String?
+  extractionConfidence Float?
+  createdAt            DateTime         @default(now())
+  document             AIDocument       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sourcePage           DocumentPage     @relation(fields: [sourcePageId], references: [id], onDelete: Cascade)
+  mappedAnswer         ExtractedAnswer? @relation(fields: [mappedAnswerId], references: [id])
+
+  @@index([documentId])
+  @@index([normalizedQuestionId])
+  @@index([answerMappingStatus])
+}
+
+// An answer-key entry found in the source document (often hundreds of pages away from its
+// question), keyed by the same normalized identifier scheme as ExtractedQuestion.
+model ExtractedAnswer {
+  id                   String              @id @default(uuid())
+  documentId           String
+  rawQuestionId        String
+  normalizedQuestionId String
+  answerValue          Json
+  explanation          String?             @db.Text
+  sourcePageId         String
+  createdAt            DateTime            @default(now())
+  document             AIDocument          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sourcePage           DocumentPage        @relation(fields: [sourcePageId], references: [id], onDelete: Cascade)
+  mappedQuestions      ExtractedQuestion[]
+
+  @@index([documentId])
+  @@index([normalizedQuestionId])
+}
+
+// Real, pollable progress state for the async document-structure pipeline (in-process DB-polled
+// worker — see documentProcessingWorker.ts). Mirrors the AIBatchGenerationJob pattern already
+// used for question generation, applied to document processing instead.
+model DocumentProcessingJob {
+  id                String     @id @default(uuid())
+  documentId        String     @unique
+  status            String     @default("QUEUED") // QUEUED | EXTRACTING | OCR | STRUCTURING | INDEXING | CLASSIFYING | MAPPING | COMPLETED | FAILED
+  statusMessage     String?
+  totalPages        Int?
+  pagesProcessed    Int        @default(0)
+  questionsFound    Int        @default(0)
+  answersFound      Int        @default(0)
+  mappingsResolved  Int        @default(0)
+  mappingsUncertain Int        @default(0)
+  error             String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  document          AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
 }
 
 model AIDocumentChunk {
@@ -393,6 +515,11 @@ model AIBatchGenerationJob {
   id                     String   @id @default(uuid())
   generationRequestId    String   @unique
   createdById            String
+  // 'GENERATION' (default, existing RAG/AI batch question generation) | 'PDF_IMPORT' (extraction
+  // of real questions from an uploaded PDF into the Question Bank, via the Phase 1 structure/
+  // answer-mapping pipeline). Same job table/worker/polling infra serves both — see
+  // batchGenerationWorker.ts's dispatch and pdfQuestionImportService.ts.
+  jobType                String   @default("GENERATION")
   requestedCount         Int
   generatedCount         Int      @default(0)
   validatedCount         Int      @default(0)
@@ -400,6 +527,8 @@ model AIBatchGenerationJob {
   pendingReviewCount     Int      @default(0)
   failedCount            Int      @default(0)
   duplicateCount         Int      @default(0)
+  autoPublishedCount     Int      @default(0)
+  regenerationRounds     Int      @default(0)
   status                 String   @default("QUEUED")
   statusMessage          String?
   difficultyDistribution Json?

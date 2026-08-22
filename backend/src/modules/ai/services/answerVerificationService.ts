@@ -1,5 +1,6 @@
 import { QuestionType } from '@prisma/client';
 import { AIProviderService } from './aiProviderService';
+import { MathVerificationService } from './mathVerificationService';
 
 export interface AnswerVerificationParams {
   stem: string;
@@ -79,6 +80,7 @@ Evaluate:
 2. What is the independently derived correct answer?
 3. Is the explanation supported by the source context?
 4. Is the question free of ambiguity?
+${type === QuestionType.NAT ? `5. If this is a numerical/calculation question, show the exact arithmetic expression that derives your independently-verified numeric answer (e.g. "7 * 12 - 3"), so it can be checked deterministically. Use only numbers and standard operators (+ - * / ^ sqrt() etc) — no words.` : ''}
 
 Return ONLY valid JSON matching this structure:
 {
@@ -88,7 +90,7 @@ Return ONLY valid JSON matching this structure:
   "explanationSupported": true|false,
   "sourceSupported": true|false,
   "ambiguityDetected": true|false,
-  "notes": "<brief notes>"
+  "notes": "<brief notes>"${type === QuestionType.NAT ? ',\n  "computation": "<arithmetic expression that evaluates to verifiedAnswer, or null if not applicable>"' : ''}
 }
 `;
 
@@ -117,6 +119,7 @@ Return ONLY valid JSON matching this structure:
         const isConflict = JSON.stringify(proposedAnswer) !== JSON.stringify(verifiedAnswer);
 
         let verificationStatus: 'PASS' | 'FAIL' | 'REQUIRES_REVIEW' | 'ANSWER_CONFLICT' = 'PASS';
+        let notes = resObj.notes || (isConflict ? 'Conflict detected between generated and verified answer.' : 'Verification passed.');
 
         if (isConflict) {
           verificationStatus = 'ANSWER_CONFLICT';
@@ -124,6 +127,24 @@ Return ONLY valid JSON matching this structure:
           verificationStatus = 'REQUIRES_REVIEW';
         } else if (!answerCorrect || !explanationSupported) {
           verificationStatus = 'FAIL';
+        }
+
+        // Deterministic cross-check: does the verifier's OWN shown arithmetic actually evaluate
+        // to the answer it reported? This catches internal inconsistency in the LLM's reasoning
+        // that a second LLM opinion agreeing with the first cannot catch, since both are still
+        // just LLM judgment. Only downgrades a status that was otherwise heading to PASS.
+        if (type === QuestionType.NAT && verificationStatus === 'PASS') {
+          const statedValue = typeof verifiedAnswer === 'object' && verifiedAnswer !== null
+            ? Number(verifiedAnswer.value)
+            : Number(verifiedAnswer);
+          const mathCheck = MathVerificationService.verify(resObj.computation, statedValue);
+
+          if (mathCheck.applicable && mathCheck.matchesStatedAnswer === false) {
+            verificationStatus = 'FAIL';
+            notes = `Deterministic math check failed: ${mathCheck.notes}`;
+          } else if (mathCheck.applicable) {
+            notes = `${notes} Deterministic check confirmed: ${mathCheck.notes}`;
+          }
         }
 
         return {
@@ -134,27 +155,28 @@ Return ONLY valid JSON matching this structure:
           explanationSupported,
           sourceSupported,
           ambiguityDetected,
-          verificationNotes: resObj.notes || (isConflict ? 'Conflict detected between generated and verified answer.' : 'Verification passed.'),
+          verificationNotes: notes,
         };
       }
     } catch (err: any) {
-      console.error('[AnswerVerificationService] Verification LLM call error, using deterministic fallback:', err.message);
+      console.error('[AnswerVerificationService] Verification LLM call failed — could not independently verify this answer:', err.message);
     }
 
-    // 3. Fallback Deterministic Verification
-    const normalizedContext = sourceContext.toLowerCase();
-    const normalizedStem = stem.toLowerCase();
-    const sourceSupported = normalizedContext.length > 50;
-
+    // 3. The independent verifier could not run (network/parse/provider error). This is NOT a
+    // pass: we have zero independent evidence the answer is correct, and per the "never guess"
+    // rule, an unavailable check must never be treated as a confirmed check. Hold for manual
+    // review rather than rubber-stamping — this is the only safe default when verification
+    // itself failed, as distinct from verification having actually run and found the answer
+    // correct.
     return {
-      verificationStatus: sourceSupported ? 'PASS' : 'REQUIRES_REVIEW',
+      verificationStatus: 'REQUIRES_REVIEW',
       verifiedAnswer: proposedAnswer,
       verifiedExplanation: explanation,
-      answerCorrect: true,
-      explanationSupported: true,
-      sourceSupported,
-      ambiguityDetected: false,
-      verificationNotes: sourceSupported ? 'Verified against source context.' : 'Requires manual review due to low context evidence.',
+      answerCorrect: false,
+      explanationSupported: false,
+      sourceSupported: false,
+      ambiguityDetected: true,
+      verificationNotes: 'Independent verification could not be completed (verifier call failed) — held for manual review rather than auto-approved.',
     };
   }
 }

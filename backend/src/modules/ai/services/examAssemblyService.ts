@@ -2,6 +2,7 @@ import { prisma } from '../../../config/prisma';
 import { Role, QuestionType, Difficulty, AIExamDraftStatus } from '@prisma/client';
 import { AssembleExamDTO, ExamAssemblyResult } from '../types/solutionAndExamTypes';
 import { ExamValidationService } from './examValidationService';
+import { QuestionVersionService } from '../../../services/questionVersionService';
 
 export class ExamAssemblyService {
   /**
@@ -156,6 +157,12 @@ export class ExamAssemblyService {
 
     const assemblyDurationMs = Math.round(performance.now() - startTime);
 
+    // Pin each question's current version at attach time so later edits/AI-solution approvals
+    // never retroactively change what this exam scores against.
+    const versionIds = await Promise.all(
+      selectedQuestions.map((q) => QuestionVersionService.getCurrentVersionId(q.id))
+    );
+
     // 5. Transactionally create draft MockTest and link MockTestQuestion records
     const now = new Date();
     const startTimeDate = new Date(now.getTime() + 86400000); // Default start tomorrow
@@ -177,6 +184,7 @@ export class ExamAssemblyService {
           testQuestions: {
             create: selectedQuestions.map((q, idx) => ({
               questionId: q.id,
+              questionVersionId: versionIds[idx],
               order: idx + 1,
             })),
           },
@@ -201,7 +209,7 @@ export class ExamAssemblyService {
       });
 
       return [createdMockTest, createdTrace];
-    });
+    }, { timeout: 20000 });
 
     return {
       success: true,

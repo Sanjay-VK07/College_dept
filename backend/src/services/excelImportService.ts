@@ -1,6 +1,7 @@
 import xlsx from 'xlsx';
 import { QuestionType, Difficulty } from '@prisma/client';
 import { prisma } from '../config/prisma';
+import { EmbeddingProvider } from '../modules/ai/services/embeddingProvider';
 
 export class ExcelImportService {
   /**
@@ -62,6 +63,8 @@ export class ExcelImportService {
         correctAnswer = [0];
       }
 
+      const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(text);
+
       const question = await prisma.question.create({
         data: {
           text,
@@ -76,6 +79,7 @@ export class ExcelImportService {
           previousYear: row.PreviousYear || row.previousYear || '',
           subtopicId: row.subtopicId || defaultSubtopicId,
           createdById,
+          embedding,
         },
       });
 

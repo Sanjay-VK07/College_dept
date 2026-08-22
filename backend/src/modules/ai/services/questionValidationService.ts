@@ -19,16 +19,23 @@ export class QuestionValidationService {
       errors.push('Question stem exceeds maximum allowable length of 5000 characters.');
     }
 
-    if (!raw.explanation || typeof raw.explanation !== 'string' || raw.explanation.trim().length === 0) {
-      errors.push('Question explanation cannot be empty.');
-    }
+    // Explanation is informational, not scoring-critical — a missing explanation (common in
+    // source PDFs that only publish questions without a worked solution) gets a placeholder
+    // instead of causing an otherwise-valid, gradable question to be dropped.
+    const hasExplanation = !!raw.explanation && typeof raw.explanation === 'string' && raw.explanation.trim().length > 0;
 
     // 2. Sanitization against XSS & Script Injection
     const sanitizedStem = this.sanitizeText(raw.stem || '');
-    const sanitizedExplanation = this.sanitizeText(raw.explanation || '');
+    const sanitizedExplanation = hasExplanation
+      ? this.sanitizeText(raw.explanation as string)
+      : 'No explanation provided in the source document.';
 
     if (sanitizedStem !== (raw.stem || '')) {
       warnings.push('Potentially unsafe HTML/script content was stripped from question stem.');
+    }
+
+    if (!hasExplanation) {
+      warnings.push('No explanation was found in the source document — flagged for manual review.');
     }
 
     // 3. Question Type Validation

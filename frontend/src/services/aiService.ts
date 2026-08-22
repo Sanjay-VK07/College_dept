@@ -202,6 +202,16 @@ export const aiService = {
     return res.data;
   },
 
+  async getGenerationSettings() {
+    const res = await api.get('/ai/questions/config/generation-settings');
+    return res.data;
+  },
+
+  async updateGenerationSettings(params: { autoPublishVerified?: boolean; maxRegenerationAttempts?: number }) {
+    const res = await api.put('/ai/questions/config/generation-settings', params);
+    return res.data;
+  },
+
   async updateDocumentClassification(documentId: string, params: { subjectId?: string; moduleId?: string; topicId?: string; subtopicId?: string }) {
     const res = await api.put(`/ai/documents/${documentId}/classification`, params);
     return res.data;

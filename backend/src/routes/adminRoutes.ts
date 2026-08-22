@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { AdminController } from '../controllers/adminController';
+import { DocumentStructureController } from '../modules/ai/controllers/documentStructureController';
 import { authenticateJWT, requireRoles } from '../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 
@@ -29,6 +30,7 @@ router.delete('/faculty/:id', requireRoles(Role.ADMIN), AdminController.deleteFa
 router.get('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getQuestions);
 router.post('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.createQuestion);
 router.delete('/questions/:id', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.deleteQuestion);
+router.get('/question-bank-documents', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getQuestionBankDocuments);
 
 // Exam Management
 router.get('/exams', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getExams);
@@ -45,6 +47,12 @@ router.get('/export-report/:testId', requireRoles(Role.FACULTY, Role.ADMIN), Adm
 // Security & System Settings
 router.get('/settings', requireRoles(Role.ADMIN), AdminController.getSystemSettings);
 router.put('/settings', requireRoles(Role.ADMIN), AdminController.updateSystemSetting);
+
+// Document Structure Extraction (Phase 1 — real OCR/question/answer-key mapping pipeline)
+router.post('/documents/:documentId/process-structure', requireRoles(Role.FACULTY, Role.ADMIN), DocumentStructureController.enqueueProcessing);
+router.get('/documents/:documentId/processing-status', requireRoles(Role.FACULTY, Role.ADMIN), DocumentStructureController.getProcessingStatus);
+router.get('/documents/:documentId/extracted-questions', requireRoles(Role.FACULTY, Role.ADMIN), DocumentStructureController.getExtractedQuestions);
+router.post('/documents/:documentId/import-questions', requireRoles(Role.FACULTY, Role.ADMIN), DocumentStructureController.enqueueQuestionImport);
 
 // Additional Governance Routes
 router.get('/results-ledger', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getResultsLedger);

@@ -267,7 +267,7 @@ export class ExamController {
           test: {
             include: {
               testQuestions: {
-                include: { question: true },
+                include: { question: true, questionVersion: true },
               },
             },
           },
@@ -288,6 +288,10 @@ export class ExamController {
 
       for (const tq of assignment.test.testQuestions) {
         const q = tq.question;
+        // Score against the frozen snapshot taken when this question was attached to the exam,
+        // not the live Question row — an edit or AI-solution approval after attach must never
+        // retroactively change what an in-progress/completed exam is graded against.
+        const graded = tq.questionVersion || q;
         const studentResp = responseMap.get(q.id);
         const chosenAnswer = studentResp ? studentResp.chosenAnswer : null;
 
@@ -296,10 +300,10 @@ export class ExamController {
           const evaluation = GateScoringService.evaluateResponse(
             {
               id: q.id,
-              type: q.type,
-              marks: q.marks,
-              negativeMarks: q.negativeMarks,
-              correctAnswer: q.correctAnswer,
+              type: graded.type,
+              marks: graded.marks,
+              negativeMarks: graded.negativeMarks,
+              correctAnswer: graded.correctAnswer,
             },
             chosenAnswer
           );
@@ -394,6 +398,7 @@ export class ExamController {
                       },
                     },
                   },
+                  questionVersion: true,
                 },
                 orderBy: { order: 'asc' },
               },
@@ -426,23 +431,26 @@ export class ExamController {
 
       const solutions = assignment.test.testQuestions.map(tq => {
         const q = tq.question;
+        // Review must agree with what was actually scored — read from the same frozen snapshot
+        // submitExam graded against, not whatever the live Question row says today.
+        const graded = tq.questionVersion || q;
         const resp = responseMap.get(q.id);
 
         return {
           id: q.id,
           order: tq.order,
-          text: q.text,
-          type: q.type,
-          difficulty: q.difficulty,
-          marks: q.marks,
-          negativeMarks: q.negativeMarks,
-          options: q.options,
-          correctAnswer: q.correctAnswer,
+          text: graded.text,
+          type: graded.type,
+          difficulty: graded.difficulty,
+          marks: graded.marks,
+          negativeMarks: graded.negativeMarks,
+          options: graded.options,
+          correctAnswer: graded.correctAnswer,
           chosenAnswer: resp ? resp.chosenAnswer : null,
           isCorrect: resp ? resp.isCorrect : false,
           marksObtained: resp ? resp.marksObtained : 0,
           timeSpentSec: resp ? resp.timeSpentSec : 0,
-          explanation: q.explanation,
+          explanation: graded.explanation,
           reference: q.reference,
           previousYear: q.previousYear,
           subject: q.subtopic.topic.module.subject.name,

@@ -5,6 +5,7 @@ import { AIProviderService } from './aiProviderService';
 import { SolutionValidationService } from './solutionValidationService';
 import { SolutionGenerationPrompt } from '../prompts/solutionGenerationPrompt';
 import { GenerateSolutionDTO, RawGeneratedSolution } from '../types/solutionAndExamTypes';
+import { QuestionVersionService } from '../../../services/questionVersionService';
 
 export class SolutionService {
   /**
@@ -181,20 +182,28 @@ export class SolutionService {
       throw new Error(`Solution '${solutionId}' not found.`);
     }
 
-    // Transactionally update Question explanation & answer and set AISolution status to APPROVED
-    const [updatedQuestion, updatedSolution] = await prisma.$transaction([
-      prisma.question.update({
+    // Snapshot the question's current state as a version BEFORE overwriting it, so any exam
+    // already attached to this question (via MockTestQuestion.questionVersionId) keeps scoring
+    // against what the student actually saw, not the newly-approved answer.
+    const [updatedQuestion, updatedSolution] = await prisma.$transaction(async (tx) => {
+      const { nextVersion } = await QuestionVersionService.snapshotNewVersion(solution.questionId, userId, tx);
+
+      const question = await tx.question.update({
         where: { id: solution.questionId },
         data: {
           explanation: solution.verifiedExplanation || solution.draftExplanation,
           correctAnswer: (solution.verifiedAnswer || solution.draftAnswer) as any,
+          currentVersion: nextVersion,
         },
-      }),
-      prisma.aISolution.update({
+      });
+
+      const updatedSol = await tx.aISolution.update({
         where: { id: solutionId },
         data: { status: AISolutionStatus.APPROVED },
-      }),
-    ]);
+      });
+
+      return [question, updatedSol];
+    }, { timeout: 20000 });
 
     return {
       success: true,

@@ -20,9 +20,17 @@ const chatLimiter = createAIRateLimiter({ maxRequests: ENV.AI_CHAT_RATE_LIMIT, f
 const ragLimiter = createAIRateLimiter({ maxRequests: ENV.AI_RAG_RATE_LIMIT, featureName: 'RAG Search' });
 const generationLimiter = createAIRateLimiter({ maxRequests: ENV.AI_GENERATION_RATE_LIMIT, featureName: 'AI Generation' });
 const adminLimiter = createAIRateLimiter({ maxRequests: ENV.AI_ADMIN_RATE_LIMIT, featureName: 'AI Admin' });
+// Job-status polling is a cheap DB read, not an AI call — it must not share the same tight
+// per-minute budget as actual generation-triggering requests, or a UI that polls every few
+// seconds (batch generation / PDF import progress) will 429 itself within a minute.
+const statusPollLimiter = createAIRateLimiter({ maxRequests: 120, featureName: 'AI Job Status Poll' });
 
 // All AI Assistant routes require valid user JWT authentication
 router.use(authenticateJWT);
+
+// Registered before the blanket '/questions' limiter below so it gets its own, much more
+// generous quota instead of falling under the generation limiter's prefix match.
+router.get('/questions/batch-status/:generationRequestId', statusPollLimiter, requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.getBatchJobStatus);
 
 // Apply Feature Rate Limiters
 router.use('/chat', chatLimiter);
@@ -49,9 +57,10 @@ router.get('/rag/traces', requireRoles(Role.ADMIN), RAGAdminController.getTraces
 // AI Question Generation & Faculty Review routes (Faculty & Admin only)
 router.post('/questions/generate', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.generateQuestions);
 router.post('/questions/generate-batch', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.generateBatchQuestions);
-router.get('/questions/batch-status/:generationRequestId', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.getBatchJobStatus);
 router.get('/questions/config/bounds', AIQuestionController.getMinMaxConfig);
 router.post('/questions/config/max', requireRoles(Role.ADMIN), AIQuestionController.updateAdminMaxConfig);
+router.get('/questions/config/generation-settings', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.getGenerationSettings);
+router.put('/questions/config/generation-settings', requireRoles(Role.ADMIN), AIQuestionController.updateGenerationSettings);
 router.put('/documents/:documentId/classification', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.updateDocumentClassification);
 router.get('/questions/pending', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.getPendingQuestions);
 router.post('/questions/:id/approve', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.approveQuestion);

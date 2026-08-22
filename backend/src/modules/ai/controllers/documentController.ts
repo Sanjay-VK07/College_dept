@@ -192,9 +192,10 @@ export class DocumentController {
         role: req.user.role,
       });
 
-      // Stream file to client securely
+      // Stream file to client securely — PDFs render inline (for "View PDF"), everything else downloads
+      const disposition = mimeType === 'application/pdf' ? 'inline' : 'attachment';
       res.setHeader('Content-Type', mimeType);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+      res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(fileName)}"`);
       return res.sendFile(filePath);
     } catch (err: any) {
       console.error('Controller error in downloadDocument:', err.message);

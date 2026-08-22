@@ -46,6 +46,17 @@ export class EmbeddingProvider {
   }
 
   /**
+   * Embedding for persisting alongside a Question row at creation time, used for semantic
+   * duplicate detection later (see questionSimilarityService.ts). Named separately from
+   * generateQueryEmbedding to make the call site's intent explicit even though it delegates
+   * to the same resilient (never-throws) implementation.
+   */
+  public static async getEmbeddingOrEmpty(text: string): Promise<number[]> {
+    const { embedding } = await this.generateQueryEmbedding(text);
+    return embedding;
+  }
+
+  /**
    * Deterministic 384-dimensional vector embedding generator
    */
   private static generateDeterministicVector(text: string, dimension: number): number[] {
@@ -80,7 +91,10 @@ export class GeminiEmbeddingProvider implements IEmbeddingProvider {
 
   constructor() {
     this.apiKey = process.env.EMBEDDING_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '';
-    this.model = process.env.EMBEDDING_MODEL || 'text-embedding-004';
+    // 'text-embedding-004' is not available on this project's API key (confirmed 404 via
+    // live ListModels call); 'gemini-embedding-001' is the current model that supports
+    // embedContent for this account.
+    this.model = process.env.EMBEDDING_MODEL || 'gemini-embedding-001';
     this.dimension = ENV.EMBEDDING_DIMENSION || 384;
   }
 
@@ -97,6 +111,7 @@ export class GeminiEmbeddingProvider implements IEmbeddingProvider {
         content: {
           parts: [{ text }],
         },
+        outputDimensionality: this.dimension,
       }),
     });
 
@@ -107,7 +122,11 @@ export class GeminiEmbeddingProvider implements IEmbeddingProvider {
     const data: any = await response.json();
     const embedding = data?.embedding?.values;
     if (embedding && Array.isArray(embedding)) {
-      return embedding.slice(0, this.dimension);
+      // gemini-embedding-001 produces Matryoshka-truncatable vectors; Google's guidance is to
+      // re-normalize to unit length after truncating to a smaller outputDimensionality.
+      const truncated = embedding.slice(0, this.dimension);
+      const norm = Math.sqrt(truncated.reduce((sum: number, v: number) => sum + v * v, 0));
+      return norm > 0 ? truncated.map((v: number) => v / norm) : truncated;
     }
 
     throw new Error('Invalid response structure from Gemini Embedding API');

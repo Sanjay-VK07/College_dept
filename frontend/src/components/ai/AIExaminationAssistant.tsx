@@ -24,7 +24,6 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import api from '@/lib/api';
 
 interface AIExaminationAssistantProps {
   role?: string; // STUDENT, FACULTY, ADMIN
@@ -46,22 +45,6 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
   // RAG references for current message or conversation
   const [citations, setCitations] = useState<any[]>([]);
 
-  // Question Generator State (Faculty/Admin)
-  const [genSubject, setGenSubject] = useState('');
-  const [genTopic, setGenTopic] = useState('');
-  const [genDifficulty, setGenDifficulty] = useState('MEDIUM');
-  const [genType, setGenType] = useState('MCQ');
-  const [genCount, setGenCount] = useState(3);
-  const [genMarks, setGenMarks] = useState(1);
-  const [genNegMarks, setGenNegMarks] = useState(0);
-  const [genDocs, setGenDocs] = useState<string[]>([]);
-  const [availableDocs, setAvailableDocs] = useState<any[]>([]);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
-  const [savedQuestionIds, setSavedQuestionIds] = useState<Set<string>>(new Set());
-  const [availableSubtopics, setAvailableSubtopics] = useState<any[]>([]);
-  const [selectedSubtopicId, setSelectedSubtopicId] = useState('');
-
   // Practice Mode State (Student)
   const [practiceSubject, setPracticeSubject] = useState('');
   const [practiceTopic, setPracticeTopic] = useState('');
@@ -78,19 +61,11 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
   const [insights, setInsights] = useState<any>(null);
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
 
-  // Subjects & Topics cache (fetched from DB)
-  const [subjectsList, setSubjectsList] = useState<any[]>([]);
-  const [selectedSubjectId, setSelectedSubjectId] = useState('');
-
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Load basic lists
   useEffect(() => {
     fetchConversations();
-    fetchSubjectsAndTopics();
-    if (role === 'FACULTY' || role === 'ADMIN') {
-      fetchAvailableDocuments();
-    }
     if (role === 'STUDENT') {
       fetchPracticeAttempts();
       fetchInsights();
@@ -102,49 +77,10 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoadingChat]);
 
-  // Fetch subjects & subtopics from actual Question Bank endpoints
-  const fetchSubjectsAndTopics = async () => {
-    try {
-      const res = await api.get('/question-bank/subjects');
-      if (res.data?.success) {
-        setSubjectsList(res.data.data || []);
-      }
-    } catch (e) {
-      console.error('Failed to fetch subjects');
-    }
-  };
-
-  // Fetch subtopics when subject changes
-  useEffect(() => {
-    if (!selectedSubjectId) return;
-    const fetchSubtopics = async () => {
-      try {
-        const res = await api.get(`/question-bank/subjects/${selectedSubjectId}/subtopics`);
-        if (res.data?.success) {
-          setAvailableSubtopics(res.data.data || []);
-        }
-      } catch (e) {
-        console.error('Failed to fetch subtopics');
-      }
-    };
-    fetchSubtopics();
-  }, [selectedSubjectId]);
-
   const fetchConversations = async () => {
     try {
       const list = await aiService.getConversations();
       setConversations(list || []);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const fetchAvailableDocuments = async () => {
-    try {
-      const res = await aiService.getDocuments('READY');
-      if (res.data?.success) {
-        setAvailableDocs(res.data.data || []);
-      }
     } catch (e) {
       console.error(e);
     }
@@ -274,69 +210,6 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
       ]);
     } finally {
       setIsLoadingChat(false);
-    }
-  };
-
-  // Faculty Generator Actions
-  const handleGenerateQuestions = async () => {
-    if (!genSubject || !genTopic) {
-      alert('Please fill in Subject and Topic.');
-      return;
-    }
-    setIsGenerating(true);
-    setGeneratedQuestions([]);
-    setSavedQuestionIds(new Set());
-    try {
-      const res = await aiService.generateQuestions({
-        subject: genSubject,
-        topic: genTopic,
-        difficulty: genDifficulty,
-        questionType: genType,
-        count: genCount,
-        marks: genMarks,
-        negativeMarking: genNegMarks,
-        documentIds: genDocs.length > 0 ? genDocs : undefined,
-      });
-
-      if (res.success) {
-        setGeneratedQuestions(res.data || []);
-      } else {
-        alert(res.message || 'Question generation failed.');
-      }
-    } catch (e: any) {
-      alert(e.response?.data?.message || 'Error generating questions.');
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  const handleSaveQuestion = async (q: any, idx: number) => {
-    if (!selectedSubtopicId) {
-      alert('Please select a Subtopic from the dropdown first to link this question.');
-      return;
-    }
-    try {
-      const payload = {
-        ...q,
-        subtopicId: selectedSubtopicId,
-        marks: genMarks,
-        negativeMarks: genNegMarks,
-        difficulty: genDifficulty,
-      };
-
-      const res = await aiService.saveGeneratedQuestion(payload);
-      if (res.success) {
-        setSavedQuestionIds((prev) => {
-          const next = new Set(prev);
-          next.add(idx.toString());
-          return next;
-        });
-        alert('Question saved to Question Bank successfully!');
-      } else {
-        alert(res.message || 'Failed to save question.');
-      }
-    } catch (e: any) {
-      alert(e.response?.data?.message || 'Error saving question.');
     }
   };
 
@@ -626,7 +499,7 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
 
           {/* TAB 2: AI Question Generator (Faculty/Admin) */}
           {activeTab === 'generator' && (
-            <AIBatchQuestionGeneratorStudio />
+            <AIBatchQuestionGeneratorStudio role={role} />
           )}
 
           {/* TAB 3: Practice Mode (Student only) */}

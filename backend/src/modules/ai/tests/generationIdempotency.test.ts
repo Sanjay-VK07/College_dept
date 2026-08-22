@@ -40,7 +40,7 @@ describe('Generation Idempotency Tests', () => {
   });
 
   it('1. Replays existing batch results when given identical generationRequestId without extra LLM provider calls', async () => {
-    const result = await AIBatchQuestionGenerationService.generateBatch(testUserId, Role.FACULTY, {
+    const result = await AIBatchQuestionGenerationService.enqueueBatch(testUserId, Role.FACULTY, {
       totalQuestions: 50,
       difficultyDistribution: { EASY: 20, MEDIUM: 50, HARD: 30 },
       typeDistribution: { MCQ: 60, MSQ: 10, NAT: 30 },

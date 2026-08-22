@@ -63,7 +63,7 @@ describe('Generation Security Tests', () => {
 
   it('1. Student role cannot invoke question generation (403 Forbidden)', async () => {
     await expect(
-      AIBatchQuestionGenerationService.generateBatch(studentUserId, Role.STUDENT, {
+      AIBatchQuestionGenerationService.enqueueBatch(studentUserId, Role.STUDENT, {
         totalQuestions: 50,
         difficultyDistribution: { EASY: 20, MEDIUM: 50, HARD: 30 },
         typeDistribution: { MCQ: 60, MSQ: 10, NAT: 30 },

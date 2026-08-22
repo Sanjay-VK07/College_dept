@@ -397,7 +397,7 @@ async function forceSubmitAssignment(assignmentId: string, ipAddress: string, tr
         test: {
           include: {
             testQuestions: {
-              include: { question: true },
+              include: { question: true, questionVersion: true },
             },
           },
         },
@@ -418,6 +418,10 @@ async function forceSubmitAssignment(assignmentId: string, ipAddress: string, tr
 
     for (const tq of assignment.test.testQuestions) {
       const q = tq.question;
+      // Score against the frozen snapshot taken at attach time — same rule as
+      // examController.submitExam, so force-submit (violation auto-submit / invigilator
+      // termination) can never grade against an answer edited after the exam started.
+      const graded = tq.questionVersion || q;
       const studentResp = responseMap.get(q.id);
       const chosenAnswer = studentResp ? studentResp.chosenAnswer : null;
 
@@ -426,10 +430,10 @@ async function forceSubmitAssignment(assignmentId: string, ipAddress: string, tr
         const evaluation = GateScoringService.evaluateResponse(
           {
             id: q.id,
-            type: q.type,
-            marks: q.marks,
-            negativeMarks: q.negativeMarks,
-            correctAnswer: q.correctAnswer,
+            type: graded.type,
+            marks: graded.marks,
+            negativeMarks: graded.negativeMarks,
+            correctAnswer: graded.correctAnswer,
           },
           chosenAnswer
         );

@@ -26,8 +26,6 @@ import {
   LogOut,
   ChevronRight,
   ChevronDown,
-  TrendingUp,
-  ShieldCheck,
   FileText,
   Activity,
   X,
@@ -50,9 +48,7 @@ import {
   Copy,
   Eye,
   Archive,
-  Printer,
   FileCheck,
-  UserPlus,
   PieChart as PieChartIcon,
   Bot,
 } from 'lucide-react';
@@ -60,18 +56,6 @@ import api from '@/lib/api';
 import { aiService } from '@/services/aiService';
 import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
 import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  PieChart,
-  Pie,
-  Cell,
-} from 'recharts';
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -82,13 +66,7 @@ export default function AdminDashboard() {
     | 'STUDENTS'
     | 'FACULTY'
     | 'DEPARTMENTS'
-    | 'RESULTS'
-    | 'ANALYTICS'
     | 'REPORTS'
-    | 'HEALTH'
-    | 'INTELLIGENCE'
-    | 'GOVERNANCE'
-    | 'LOGS'
     | 'SETTINGS'
     | 'AI_ASSISTANT'
   >('OVERVIEW');
@@ -98,12 +76,6 @@ export default function AdminDashboard() {
   const [errorState, setErrorState] = useState('');
   const [toastMsg, setToastMsg] = useState('');
   const [searchGlobal, setSearchGlobal] = useState('');
-
-  // RAG Observability & Monitoring States
-  const [ragHealth, setRagHealth] = useState<any>(null);
-  const [ragMetrics, setRagMetrics] = useState<any>(null);
-  const [ragTraces, setRagTraces] = useState<any>(null);
-  const [loadingRag, setLoadingRag] = useState(false);
 
   // Table State: Student Roster
   const [students, setStudents] = useState<any[]>([]);
@@ -132,14 +104,23 @@ export default function AdminDashboard() {
   // Question Bank & Exams
   const [questions, setQuestions] = useState<any[]>([]);
   const [exams, setExams] = useState<any[]>([]);
-
-  // AI Question Generation States
-  const [aiGenType, setAiGenType] = useState<string>('MCQ');
-  const [aiGenDifficulty, setAiGenDifficulty] = useState<string>('MEDIUM');
-  const [aiGenCount, setAiGenCount] = useState<number>(1);
-  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState<boolean>(false);
-  const [genMessage, setGenMessage] = useState<string>('');
-  const [pendingAiQuestions, setPendingAiQuestions] = useState<any[]>([]);
+  const [questionBankDocuments, setQuestionBankDocuments] = useState<any[]>([]);
+  const [pdfTargetCount, setPdfTargetCount] = useState<string>('');
+  const [pdfImportJob, setPdfImportJob] = useState<{
+    fileName: string;
+    documentId: string;
+    generationRequestId: string;
+    status: string;
+    message?: string;
+    generatedCount?: number;
+    requestedCount?: number;
+    autoPublishedCount?: number;
+    pendingReviewCount?: number;
+    duplicateCount?: number;
+    structureStatus?: string;
+    totalPages?: number | null;
+    pagesProcessed?: number;
+  } | null>(null);
 
   // AI Solution & Exam Assembly States
   const [pendingSolutions, setPendingSolutions] = useState<any[]>([]);
@@ -147,14 +128,6 @@ export default function AdminDashboard() {
   const [isAssemblingExam, setIsAssemblingExam] = useState<boolean>(false);
   const [examAssembleTitle, setExamAssembleTitle] = useState<string>('');
   const [examAssembleCount, setExamAssembleCount] = useState<number>(10);
-
-  // Faculty & Examination Intelligence States
-  const [facultyIntelligence, setFacultyIntelligence] = useState<any | null>(null);
-  const [loadingIntelligence, setLoadingIntelligence] = useState<boolean>(false);
-
-  // AI Governance & Operations States
-  const [governanceData, setGovernanceData] = useState<any | null>(null);
-  const [loadingGovernance, setLoadingGovernance] = useState<boolean>(false);
 
   // Examination Management Enhanced State
   const [examViewMode, setExamViewMode] = useState<'TABLE' | 'GRID'>('TABLE');
@@ -179,13 +152,13 @@ export default function AdminDashboard() {
     targetDepartment: 'Computer Science and Engineering',
     maxViolations: '5',
     instructions: '1. Total Duration: 180 Minutes.\n2. Fullscreen security mode is strictly enforced.',
+    questionCount: '',
+    sourceDocumentId: '',
   });
 
   // Results Ledger & System Settings State
   const [resultsLedger, setResultsLedger] = useState<any[]>([]);
   const [systemSettings, setSystemSettings] = useState<any[]>([]);
-  const [isAssignInvigilatorOpen, setIsAssignInvigilatorOpen] = useState(false);
-  const [assignForm, setAssignForm] = useState({ testId: '', facultyId: '' });
   const [isAddQuestionOpen, setIsAddQuestionOpen] = useState(false);
   const [newQuestionForm, setNewQuestionForm] = useState({
     text: '',
@@ -233,91 +206,28 @@ export default function AdminDashboard() {
     setTimeout(() => setToastMsg(''), 4000);
   };
 
-  const loadRagTelemetry = async () => {
-    setLoadingRag(true);
-    try {
-      const [healthRes, metricsRes, tracesRes] = await Promise.all([
-        aiService.getRagHealth(),
-        aiService.getRagMetrics('24h'),
-        aiService.getRagTraces({ page: 1, limit: 10 }),
-      ]);
-      if (healthRes?.success) setRagHealth(healthRes);
-      if (metricsRes?.success) setRagMetrics(metricsRes.metrics);
-      if (tracesRes?.success) setRagTraces(tracesRes);
-    } catch (err) {
-      console.error('Failed to load RAG telemetry:', err);
-    } finally {
-      setLoadingRag(false);
-    }
-  };
-
-  const loadPendingAiQuestions = async () => {
-    try {
-      const res = await aiService.getPendingQuestions({ status: 'PENDING_REVIEW' });
-      if (res?.success) setPendingAiQuestions(res.data || []);
-    } catch (err) {
-      console.error('Failed to load pending AI questions:', err);
-    }
-  };
-
   useEffect(() => {
-    if (activeTab === 'HEALTH') {
-      loadRagTelemetry();
-    } else if (activeTab === 'QUESTIONS') {
-      loadPendingAiQuestions();
+    if (activeTab === 'QUESTIONS') {
       loadPendingSolutions();
-    } else if (activeTab === 'INTELLIGENCE') {
-      loadFacultyIntelligence();
-    } else if (activeTab === 'GOVERNANCE') {
-      loadGovernanceOverview();
     }
   }, [activeTab]);
 
-  const handleGenerateAiQuestions = async () => {
-    setIsGeneratingQuestions(true);
-    setGenMessage('');
+  const loadQuestionBankDocuments = async () => {
     try {
-      const res = await aiService.generateQuestions({
-        questionType: aiGenType,
-        difficulty: aiGenDifficulty,
-        count: aiGenCount,
-        generationRequestId: `req_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      });
-      if (res?.success) {
-        showToast(res.message || 'AI Question Generation completed!');
-        loadPendingAiQuestions();
-      } else {
-        setGenMessage(res.message || 'Failed to generate questions.');
-      }
-    } catch (err: any) {
-      setGenMessage(err.response?.data?.message || err.message || 'Generation failed.');
-    } finally {
-      setIsGeneratingQuestions(false);
+      const res = await api.get('/admin/question-bank-documents');
+      if (res.data?.success) setQuestionBankDocuments(res.data.data || []);
+    } catch (err) {
+      console.error('Failed to load question bank PDF sets:', err);
     }
   };
 
-  const handleApproveAiQuestion = async (id: string) => {
+  const handleViewPdf = async (documentId: string, fileName: string) => {
     try {
-      const res = await aiService.approveQuestion(id);
-      if (res?.success) {
-        showToast('Question approved and published to Question Bank!');
-        loadPendingAiQuestions();
-        fetchInitialData(true);
-      }
+      const res = await api.get(`/ai/documents/${documentId}/download`, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      window.open(blobUrl, '_blank');
     } catch (err: any) {
-      showToast(err.response?.data?.message || 'Approve failed.');
-    }
-  };
-
-  const handleRejectAiQuestion = async (id: string) => {
-    try {
-      const res = await aiService.rejectQuestion(id);
-      if (res?.success) {
-        showToast('Question rejected.');
-        loadPendingAiQuestions();
-      }
-    } catch (err: any) {
-      showToast(err.response?.data?.message || 'Reject failed.');
+      showToast(err.response?.data?.message || `Failed to open ${fileName}`);
     }
   };
 
@@ -397,45 +307,6 @@ export default function AdminDashboard() {
     }
   };
 
-  const loadFacultyIntelligence = async () => {
-    setLoadingIntelligence(true);
-    try {
-      const res = await aiService.getFacultyIntelligenceOverview();
-      if (res?.success) setFacultyIntelligence(res.data);
-    } catch (err) {
-      console.error('Failed to load faculty intelligence overview:', err);
-    } finally {
-      setLoadingIntelligence(false);
-    }
-  };
-
-  const loadGovernanceOverview = async () => {
-    setLoadingGovernance(true);
-    try {
-      const res = await aiService.getGovernanceOverview();
-      if (res?.success) setGovernanceData(res.data);
-    } catch (err) {
-      console.error('Failed to load AI governance overview:', err);
-    } finally {
-      setLoadingGovernance(false);
-    }
-  };
-
-  const toggleCircuitBreaker = async () => {
-    if (!governanceData) return;
-    const currentState = governanceData.circuitBreakerState?.circuitBreakerOpen;
-    const targetState = !currentState;
-    try {
-      const res = await aiService.setCircuitBreaker(targetState);
-      if (res?.success) {
-        showToast(res.message || 'Circuit breaker state updated');
-        loadGovernanceOverview();
-      }
-    } catch (err: any) {
-      showToast(err.response?.data?.message || 'Failed to toggle circuit breaker');
-    }
-  };
-
   // Notifications State & Handlers
   const [dbNotifications, setDbNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
@@ -461,17 +332,19 @@ export default function AdminDashboard() {
       if (silent) return;
 
       // Group 2: Management directories
-      const [studentsRes, facultyRes, questionsRes, examsRes] = await Promise.all([
+      const [studentsRes, facultyRes, questionsRes, examsRes, questionBankDocsRes] = await Promise.all([
         api.get('/admin/students'),
         api.get('/admin/faculty'),
         api.get('/admin/questions'),
         api.get('/admin/exams'),
+        api.get('/admin/question-bank-documents'),
       ]);
 
       if (studentsRes.data?.success) setStudents(studentsRes.data.data);
       if (facultyRes.data?.success) setFaculty(facultyRes.data.data);
       if (questionsRes.data?.success) setQuestions(questionsRes.data.data);
       if (examsRes.data?.success) setExams(examsRes.data.data);
+      if (questionBankDocsRes.data?.success) setQuestionBankDocuments(questionBankDocsRes.data.data);
 
       // Group 3: System settings & ledger
       const [resultsRes, settingsRes] = await Promise.all([
@@ -587,7 +460,7 @@ export default function AdminDashboard() {
     try {
       const res = await api.post('/admin/exams', newExamForm);
       if (res.data?.success) {
-        showToast('Examination scheduled and published successfully!');
+        showToast(res.data.message || 'Examination scheduled and published successfully!');
         setIsCreateExamOpen(false);
         setNewExamForm({
           title: '',
@@ -598,6 +471,8 @@ export default function AdminDashboard() {
           targetDepartment: 'Computer Science and Engineering',
           maxViolations: '5',
           instructions: '1. Total Duration: 180 Minutes.\n2. Fullscreen security mode is strictly enforced.',
+          questionCount: '',
+          sourceDocumentId: '',
         });
         fetchInitialData();
       }
@@ -677,10 +552,6 @@ export default function AdminDashboard() {
     printOrExportPDF();
   };
 
-  const handlePrint = () => {
-    window.print();
-  };
-
   // Question Bank CRUD & Upload Handlers
   const handleCreateQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -711,19 +582,90 @@ export default function AdminDashboard() {
   const handleQuestionFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = ''; // allow re-selecting the same file later
+
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
     const formData = new FormData();
     formData.append('file', file);
+    if (isPdf && pdfTargetCount.trim()) {
+      formData.append('targetQuestionCount', pdfTargetCount.trim());
+    }
+
     try {
       const res = await api.post('/admin/upload-questions', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      if (res.data?.success) {
+
+      if (!res.data?.success) {
+        showToast(res.data?.message || 'Upload failed');
+        return;
+      }
+
+      // PDF uploads are now processed in the background (large PDFs are split into page
+      // batches internally rather than sent in one request) — poll for real progress instead
+      // of a single blocking response.
+      if (res.data.generationRequestId) {
+        setPdfImportJob({
+          fileName: file.name,
+          documentId: res.data.documentId,
+          generationRequestId: res.data.generationRequestId,
+          status: res.data.status || 'QUEUED',
+        });
+        showToast(res.data.message || 'PDF uploaded — extracting questions in the background.');
+        pollPdfImportJob(res.data.generationRequestId, res.data.documentId);
+      } else {
         showToast(res.data.message || 'Questions uploaded successfully');
         fetchInitialData();
       }
     } catch (err: any) {
       showToast(err.response?.data?.message || 'Failed to upload questions file');
     }
+  };
+
+  const PDF_IMPORT_TERMINAL_STATUSES = ['COMPLETED', 'GENERATED_PARTIAL_BATCH', 'FAILED'];
+
+  const pollPdfImportJob = (generationRequestId: string, documentId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const [statusRes, structureRes] = await Promise.all([
+          aiService.getBatchJobStatus(generationRequestId),
+          // Page-level extraction progress lives on the underlying document-structure job
+          // (pdfQuestionImportService triggers it internally) rather than the batch job itself.
+          api.get(`/admin/documents/${documentId}/processing-status`).catch(() => null),
+        ]);
+
+        if (!statusRes.success) return;
+        const job = statusRes.job;
+        const structureJob = structureRes?.data?.data;
+
+        setPdfImportJob((prev) =>
+          prev && prev.generationRequestId === generationRequestId
+            ? {
+                ...prev,
+                status: job.status,
+                message: job.statusMessage,
+                generatedCount: job.generatedCount,
+                requestedCount: job.requestedCount,
+                autoPublishedCount: job.autoPublishedCount,
+                pendingReviewCount: job.pendingReviewCount,
+                duplicateCount: job.duplicateCount,
+                structureStatus: structureJob?.status,
+                totalPages: structureJob?.totalPages ?? prev.totalPages,
+                pagesProcessed: structureJob?.pagesProcessed ?? prev.pagesProcessed,
+              }
+            : prev
+        );
+
+        if (PDF_IMPORT_TERMINAL_STATUSES.includes(job.status)) {
+          clearInterval(interval);
+          showToast(job.statusMessage || `PDF import ${job.status.toLowerCase()}`);
+          fetchInitialData();
+        }
+      } catch (err) {
+        console.error('Failed to poll PDF import job status:', err);
+      }
+    }, 3000);
   };
 
   const handleStudentFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -741,19 +683,6 @@ export default function AdminDashboard() {
       }
     } catch (err: any) {
       showToast(err.response?.data?.message || 'Failed to upload student roster');
-    }
-  };
-
-  const handleAssignInvigilator = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const res = await api.post('/admin/assign-invigilator', assignForm);
-      if (res.data?.success) {
-        showToast(res.data.message || 'Invigilator assigned successfully');
-        setIsAssignInvigilatorOpen(false);
-      }
-    } catch (err: any) {
-      showToast(err.response?.data?.message || 'Failed to assign invigilator');
     }
   };
 
@@ -819,7 +748,9 @@ export default function AdminDashboard() {
       return 0;
     });
 
-  const COLORS = ['#1E40AF', '#16A34A', '#D97706', '#DC2626', '#7C3AED'];
+  // Questions extracted from an uploaded PDF are grouped under their source document
+  // in the UI instead of being listed individually here.
+  const individualQuestions = questions.filter((q: any) => !q.aiSources || q.aiSources.length === 0);
 
   if (loading) {
     return (
@@ -1040,13 +971,7 @@ export default function AdminDashboard() {
             { id: 'STUDENTS', label: 'Students', icon: Users, badge: realMetrics.students },
             { id: 'FACULTY', label: 'Faculty', icon: UserCheck, badge: realMetrics.faculty },
             { id: 'DEPARTMENTS', label: 'Departments', icon: Layers, badge: realMetrics.departments },
-            { id: 'RESULTS', label: 'Results', icon: Award },
-            { id: 'ANALYTICS', label: 'Analytics', icon: TrendingUp },
-            { id: 'INTELLIGENCE', label: 'Faculty Intelligence', icon: Cpu },
-            { id: 'GOVERNANCE', label: 'AI Governance & Cost', icon: ShieldCheck },
             { id: 'REPORTS', label: 'Reports', icon: FileText },
-            { id: 'HEALTH', label: 'System Health', icon: ShieldCheck },
-            { id: 'LOGS', label: 'Audit Logs', icon: Activity },
             { id: 'SETTINGS', label: 'Settings', icon: Settings },
             { id: 'AI_ASSISTANT', label: 'AI Assistant', icon: Bot },
           ].map((tab) => {
@@ -1151,9 +1076,9 @@ export default function AdminDashboard() {
                     <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
                     <span>Import Questions</span>
                   </button>
-                  <button onClick={() => setActiveTab('RESULTS')} className="erp-btn-secondary py-2 text-xs">
+                  <button onClick={() => setActiveTab('STUDENTS')} className="erp-btn-secondary py-2 text-xs">
                     <Award className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Publish Results</span>
+                    <span>View Student Results</span>
                   </button>
                   <button onClick={() => setActiveTab('REPORTS')} className="erp-btn-secondary py-2 text-xs">
                     <Download className="w-3.5 h-3.5 text-slate-700" />
@@ -1412,10 +1337,6 @@ export default function AdminDashboard() {
                         <Plus className="w-3.5 h-3.5" />
                         <span>Create Examination</span>
                       </button>
-                      <button onClick={() => setIsAssignInvigilatorOpen(true)} className="erp-btn-secondary py-1.5 text-xs">
-                        <UserPlus className="w-3.5 h-3.5 text-[#1E40AF]" />
-                        <span>Assign Invigilator</span>
-                      </button>
                       <button onClick={() => handleExportCSV('Attendance', filteredExams)} className="erp-btn-secondary py-1.5 text-xs">
                         <FileCheck className="w-3.5 h-3.5 text-emerald-700" />
                         <span>Export Attendance</span>
@@ -1423,16 +1344,6 @@ export default function AdminDashboard() {
                       <button onClick={() => handleExportCSV('ExamResults', filteredExams)} className="erp-btn-secondary py-1.5 text-xs">
                         <Download className="w-3.5 h-3.5" />
                         <span>Download Results</span>
-                      </button>
-                      <button onClick={() => handleExportCSV('Examinations', filteredExams)} className="erp-btn-secondary py-1.5 text-xs">
-                        CSV
-                      </button>
-                      <button onClick={() => handleExportPDF('Examinations')} className="erp-btn-secondary py-1.5 text-xs">
-                        PDF
-                      </button>
-                      <button onClick={handlePrint} className="erp-btn-secondary py-1.5 text-xs">
-                        <Printer className="w-3.5 h-3.5 text-slate-700" />
-                        <span>Print</span>
                       </button>
                     </div>
                   </div>
@@ -1751,159 +1662,28 @@ export default function AdminDashboard() {
           {/* TAB 3: QUESTION BANK */}
           {activeTab === 'QUESTIONS' && (
             <div className="space-y-4">
-              {/* AI GATE Question Generator Studio Panel */}
-              <div className="erp-card space-y-3 bg-gradient-to-r from-blue-50/50 to-indigo-50/30 border border-blue-200">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-blue-200/60 pb-2.5">
-                  <div className="flex items-center space-x-2">
-                    <Zap className="w-4 h-4 text-blue-600" />
-                    <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                      AI GATE Question Generator Studio (RAG-Grounded)
-                    </h3>
-                  </div>
-                  <span className="text-[11px] font-mono text-slate-500">
-                    Source: Authorized RAG Knowledge Base Only
-                  </span>
+              {/* AI question generation now lives in one place: the AI Assistant tab's Source-
+                  Grounded Question Generator Studio (distribution controls, real progress,
+                  independent verification, auto-publish, and review queue all in one surface). */}
+              <div className="erp-card space-y-2 bg-gradient-to-r from-blue-50/50 to-indigo-50/30 border border-blue-200">
+                <div className="flex items-center space-x-2">
+                  <Zap className="w-4 h-4 text-blue-600" />
+                  <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                    AI Question Generation Moved
+                  </h3>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-3 text-xs">
-                  <div>
-                    <label className="block text-[10px] font-semibold text-slate-500 uppercase mb-1">Type</label>
-                    <select
-                      value={aiGenType}
-                      onChange={(e) => setAiGenType(e.target.value)}
-                      className="erp-select text-xs py-1.5 min-w-[90px]"
-                    >
-                      <option value="MCQ">MCQ</option>
-                      <option value="MSQ">MSQ</option>
-                      <option value="NAT">NAT</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-semibold text-slate-500 uppercase mb-1">Difficulty</label>
-                    <select
-                      value={aiGenDifficulty}
-                      onChange={(e) => setAiGenDifficulty(e.target.value)}
-                      className="erp-select text-xs py-1.5 min-w-[100px]"
-                    >
-                      <option value="EASY">EASY</option>
-                      <option value="MEDIUM">MEDIUM</option>
-                      <option value="HARD">HARD</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-semibold text-slate-500 uppercase mb-1">Count</label>
-                    <select
-                      value={aiGenCount}
-                      onChange={(e) => setAiGenCount(Number(e.target.value))}
-                      className="erp-select text-xs py-1.5 min-w-[70px]"
-                    >
-                      <option value={1}>1</option>
-                      <option value={2}>2</option>
-                      <option value={3}>3</option>
-                      <option value={5}>5</option>
-                    </select>
-                  </div>
-
-                  <div className="pt-4">
-                    <button
-                      disabled={isGeneratingQuestions}
-                      onClick={handleGenerateAiQuestions}
-                      className="erp-btn-primary py-1.5 px-4 text-xs disabled:opacity-50"
-                    >
-                      <Zap className={`w-3.5 h-3.5 mr-1 ${isGeneratingQuestions ? 'animate-spin' : ''}`} />
-                      <span>{isGeneratingQuestions ? 'Generating via RAG...' : 'Generate AI Question'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                {genMessage && (
-                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800 flex items-center space-x-2">
-                    <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                    <span>{genMessage}</span>
-                  </div>
-                )}
+                <p className="text-xs text-slate-600">
+                  Source-grounded AI question generation, verification status, and the faculty review queue are now consolidated under the{' '}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('AI_ASSISTANT')}
+                    className="font-semibold text-blue-700 underline hover:text-blue-900"
+                  >
+                    AI Assistant → AI Question Generator
+                  </button>{' '}
+                  tab.
+                </p>
               </div>
-
-              {/* Pending Faculty Review Queue */}
-              {pendingAiQuestions.length > 0 && (
-                <div className="erp-card space-y-3 border-l-4 border-l-amber-500">
-                  <div className="flex justify-between items-center">
-                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center">
-                      <Clock className="w-4 h-4 mr-1.5 text-amber-600" />
-                      Pending Faculty Review Queue ({pendingAiQuestions.length} Items)
-                    </h4>
-                    <span className="text-[11px] font-mono text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                      Requires Faculty Approval
-                    </span>
-                  </div>
-
-                  <div className="space-y-3">
-                    {pendingAiQuestions.map((aiQ) => (
-                      <div key={aiQ.id} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-2 text-xs">
-                        <div className="flex justify-between items-start">
-                          <div className="flex items-center space-x-2">
-                            <span className="erp-badge-gray font-mono font-bold">{aiQ.type}</span>
-                            <span className="erp-badge-gray font-mono">{aiQ.difficulty}</span>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                              aiQ.similarityStatus === 'UNIQUE'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : aiQ.similarityStatus === 'SIMILAR'
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-red-100 text-red-800'
-                            }`}>
-                              {aiQ.similarityStatus}
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <button
-                              onClick={() => handleApproveAiQuestion(aiQ.id)}
-                              className="erp-btn-primary py-1 px-3 text-[11px] bg-emerald-700 hover:bg-emerald-800"
-                            >
-                              Approve & Publish
-                            </button>
-                            <button
-                              onClick={() => handleRejectAiQuestion(aiQ.id)}
-                              className="erp-btn-danger py-1 px-2.5 text-[11px]"
-                            >
-                              Reject
-                            </button>
-                          </div>
-                        </div>
-
-                        <p className="font-semibold text-slate-900 leading-relaxed">{aiQ.stem}</p>
-
-                        {aiQ.options && Array.isArray(aiQ.options) && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 text-[11px] font-mono">
-                            {aiQ.options.map((opt: any, idx: number) => {
-                              const isCorrect = Array.isArray(aiQ.correctAnswer) && aiQ.correctAnswer.includes(idx);
-                              return (
-                                <div
-                                  key={idx}
-                                  className={`p-1.5 rounded border ${
-                                    isCorrect ? 'bg-emerald-50 border-emerald-300 font-bold text-emerald-900' : 'bg-white border-slate-200 text-slate-700'
-                                  }`}
-                                >
-                                  {String.fromCharCode(65 + idx)}. {typeof opt === 'string' ? opt : opt.text}
-                                  {isCorrect && ' ✓'}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        {aiQ.explanation && (
-                          <div className="p-2 bg-blue-50/50 border border-blue-200/60 rounded text-[11px] text-slate-700">
-                            <span className="font-bold text-[#1E40AF]">Explanation: </span>
-                            {aiQ.explanation}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               {/* Pending Solutions Review Queue */}
               {pendingSolutions.length > 0 && (
@@ -1972,8 +1752,19 @@ export default function AdminDashboard() {
               )}
 
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Central Question Bank ({questions.length} Items)</h3>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Question Bank</h3>
                 <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={1}
+                      placeholder="Max Qs (PDF only)"
+                      value={pdfTargetCount}
+                      onChange={(e) => setPdfTargetCount(e.target.value)}
+                      title="Optional: cap how many questions to extract from a PDF upload. Leave blank to extract every question with a confidently matched answer."
+                      className="erp-select text-xs py-1.5 w-32"
+                    />
+                  </div>
                   <label className="erp-btn-secondary py-1 text-xs cursor-pointer">
                     <span>Import File (Excel/CSV/PDF)</span>
                     <input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={handleQuestionFileUpload} className="hidden" />
@@ -1991,6 +1782,111 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              {/* PDF Import Progress — real background job status, polled every 3s */}
+              {pdfImportJob && (
+                <div className={`erp-card space-y-2 border-l-4 ${
+                  pdfImportJob.status === 'COMPLETED'
+                    ? 'border-l-emerald-500'
+                    : pdfImportJob.status === 'FAILED'
+                    ? 'border-l-red-500'
+                    : pdfImportJob.status === 'GENERATED_PARTIAL_BATCH'
+                    ? 'border-l-amber-500'
+                    : 'border-l-blue-500'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      {!PDF_IMPORT_TERMINAL_STATUSES.includes(pdfImportJob.status) && (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                      )}
+                      Extracting from: {pdfImportJob.fileName}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                        {pdfImportJob.status}
+                      </span>
+                      {PDF_IMPORT_TERMINAL_STATUSES.includes(pdfImportJob.status) && (
+                        <button onClick={() => setPdfImportJob(null)} className="text-slate-400 hover:text-slate-700 text-xs">
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {!!pdfImportJob.totalPages && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-mono text-slate-600">
+                        <span>
+                          Pages processed: <strong>{pdfImportJob.pagesProcessed ?? 0}</strong> / {pdfImportJob.totalPages}
+                          {pdfImportJob.structureStatus ? ` (${pdfImportJob.structureStatus})` : ''}
+                        </span>
+                        <span>{Math.round(((pdfImportJob.pagesProcessed ?? 0) / pdfImportJob.totalPages) * 100)}%</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-blue-500 transition-all duration-500"
+                          style={{ width: `${Math.min(100, Math.round(((pdfImportJob.pagesProcessed ?? 0) / pdfImportJob.totalPages) * 100))}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {typeof pdfImportJob.generatedCount === 'number' && (
+                    <div className="flex items-center gap-3 text-[11px] font-mono text-slate-600">
+                      <span>Imported: <strong>{pdfImportJob.generatedCount}</strong>{pdfImportJob.requestedCount ? ` / ${pdfImportJob.requestedCount}` : ''}</span>
+                      <span className="text-teal-700">Auto-published: <strong>{pdfImportJob.autoPublishedCount ?? 0}</strong></span>
+                      <span className="text-sky-700">Awaiting review: <strong>{pdfImportJob.pendingReviewCount ?? 0}</strong></span>
+                      <span className="text-amber-700">Duplicates skipped: <strong>{pdfImportJob.duplicateCount ?? 0}</strong></span>
+                    </div>
+                  )}
+                  {pdfImportJob.message && <p className="text-xs text-slate-600">{pdfImportJob.message}</p>}
+                </div>
+              )}
+
+              {/* Uploaded PDF Question Sets — each stored PDF is one entry; questions inside are used
+                  for random selection during exam creation but aren't listed individually here. */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Uploaded PDF Question Sets ({questionBankDocuments.length})
+                </h4>
+                <div className="erp-table-container">
+                  <table className="erp-table">
+                    <thead>
+                      <tr>
+                        <th>File Name</th>
+                        <th>Questions Extracted</th>
+                        <th>Uploaded</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {questionBankDocuments.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="py-6 text-center text-slate-500">
+                            No PDF question sets uploaded yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        questionBankDocuments.map((doc) => (
+                          <tr key={doc.id}>
+                            <td className="font-semibold text-slate-900">{doc.fileName || doc.title}</td>
+                            <td className="font-bold font-mono text-emerald-700">{doc.questionCount}</td>
+                            <td className="font-mono text-xs text-slate-500">{new Date(doc.uploadedAt).toLocaleDateString()}</td>
+                            <td>
+                              <button
+                                onClick={() => handleViewPdf(doc.id, doc.fileName || doc.title)}
+                                className="erp-btn-secondary py-1 px-2 text-[10px] text-blue-700"
+                                title="View original PDF"
+                              >
+                                <FileText className="w-3 h-3 mr-1" />
+                                <span>View PDF</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
               <div className="erp-table-container">
                 <table className="erp-table">
                   <thead>
@@ -2004,14 +1900,14 @@ export default function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {questions.length === 0 ? (
+                    {individualQuestions.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="py-8 text-center text-slate-500">
-                          No questions found in Question Bank database.
+                          No individually authored questions found in Question Bank database.
                         </td>
                       </tr>
                     ) : (
-                      questions.map((q) => (
+                      individualQuestions.map((q) => (
                         <tr key={q.id}>
                           <td className="font-mono font-bold text-[#1E40AF]">{q.id.slice(0, 8)}</td>
                           <td className="font-semibold text-slate-900 max-w-xs truncate">{q.text}</td>
@@ -2236,98 +2132,7 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* TAB 7: RESULTS */}
-          {activeTab === 'RESULTS' && (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Semester End Results Ledger</h3>
-                <button onClick={() => handleExportPDF('ResultsLedger')} className="erp-btn-secondary py-1 text-xs">
-                  Export PDF Ledger
-                </button>
-              </div>
-
-              <div className="erp-table-container">
-                <table className="erp-table">
-                  <thead>
-                    <tr>
-                      <th>Register Number</th>
-                      <th>Student Name</th>
-                      <th>Course & Code</th>
-                      <th>Score Obtained</th>
-                      <th>Grade</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {resultsLedger.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-slate-500">
-                          No result records evaluated in database.
-                        </td>
-                      </tr>
-                    ) : (
-                      resultsLedger.map((r, idx) => (
-                        <tr key={idx}>
-                          <td className="font-mono font-bold text-[#1E40AF]">{r.registerNo}</td>
-                          <td className="font-semibold text-slate-900">{r.studentName}</td>
-                          <td className="text-slate-700">{r.courseTitle}</td>
-                          <td className="font-mono font-bold text-emerald-700">{r.score} / {r.totalMarks}</td>
-                          <td className="font-semibold text-slate-900">{r.grade}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 8: ANALYTICS */}
-          {activeTab === 'ANALYTICS' && (
-            <div className="space-y-6">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Institutional Performance & Examination Analytics</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="erp-card space-y-3">
-                  <h4 className="text-xs font-bold text-slate-700 uppercase">Department-wise Student Count</h4>
-                  <div className="h-56 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={overview?.departmentBreakdown || []}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="department" stroke="#64748b" fontSize={11} />
-                        <YAxis stroke="#64748b" fontSize={11} />
-                        <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '6px', color: '#0f172a' }} />
-                        <Bar dataKey="count" fill="#1E40AF" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                <div className="erp-card space-y-3">
-                  <h4 className="text-xs font-bold text-slate-700 uppercase">Question Difficulty Distribution</h4>
-                  <div className="h-56 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={overview?.difficultyBreakdown || []}
-                          dataKey="count"
-                          nameKey="difficulty"
-                          cx="50%"
-                          cy="50%"
-                          outerRadius={80}
-                        >
-                          {(overview?.difficultyBreakdown || []).map((entry: any, index: number) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '6px', color: '#0f172a' }} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 9: REPORTS */}
+          {/* TAB 7: REPORTS */}
           {activeTab === 'REPORTS' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="erp-card space-y-3">
@@ -2346,475 +2151,6 @@ export default function AdminDashboard() {
                   <Download className="w-4 h-4 text-[#1E40AF]" />
                   <span>Export PDF Broadsheet</span>
                 </button>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 10: HEALTH */}
-          {activeTab === 'HEALTH' && (
-            <div className="space-y-4">
-              <div className="erp-card space-y-4">
-                <div className="flex justify-between items-center border-b border-slate-200 pb-3">
-                  <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center">
-                    <ShieldCheck className="w-4 h-4 mr-1.5 text-emerald-700" />
-                    Infrastructure & System Health Panel
-                  </h3>
-                  <button onClick={loadRagTelemetry} className="erp-btn-secondary text-xs py-1 px-2.5">
-                    <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loadingRag ? 'animate-spin' : ''}`} />
-                    Refresh Status
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-                  {systemHealthServices.map((service: any, i: number) => (
-                    <div key={i} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-slate-900">{service.name}</span>
-                        <span className="erp-badge-green font-mono">{service.status}</span>
-                      </div>
-                      <p className="text-[11px] text-slate-500">{service.detail}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* RAG System Health & Observability Panel */}
-              <div className="erp-card space-y-4">
-                <div className="flex justify-between items-center border-b border-slate-200 pb-3">
-                  <div className="flex items-center space-x-2">
-                    <Activity className="w-4 h-4 text-blue-600" />
-                    <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-                      RAG Observability & Quality Telemetry
-                    </h3>
-                  </div>
-                  {ragHealth && (
-                    <span
-                      className={`px-2.5 py-0.5 rounded text-xs font-mono font-bold ${
-                        ragHealth.status === 'HEALTHY'
-                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          : ragHealth.status === 'DEGRADED'
-                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                          : 'bg-red-100 text-red-800 border border-red-300'
-                      }`}
-                    >
-                      RAG System: {ragHealth.status}
-                    </span>
-                  )}
-                </div>
-
-                {!ragMetrics || !ragMetrics.hasData ? (
-                  <div className="p-6 text-center text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded text-xs">
-                    <AlertCircle className="w-6 h-6 text-slate-400 mx-auto mb-2" />
-                    <p className="font-semibold">No data available</p>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      No RAG telemetry traces have been recorded in the database yet.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {/* Metrics Summary Cards */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Total RAG Requests</span>
-                        <span className="text-lg font-bold font-mono text-slate-900">{ragMetrics.totalRequests}</span>
-                      </div>
-                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">RAG Usage Rate</span>
-                        <span className="text-lg font-bold font-mono text-blue-600">{ragMetrics.ragUsageRate}</span>
-                      </div>
-                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Avg Retrieval Latency</span>
-                        <span className="text-lg font-bold font-mono text-slate-900">{ragMetrics.averageVectorSearchLatency} ms</span>
-                      </div>
-                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Avg Provider Latency</span>
-                        <span className="text-lg font-bold font-mono text-slate-900">{ragMetrics.averageProviderLatency} ms</span>
-                      </div>
-                    </div>
-
-                    {/* Confidence & Failure Distribution */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                      <div className="p-3 border border-slate-200 rounded space-y-2">
-                        <h4 className="font-bold text-slate-800">Retrieval Quality Breakdown</h4>
-                        <div className="space-y-1 font-mono text-[11px]">
-                          <div className="flex justify-between">
-                            <span className="text-emerald-700 font-semibold">High Confidence:</span>
-                            <span>{ragMetrics.confidenceDistribution?.highConfidence || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-blue-700 font-semibold">Medium Confidence:</span>
-                            <span>{ragMetrics.confidenceDistribution?.mediumConfidence || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-amber-700 font-semibold">Low Confidence:</span>
-                            <span>{ragMetrics.confidenceDistribution?.lowConfidence || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500 font-semibold">No Relevant Context:</span>
-                            <span>{ragMetrics.confidenceDistribution?.noRelevantContext || 0}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="p-3 border border-slate-200 rounded space-y-2">
-                        <h4 className="font-bold text-slate-800">Component Health Statuses</h4>
-                        {ragHealth?.components && (
-                          <div className="space-y-1 font-mono text-[11px]">
-                            {Object.entries(ragHealth.components).map(([comp, stat]: any) => (
-                              <div key={comp} className="flex justify-between">
-                                <span className="capitalize text-slate-600">{comp}:</span>
-                                <span
-                                  className={
-                                    stat === 'HEALTHY'
-                                      ? 'text-emerald-600 font-bold'
-                                      : 'text-amber-600 font-bold'
-                                  }
-                                >
-                                  {stat}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Traces Log Table */}
-                    {ragTraces?.data && ragTraces.data.length > 0 && (
-                      <div className="space-y-2 pt-2">
-                        <h4 className="font-bold text-slate-900 text-xs">Recent RAG Traces Log</h4>
-                        <div className="erp-table-container">
-                          <table className="erp-table text-[11px]">
-                            <thead>
-                              <tr>
-                                <th>Timestamp</th>
-                                <th>Decision</th>
-                                <th>Status</th>
-                                <th>Latency</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {ragTraces.data.map((tr: any) => (
-                                <tr key={tr.id}>
-                                  <td className="font-mono text-slate-500">
-                                    {new Date(tr.createdAt).toLocaleTimeString()}
-                                  </td>
-                                  <td className="font-mono font-semibold">{tr.ragDecision}</td>
-                                  <td className="font-mono">
-                                    <span
-                                      className={`px-1.5 py-0.5 rounded text-[10px] ${
-                                        tr.status === 'COMPLETED'
-                                          ? 'bg-emerald-50 text-emerald-700'
-                                          : tr.status === 'FAILED'
-                                          ? 'bg-red-50 text-red-700'
-                                          : 'bg-amber-50 text-amber-700'
-                                      }`}
-                                    >
-                                      {tr.status}
-                                    </span>
-                                  </td>
-                                  <td className="font-mono">{tr.totalDurationMs} ms</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB: FACULTY INTELLIGENCE */}
-          {activeTab === 'INTELLIGENCE' && (
-            <div className="space-y-4">
-              <div className="erp-card space-y-4">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200 pb-3">
-                  <div className="flex items-center space-x-2">
-                    <Cpu className="w-5 h-5 text-indigo-600" />
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-                        AI Faculty & Examination Intelligence Studio
-                      </h3>
-                      <p className="text-[11px] text-slate-500">
-                        Evidence-Based Performance & Quality Analytics (Real Database Records Only)
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={loadFacultyIntelligence}
-                    disabled={loadingIntelligence}
-                    className="erp-btn-secondary py-1 px-3 text-xs"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loadingIntelligence ? 'animate-spin' : ''}`} />
-                    <span>Refresh Analytics</span>
-                  </button>
-                </div>
-
-                {!facultyIntelligence ? (
-                  <div className="p-8 text-center text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded text-xs">
-                    <AlertCircle className="w-6 h-6 text-slate-400 mx-auto mb-2" />
-                    <p className="font-semibold">No data available</p>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Click Refresh to calculate evidence-based intelligence from PostgreSQL records.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {/* Metrics Overview Cards */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                      <div className="p-3 bg-blue-50/60 border border-blue-200 rounded">
-                        <span className="text-[10px] font-semibold text-blue-700 uppercase block">Total Approved Questions</span>
-                        <span className="text-xl font-bold font-mono text-[#1E40AF]">
-                          {facultyIntelligence.questionBankHealth?.totalApprovedQuestions || 0}
-                        </span>
-                      </div>
-                      <div className="p-3 bg-amber-50/60 border border-amber-200 rounded">
-                        <span className="text-[10px] font-semibold text-amber-700 uppercase block">Pending AI Questions</span>
-                        <span className="text-xl font-bold font-mono text-amber-800">
-                          {facultyIntelligence.questionBankHealth?.pendingAiQuestions || 0}
-                        </span>
-                      </div>
-                      <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded">
-                        <span className="text-[10px] font-semibold text-indigo-700 uppercase block">Cohort Avg Accuracy</span>
-                        <span className="text-xl font-bold font-mono text-indigo-800">
-                          {facultyIntelligence.cohortOverview?.averageCohortAccuracy || 0}%
-                        </span>
-                      </div>
-                      <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded">
-                        <span className="text-[10px] font-semibold text-emerald-700 uppercase block">Exams Intelligence Analyzed</span>
-                        <span className="text-xl font-bold font-mono text-emerald-800">
-                          {facultyIntelligence.examsIntelligence?.length || 0}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Evidence-Based Recommendations */}
-                    <div className="space-y-2 border border-slate-200 rounded p-3">
-                      <h4 className="font-bold text-xs text-slate-900 uppercase tracking-wider flex items-center">
-                        <Sparkles className="w-4 h-4 text-indigo-600 mr-1.5" />
-                        Evidence-Based Faculty Recommendations
-                      </h4>
-                      <div className="space-y-2">
-                        {facultyIntelligence.recommendations?.map((rec: any) => (
-                          <div key={rec.id} className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1 text-xs">
-                            <div className="flex justify-between items-center">
-                              <span className="font-bold text-slate-900">{rec.title}</span>
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                                rec.priority === 'HIGH' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
-                              }`}>
-                                {rec.priority} PRIORITY
-                              </span>
-                            </div>
-                            <p className="text-slate-600 text-[11px]"><span className="font-semibold text-slate-800">Evidence:</span> {rec.evidence}</p>
-                            <p className="text-blue-800 text-[11px] font-medium"><span className="font-semibold text-blue-900">Action:</span> {rec.recommendedAction}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Cohort Academic Gaps */}
-                    <div className="space-y-2 border border-slate-200 rounded p-3">
-                      <h4 className="font-bold text-xs text-slate-900 uppercase tracking-wider flex items-center">
-                        <AlertCircle className="w-4 h-4 text-amber-600 mr-1.5" />
-                        Cohort Academic Gaps & Weak Topics
-                      </h4>
-                      {facultyIntelligence.cohortOverview?.academicGaps?.length === 0 ? (
-                        <p className="text-xs text-slate-500 italic py-2">No academic gaps detected (sufficient accuracy across cohort attempts).</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {facultyIntelligence.cohortOverview?.academicGaps?.map((gap: any) => (
-                            <div key={gap.topicId} className="p-2.5 bg-amber-50/50 border border-amber-200 rounded text-xs flex justify-between items-center">
-                              <div>
-                                <span className="font-bold text-slate-900">{gap.topicName} ({gap.subjectName})</span>
-                                <p className="text-[11px] text-slate-600 mt-0.5">{gap.evidence}</p>
-                              </div>
-                              <span className="font-mono font-bold text-amber-900 bg-amber-100 px-2 py-1 rounded">
-                                {gap.accuracyPercentage}% Accuracy
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB: AI GOVERNANCE & COST */}
-          {activeTab === 'GOVERNANCE' && (
-            <div className="space-y-4">
-              <div className="erp-card space-y-4">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200 pb-3">
-                  <div className="flex items-center space-x-2">
-                    <ShieldCheck className="w-5 h-5 text-blue-600" />
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-                        AI Governance, Cost Control & Operations Studio
-                      </h3>
-                      <p className="text-[11px] text-slate-500">
-                        Production Circuit Breaker, Model Evaluation & Token Cost Analytics
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={toggleCircuitBreaker}
-                      className={`px-3 py-1.5 rounded text-xs font-bold font-mono border transition-colors ${
-                        governanceData?.circuitBreakerState?.circuitBreakerOpen
-                          ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
-                          : 'bg-red-600 text-white border-red-700 hover:bg-red-700'
-                      }`}
-                    >
-                      {governanceData?.circuitBreakerState?.circuitBreakerOpen
-                        ? 'RESUME AI OPERATIONS'
-                        : 'PAUSE AI (CIRCUIT BREAKER)'}
-                    </button>
-                    <button
-                      onClick={loadGovernanceOverview}
-                      disabled={loadingGovernance}
-                      className="erp-btn-secondary py-1.5 px-3 text-xs"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${loadingGovernance ? 'animate-spin' : ''}`} />
-                      <span>Refresh Governance</span>
-                    </button>
-                  </div>
-                </div>
-
-                {!governanceData ? (
-                  <div className="p-8 text-center text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded text-xs">
-                    <AlertCircle className="w-6 h-6 text-slate-400 mx-auto mb-2" />
-                    <p className="font-semibold">No data available</p>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Click Refresh to load AI governance, circuit breaker, and evaluation telemetry.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {/* Circuit Breaker & Routing Bar */}
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-xs">
-                      <div>
-                        <span className="font-semibold text-slate-700">System Circuit Breaker Status: </span>
-                        <span
-                          className={`font-mono font-bold px-2 py-0.5 rounded text-[11px] ${
-                            governanceData.circuitBreakerState?.circuitBreakerOpen
-                              ? 'bg-red-100 text-red-800 border border-red-300'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          }`}
-                        >
-                          {governanceData.circuitBreakerState?.circuitBreakerOpen ? 'CIRCUIT BREAKER ACTIVATED (PAUSED)' : 'NORMAL OPERATIONAL'}
-                        </span>
-                      </div>
-                      <div className="font-mono text-slate-600 text-[11px]">
-                        Active Model: <span className="font-bold text-blue-900">{governanceData.circuitBreakerState?.activeModel || 'gemini-1.5-flash'}</span>
-                      </div>
-                    </div>
-
-                    {/* Token & Cost Metrics */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Total System Traces</span>
-                        <span className="text-xl font-bold font-mono text-slate-900">
-                          {governanceData.costMetrics?.totalTracesCount || 0}
-                        </span>
-                      </div>
-                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Estimated Total Tokens</span>
-                        <span className="text-xl font-bold font-mono text-blue-600">
-                          {governanceData.costMetrics?.estimatedTotalTokens?.toLocaleString() || 0}
-                        </span>
-                      </div>
-                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">Estimated API Cost</span>
-                        <span className="text-xl font-bold font-mono text-emerald-700">
-                          ${governanceData.costMetrics?.estimatedTotalCostUsd || '0.00'}
-                        </span>
-                      </div>
-                      <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase block">System Quality Score</span>
-                        <span className="text-xl font-bold font-mono text-indigo-700">
-                          {governanceData.evaluationOverview?.overallSystemQualityScore || 100} / 100
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Multi-Pipeline Evaluation Table */}
-                    <div className="space-y-2 pt-2">
-                      <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider">Multi-Pipeline Model Evaluation</h4>
-                      <div className="erp-table-container">
-                        <table className="erp-table text-[11px]">
-                          <thead>
-                            <tr>
-                              <th>Operational AI Pipeline</th>
-                              <th>Executions</th>
-                              <th>Success Rate</th>
-                              <th>Avg Latency</th>
-                              <th>Quality Status</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {governanceData.evaluationOverview?.pipelines?.map((pipe: any) => (
-                              <tr key={pipe.pipelineName}>
-                                <td className="font-semibold text-slate-800">{pipe.pipelineName}</td>
-                                <td className="font-mono">{pipe.totalExecutions}</td>
-                                <td className="font-mono text-emerald-700 font-bold">{pipe.successRatePercentage}%</td>
-                                <td className="font-mono">{pipe.averageLatencyMs} ms</td>
-                                <td>
-                                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800">
-                                    {pipe.qualityStatus}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 11: AUDIT LOGS */}
-          {activeTab === 'LOGS' && (
-            <div className="space-y-4">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">System Audit & Event Logs</h3>
-              <div className="erp-table-container">
-                <table className="erp-table">
-                  <thead>
-                    <tr>
-                      <th>Timestamp</th>
-                      <th>Action Event</th>
-                      <th>Executor User</th>
-                      <th>Details</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentActivities.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-8 text-center text-slate-500">
-                          No audit log entries recorded in database.
-                        </td>
-                      </tr>
-                    ) : (
-                      recentActivities.map((log: any, i: number) => (
-                        <tr key={i}>
-                          <td className="font-mono text-xs text-slate-500">
-                            {new Date(log.time).toLocaleString()}
-                          </td>
-                          <td className="font-semibold text-slate-900">{log.action}</td>
-                          <td className="text-slate-700">{log.user}</td>
-                          <td className="font-mono text-xs">{log.text}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
               </div>
             </div>
           )}
@@ -2900,6 +2236,38 @@ export default function AdminDashboard() {
                   <option value="Information Technology">Information Technology</option>
                 </select>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Number of Questions</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={newExamForm.questionCount}
+                    onChange={(e) => setNewExamForm({ ...newExamForm, questionCount: e.target.value })}
+                    placeholder="e.g. 25"
+                    className="erp-input font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Question Source</label>
+                  <select
+                    value={newExamForm.sourceDocumentId}
+                    onChange={(e) => setNewExamForm({ ...newExamForm, sourceDocumentId: e.target.value })}
+                    className="erp-select w-full"
+                  >
+                    <option value="">All Questions</option>
+                    {questionBankDocuments.map((doc) => (
+                      <option key={doc.id} value={doc.id}>
+                        {doc.fileName || doc.title} ({doc.questionCount})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 -mt-1">
+                Leave Number of Questions blank to create the exam shell without attaching questions. When set,
+                that many questions are picked at random from the selected source.
+              </p>
               <div>
                 <label className="block font-semibold text-slate-700 uppercase mb-1">Security Instructions</label>
                 <textarea
@@ -3031,52 +2399,6 @@ export default function AdminDashboard() {
               <div className="flex justify-end space-x-2 pt-2">
                 <button type="button" onClick={() => setIsAddFacultyOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
                 <button type="submit" className="erp-btn-primary py-1.5 text-xs">Save Faculty</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Assign Invigilator Modal */}
-      {isAssignInvigilatorOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
-          <div className="erp-card max-w-md w-full space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-              <h3 className="text-sm font-bold text-slate-900">Assign Invigilator to Examination</h3>
-              <button onClick={() => setIsAssignInvigilatorOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
-            </div>
-            <form onSubmit={handleAssignInvigilator} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 uppercase mb-1">Select Examination *</label>
-                <select
-                  value={assignForm.testId}
-                  onChange={(e) => setAssignForm({ ...assignForm, testId: e.target.value })}
-                  required
-                  className="erp-select w-full"
-                >
-                  <option value="">-- Choose Examination Paper --</option>
-                  {exams.map((ex) => (
-                    <option key={ex.id} value={ex.id}>{ex.title}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 uppercase mb-1">Select Faculty Invigilator *</label>
-                <select
-                  value={assignForm.facultyId}
-                  onChange={(e) => setAssignForm({ ...assignForm, facultyId: e.target.value })}
-                  required
-                  className="erp-select w-full"
-                >
-                  <option value="">-- Choose Faculty Member --</option>
-                  {faculty.map((f) => (
-                    <option key={f.id} value={f.id}>{f.name} ({f.department})</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex justify-end space-x-2 pt-2">
-                <button type="button" onClick={() => setIsAssignInvigilatorOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
-                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Assign Invigilator</button>
               </div>
             </form>
           </div>

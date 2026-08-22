@@ -4,6 +4,7 @@ import { QuestionGenerationService } from '../services/questionGenerationService
 import { AIBatchQuestionGenerationService } from '../services/aiBatchQuestionGenerationService';
 import { GenerationDistributionService } from '../services/generationDistributionService';
 import { SyllabusClassificationService } from '../services/syllabusClassificationService';
+import { AIGenerationSettingsService } from '../services/aiGenerationSettingsService';
 
 export class AIQuestionController {
   /**
@@ -30,7 +31,7 @@ export class AIQuestionController {
         generationRequestId,
       } = req.body;
 
-      const result = await AIBatchQuestionGenerationService.generateBatch(
+      const result = await AIBatchQuestionGenerationService.enqueueBatch(
         req.user.id,
         req.user.role,
         {
@@ -53,7 +54,9 @@ export class AIQuestionController {
         return res.status(400).json(result);
       }
 
-      return res.status(200).json(result);
+      // 202: the batch has been queued, not completed — the client should poll
+      // getBatchJobStatus (GET /questions/batch-status/:generationRequestId) for real progress.
+      return res.status(202).json(result);
     } catch (error: any) {
       if (error.message.includes('Forbidden')) {
         return res.status(403).json({ success: false, message: error.message });
@@ -109,6 +112,31 @@ export class AIQuestionController {
         message: 'Admin maximum question generation count updated successfully.',
         ...updatedConfig,
       });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Admin-configurable generation governance settings (auto-publish toggle, regeneration limit).
+   */
+  public static async getGenerationSettings(req: AuthRequest, res: Response) {
+    try {
+      const settings = await AIGenerationSettingsService.getSettings();
+      return res.status(200).json({ success: true, data: settings });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  public static async updateGenerationSettings(req: AuthRequest, res: Response) {
+    try {
+      const { autoPublishVerified, maxRegenerationAttempts } = req.body;
+      const updated = await AIGenerationSettingsService.updateSettings({
+        autoPublishVerified: typeof autoPublishVerified === 'boolean' ? autoPublishVerified : undefined,
+        maxRegenerationAttempts: maxRegenerationAttempts !== undefined ? Number(maxRegenerationAttempts) : undefined,
+      });
+      return res.status(200).json({ success: true, data: updated });
     } catch (error: any) {
       return res.status(400).json({ success: false, message: error.message });
     }
