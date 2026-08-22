@@ -48,6 +48,11 @@ router.get('/rag/traces', requireRoles(Role.ADMIN), RAGAdminController.getTraces
 
 // AI Question Generation & Faculty Review routes (Faculty & Admin only)
 router.post('/questions/generate', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.generateQuestions);
+router.post('/questions/generate-batch', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.generateBatchQuestions);
+router.get('/questions/batch-status/:generationRequestId', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.getBatchJobStatus);
+router.get('/questions/config/bounds', AIQuestionController.getMinMaxConfig);
+router.post('/questions/config/max', requireRoles(Role.ADMIN), AIQuestionController.updateAdminMaxConfig);
+router.put('/documents/:documentId/classification', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.updateDocumentClassification);
 router.get('/questions/pending', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.getPendingQuestions);
 router.post('/questions/:id/approve', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.approveQuestion);
 router.post('/questions/:id/reject', requireRoles(Role.FACULTY, Role.ADMIN), AIQuestionController.rejectQuestion);

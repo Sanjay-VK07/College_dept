@@ -1,8 +1,147 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../../middlewares/authMiddleware';
 import { QuestionGenerationService } from '../services/questionGenerationService';
+import { AIBatchQuestionGenerationService } from '../services/aiBatchQuestionGenerationService';
+import { GenerationDistributionService } from '../services/generationDistributionService';
+import { SyllabusClassificationService } from '../services/syllabusClassificationService';
 
 export class AIQuestionController {
+  /**
+   * Primary endpoint for source-grounded batch GATE question generation (50 - 500+ questions).
+   */
+  public static async generateBatchQuestions(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+
+      const {
+        totalQuestions,
+        difficultyDistribution,
+        typeDistribution,
+        negativeMarking,
+        solutionVisibility,
+        sourceReferences,
+        selectedResourceIds,
+        subjectId,
+        moduleId,
+        topicId,
+        subtopicId,
+        generationRequestId,
+      } = req.body;
+
+      const result = await AIBatchQuestionGenerationService.generateBatch(
+        req.user.id,
+        req.user.role,
+        {
+          totalQuestions: totalQuestions ? Number(totalQuestions) : 50,
+          difficultyDistribution: difficultyDistribution || { EASY: 20, MEDIUM: 50, HARD: 30 },
+          typeDistribution: typeDistribution || { MCQ: 60, MSQ: 10, NAT: 30 },
+          negativeMarking,
+          solutionVisibility,
+          sourceReferences,
+          selectedResourceIds,
+          subjectId,
+          moduleId,
+          topicId,
+          subtopicId,
+          generationRequestId,
+        }
+      );
+
+      if (result.status === 'INVALID_GENERATION_COUNT') {
+        return res.status(400).json(result);
+      }
+
+      return res.status(200).json(result);
+    } catch (error: any) {
+      if (error.message.includes('Forbidden')) {
+        return res.status(403).json({ success: false, message: error.message });
+      }
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Status polling for active batch generation job.
+   */
+  public static async getBatchJobStatus(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+
+      const { generationRequestId } = req.params;
+      const result = await AIBatchQuestionGenerationService.getBatchJobStatus(generationRequestId);
+
+      return res.status(200).json(result);
+    } catch (error: any) {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Get configured minimum and maximum generation question bounds.
+   */
+  public static async getMinMaxConfig(req: AuthRequest, res: Response) {
+    try {
+      const config = await GenerationDistributionService.getMinMaxConfig();
+      return res.status(200).json({ success: true, ...config });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Admin-configurable maximum question count update.
+   */
+  public static async updateAdminMaxConfig(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user || req.user.role !== 'ADMIN') {
+        return res.status(403).json({ success: false, message: 'Forbidden: Admin access required.' });
+      }
+
+      const { maxCount } = req.body;
+      const updatedConfig = await GenerationDistributionService.updateAdminMaxConfig(Number(maxCount));
+
+      return res.status(200).json({
+        success: true,
+        message: 'Admin maximum question generation count updated successfully.',
+        ...updatedConfig,
+      });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Faculty/Admin document classification correction.
+   */
+  public static async updateDocumentClassification(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user || (req.user.role !== 'FACULTY' && req.user.role !== 'ADMIN')) {
+        return res.status(403).json({ success: false, message: 'Forbidden: Access denied.' });
+      }
+
+      const { documentId } = req.params;
+      const { subjectId, moduleId, topicId, subtopicId } = req.body;
+
+      const result = await SyllabusClassificationService.updateDocumentClassification(documentId, {
+        subjectId,
+        moduleId,
+        topicId,
+        subtopicId,
+      });
+
+      return res.status(200).json(result);
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Single/Pipeline question generation (backward compatibility).
+   */
   public static async generateQuestions(req: AuthRequest, res: Response) {
     try {
       if (!req.user) {

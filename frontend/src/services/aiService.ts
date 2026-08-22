@@ -169,6 +169,44 @@ export const aiService = {
   /**
    * AI Question Generation (supports RAG/Faculty review & Phase 2D direct generation)
    */
+  async generateBatchQuestions(params: {
+    totalQuestions: number;
+    difficultyDistribution: { EASY: number; MEDIUM: number; HARD: number };
+    typeDistribution: { MCQ: number; MSQ: number; NAT: number };
+    negativeMarking?: boolean;
+    solutionVisibility?: string;
+    sourceReferences?: boolean;
+    selectedResourceIds?: string[];
+    subjectId?: string;
+    moduleId?: string;
+    topicId?: string;
+    subtopicId?: string;
+    generationRequestId?: string;
+  }) {
+    const res = await api.post('/ai/questions/generate-batch', params);
+    return res.data;
+  },
+
+  async getBatchJobStatus(generationRequestId: string) {
+    const res = await api.get(`/ai/questions/batch-status/${generationRequestId}`);
+    return res.data;
+  },
+
+  async getMinMaxConfigBounds() {
+    const res = await api.get('/ai/questions/config/bounds');
+    return res.data;
+  },
+
+  async updateAdminMaxConfig(maxCount: number) {
+    const res = await api.post('/ai/questions/config/max', { maxCount });
+    return res.data;
+  },
+
+  async updateDocumentClassification(documentId: string, params: { subjectId?: string; moduleId?: string; topicId?: string; subtopicId?: string }) {
+    const res = await api.put(`/ai/documents/${documentId}/classification`, params);
+    return res.data;
+  },
+
   async generateQuestions(params: GenerateQuestionsParams) {
     if ('generationRequestId' in params || 'subjectId' in params || 'moduleId' in params || !('marks' in params)) {
       const res = await api.post('/ai/questions/generate', params);

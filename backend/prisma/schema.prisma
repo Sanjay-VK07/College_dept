@@ -25,6 +25,7 @@ model User {
   fingerprint            String?
   createdAt              DateTime                    @default(now())
   updatedAt              DateTime                    @updatedAt
+  aiBatchJobs            AIBatchGenerationJob[]
   aiConversations        AIConversation[]
   aiDocuments            AIDocument[]
   aiExamAssemblyTraces   AIExamAssemblyTrace[]       @relation("CreatedAIExamAssemblyTraces")
@@ -252,23 +253,30 @@ model AIMessage {
 }
 
 model AIDocument {
-  id              String               @id @default(uuid())
-  title           String
-  fileName        String
-  mimeType        String
-  fileSize        Int?
-  visibility      AIDocumentVisibility
-  status          AIDocumentStatus     @default(UPLOADED)
-  storageKey      String               @unique
-  uploadedById    String
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-  metadata        Json?
-  processedAt     DateTime?
-  processingError String?
-  uploadedBy      User                 @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
-  chunks          AIDocumentChunk[]
-  aiSources       QuestionAISource[]
+  id                       String               @id @default(uuid())
+  title                    String
+  fileName                 String
+  mimeType                 String
+  fileSize                 Int?
+  visibility               AIDocumentVisibility
+  status                   AIDocumentStatus     @default(UPLOADED)
+  storageKey               String               @unique
+  uploadedById             String
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+  metadata                 Json?
+  processedAt              DateTime?
+  processingError          String?
+  subjectId                String?
+  moduleId                 String?
+  topicId                  String?
+  subtopicId               String?
+  classificationConfidence Float?
+  classificationStatus     String?              @default("REQUIRES_CLASSIFICATION")
+  ocrStatus                String?              @default("NONE")
+  uploadedBy               User                 @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  chunks                   AIDocumentChunk[]
+  aiSources                QuestionAISource[]
 
   @@index([status])
   @@index([visibility])
@@ -352,6 +360,12 @@ model AIGeneratedQuestion {
   options             Json?
   correctAnswer       Json
   explanation         String?
+  generatedAnswer     Json?
+  verifiedAnswer      Json?
+  verificationStatus  String?                    @default("UNVERIFIED")
+  sourcePageNumbers   Json?
+  ambiguityDetected   Boolean                    @default(false)
+  provenanceValid     Boolean                    @default(true)
   subjectId           String?
   moduleId            String?
   topicId             String?
@@ -373,6 +387,37 @@ model AIGeneratedQuestion {
   @@index([status])
   @@index([createdById])
   @@index([generationRequestId])
+}
+
+model AIBatchGenerationJob {
+  id                     String   @id @default(uuid())
+  generationRequestId    String   @unique
+  createdById            String
+  requestedCount         Int
+  generatedCount         Int      @default(0)
+  validatedCount         Int      @default(0)
+  verifiedCount          Int      @default(0)
+  pendingReviewCount     Int      @default(0)
+  failedCount            Int      @default(0)
+  duplicateCount         Int      @default(0)
+  status                 String   @default("QUEUED")
+  statusMessage          String?
+  difficultyDistribution Json?
+  typeDistribution       Json?
+  selectedResourceIds    String[]
+  subjectId              String?
+  moduleId               String?
+  topicId                String?
+  subtopicId             String?
+  negativeMarking        Boolean  @default(true)
+  solutionVisibility     String   @default("SHOW_AFTER_RESULT")
+  sourceReferences       Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  createdBy              User     @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([createdById])
+  @@index([status])
 }
 
 model AIQuestionGenerationTrace {

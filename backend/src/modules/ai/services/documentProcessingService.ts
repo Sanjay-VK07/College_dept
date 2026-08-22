@@ -9,6 +9,8 @@ import { LocalStorageProvider } from './documentStorageService';
 import { EmbeddingFactory } from './embeddingProvider';
 import { NotificationController } from '../../../controllers/notificationController';
 import { ENV } from '../../../config/env';
+import { DocumentOCRService } from './documentOCRService';
+import { SyllabusClassificationService } from './syllabusClassificationService';
 
 export class DocumentProcessingService {
   /**
@@ -45,9 +47,13 @@ export class DocumentProcessingService {
       const mime = document.mimeType.toLowerCase();
 
       if (mime === 'application/pdf' || document.fileName.endsWith('.pdf')) {
-        const pdfInstance = new pdfParse.PDFParse(new Uint8Array(fileBuffer));
-        const parsed = await pdfInstance.getText();
-        extractedText = parsed.text;
+        try {
+          const pdfInstance = new pdfParse.PDFParse(new Uint8Array(fileBuffer));
+          const parsed = await pdfInstance.getText();
+          extractedText = parsed.text;
+        } catch (pdfErr) {
+          console.warn(`[DocumentProcessingService] PDF direct text parse failed for ${document.fileName}:`, pdfErr);
+        }
 
         // Extract raw image streams from PDF and save to public uploads directory
         try {
@@ -103,17 +109,54 @@ export class DocumentProcessingService {
       } else if (
         mime === 'text/plain' ||
         mime === 'text/markdown' ||
+        mime.includes('image/') ||
         document.fileName.endsWith('.txt') ||
-        document.fileName.endsWith('.md')
+        document.fileName.endsWith('.md') ||
+        document.fileName.endsWith('.png') ||
+        document.fileName.endsWith('.jpg') ||
+        document.fileName.endsWith('.jpeg')
       ) {
         extractedText = fileBuffer.toString('utf-8');
       } else {
         throw new Error(`Unsupported MIME type/file extension: ${document.mimeType}`);
       }
 
+      // 3b. OCR Processing for Scanned/Image Documents
+      const ocrResult = await DocumentOCRService.processOCR(
+        fileBuffer,
+        mime,
+        document.fileName,
+        extractedText
+      );
+
+      if (ocrResult.status === 'FAILED') {
+        throw new Error(ocrResult.error || 'OCR text extraction failed for scanned resource.');
+      }
+
+      extractedText = ocrResult.text;
+
       if (!extractedText || extractedText.trim().length === 0) {
         throw new Error('No readable text content extracted from document.');
       }
+
+      // 3c. Automatic GATE Syllabus Topic Classification
+      const classification = await SyllabusClassificationService.classifyDocumentContent(
+        extractedText,
+        document.title
+      );
+
+      await prisma.aIDocument.update({
+        where: { id: documentId },
+        data: {
+          subjectId: classification.subjectId || null,
+          moduleId: classification.moduleId || null,
+          topicId: classification.topicId || null,
+          subtopicId: classification.subtopicId || null,
+          classificationConfidence: classification.classificationConfidence,
+          classificationStatus: classification.classificationStatus,
+          ocrStatus: ocrResult.status,
+        },
+      });
 
       // Hardening: Protect against zip-bombs or massive extracted text
       const maxExtractedTextLength = ENV.MAX_EXTRACTED_TEXT || 500000;
@@ -172,6 +215,7 @@ export class DocumentProcessingService {
             metadata: {
               charLength: chunkText.length,
               processedAt: new Date().toISOString(),
+              page: Math.floor(i / 5) + 1,
             },
           },
         });
