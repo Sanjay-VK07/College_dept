@@ -81,6 +81,8 @@ describe('QuestionSimilarityService Duplicate Detection Tests', () => {
     );
 
     expect(result.status).toBe(AIQuestionSimilarityStatus.UNIQUE);
-    expect(result.similarityScore).toBe(0.0);
+    // Real semantic embeddings rarely produce an exact 0.0 cosine similarity for unrelated text
+    // (unlike the old lexical-overlap check this asserted against) — just confirm it's low.
+    expect(result.similarityScore).toBeLessThan(0.5);
   });
 });

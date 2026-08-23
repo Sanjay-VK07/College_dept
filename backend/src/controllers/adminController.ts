@@ -739,6 +739,143 @@ export class AdminController {
   }
 
   /**
+   * Bulk-deletes multiple Question Bank entries in a single transaction. A question referenced
+   * by any exam (MockTestQuestion) is never deleted — the DB's own FK constraint would reject it
+   * anyway, and doing so would silently corrupt an exam's question list — so usage is checked
+   * up front and those questions are reported back as blocked, not silently skipped.
+   */
+  public static async bulkDeleteQuestions(req: AuthRequest, res: Response) {
+    try {
+      const { questionIds } = req.body;
+
+      if (!Array.isArray(questionIds) || questionIds.length === 0) {
+        return res.status(400).json({ success: false, message: 'questionIds must be a non-empty array.' });
+      }
+      if (questionIds.some((id: any) => typeof id !== 'string' || !id.trim())) {
+        return res.status(400).json({ success: false, message: 'questionIds must contain only non-empty string IDs.' });
+      }
+
+      const uniqueIds = Array.from(new Set<string>(questionIds));
+
+      const existing = await prisma.question.findMany({
+        where: { id: { in: uniqueIds } },
+        include: {
+          mockTestQuestions: {
+            include: { mockTest: { select: { title: true, isPublished: true, status: true } } },
+          },
+        },
+      });
+
+      const existingIds = new Set(existing.map((q) => q.id));
+      const notFoundIds = uniqueIds.filter((id) => !existingIds.has(id));
+
+      // Faculty may only delete questions they authored themselves; Admin may delete any.
+      const forbiddenIds: string[] = [];
+      const ownedQuestions =
+        req.user!.role === Role.FACULTY
+          ? existing.filter((q) => {
+              if (q.createdById !== req.user!.id) {
+                forbiddenIds.push(q.id);
+                return false;
+              }
+              return true;
+            })
+          : existing;
+
+      // A question attached to any exam (draft or published) cannot be deleted — the
+      // MockTestQuestion -> Question foreign key would reject it. Reported separately from
+      // "not found"/"forbidden" so the caller can explain exactly why each ID was skipped.
+      const blockedIds: string[] = [];
+      const blockedDetails: Array<{ id: string; examTitles: string[]; hasActiveExam: boolean }> = [];
+      const deletableQuestions = ownedQuestions.filter((q) => {
+        if (q.mockTestQuestions.length > 0) {
+          blockedIds.push(q.id);
+          blockedDetails.push({
+            id: q.id,
+            examTitles: q.mockTestQuestions.map((mtq) => mtq.mockTest.title),
+            hasActiveExam: q.mockTestQuestions.some(
+              (mtq) => mtq.mockTest.isPublished || ['PUBLISHED', 'LIVE', 'SCHEDULED'].includes(mtq.mockTest.status)
+            ),
+          });
+          return false;
+        }
+        return true;
+      });
+
+      if (deletableQuestions.length === 0) {
+        return res.status(409).json({
+          success: false,
+          message:
+            blockedIds.length > 0
+              ? `None of the selected questions could be deleted — they are associated with an examination and cannot be removed while in use.`
+              : 'None of the selected questions could be deleted.',
+          deletedCount: 0,
+          notFoundIds,
+          forbiddenIds,
+          blockedIds,
+          blockedDetails,
+        });
+      }
+
+      const idsToDelete = deletableQuestions.map((q) => q.id);
+      let deletedCount = 0;
+
+      try {
+        await prisma.$transaction(
+          async (tx) => {
+            const result = await tx.question.deleteMany({ where: { id: { in: idsToDelete } } });
+            deletedCount = result.count;
+          },
+          { timeout: 20000 }
+        );
+      } catch (txErr: any) {
+        console.error('[bulkDeleteQuestions] Transaction failed:', txErr);
+        return res.status(500).json({
+          success: false,
+          message: `Bulk delete failed: ${txErr.message}. No questions were deleted.`,
+        });
+      }
+
+      await AuditLogger.log({
+        userId: req.user?.id,
+        action: 'BULK_DELETE_QUESTIONS',
+        resource: 'Question',
+        details: `Bulk deleted ${deletedCount} question(s): ${idsToDelete.join(', ')}${
+          blockedIds.length > 0 ? ` | Blocked (in use by exam): ${blockedIds.join(', ')}` : ''
+        }`,
+        ipAddress: req.ip,
+      });
+
+      await NotificationController.createSystemNotification(
+        'Questions Deleted',
+        `${deletedCount} question(s) removed from Question Bank`,
+        'warning',
+        'Admin'
+      );
+
+      const skippedCount = notFoundIds.length + forbiddenIds.length + blockedIds.length;
+      const message =
+        skippedCount > 0
+          ? `${deletedCount} question(s) deleted successfully. ${blockedIds.length > 0 ? `${blockedIds.length} could not be deleted — in use by an examination.` : ''} ${
+              forbiddenIds.length > 0 ? `${forbiddenIds.length} skipped — not authorized.` : ''
+            }`.trim()
+          : `${deletedCount} question(s) deleted successfully.`;
+
+      return res.status(200).json({
+        success: true,
+        message,
+        deletedCount,
+        notFoundIds,
+        forbiddenIds,
+        blockedIds,
+        blockedDetails,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
    * Examination Management CRUD & Scheduling
    */
   public static async getExams(req: AuthRequest, res: Response) {

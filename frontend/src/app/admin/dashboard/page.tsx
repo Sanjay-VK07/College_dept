@@ -169,6 +169,11 @@ export default function AdminDashboard() {
     explanation: '',
   });
 
+  // Question Bank bulk selection & deletion
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
   // Live Clock & Reactive State
   const [currentDateTime, setCurrentDateTime] = useState<string>('');
 
@@ -578,6 +583,88 @@ export default function AdminDashboard() {
       showToast('Failed to delete question');
     }
   };
+
+  // --- Question Bank bulk selection ---
+  // The individual-questions table has no pagination (all matching rows render at once), so
+  // "select all" and "current page" are the same set: individualQuestions itself.
+
+  const handleToggleSelectQuestion = (id: string) => {
+    setSelectedQuestionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllVisible = () => {
+    const visibleIds = individualQuestions.map((q: any) => q.id);
+    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id: string) => selectedQuestionIds.has(id));
+
+    if (allVisibleSelected) {
+      // Deselect all currently visible rows only.
+      setSelectedQuestionIds((prev) => {
+        const next = new Set(prev);
+        visibleIds.forEach((id: string) => next.delete(id));
+        return next;
+      });
+    } else {
+      // Select every currently visible row (adds to, doesn't replace, any existing selection).
+      setSelectedQuestionIds((prev) => {
+        const next = new Set(prev);
+        visibleIds.forEach((id: string) => next.add(id));
+        return next;
+      });
+    }
+  };
+
+  const handleClearSelection = () => setSelectedQuestionIds(new Set());
+
+  // Drop any selected IDs that are no longer part of the visible/filtered dataset (e.g. after a
+  // refetch or a question being deleted individually) — never let a stale ID silently ride along
+  // into a later bulk action.
+  useEffect(() => {
+    setSelectedQuestionIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visibleIds = new Set(individualQuestions.map((q: any) => q.id));
+      const next = new Set(Array.from(prev).filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions]);
+
+  const handleBulkDeleteQuestions = async () => {
+    const idsToDelete = Array.from(selectedQuestionIds);
+    if (idsToDelete.length === 0) return;
+
+    setIsBulkDeleting(true);
+    try {
+      const res = await api.delete('/admin/questions/bulk', { data: { questionIds: idsToDelete } });
+
+      if (res.data?.success) {
+        // Remove the deleted questions from current table state immediately...
+        const deletedIds = new Set(idsToDelete.filter((id) => !(res.data.blockedIds || []).includes(id) && !(res.data.forbiddenIds || []).includes(id)));
+        setQuestions((prev) => prev.filter((q: any) => !deletedIds.has(q.id)));
+        setSelectedQuestionIds(new Set());
+        setIsBulkDeleteConfirmOpen(false);
+        showToast(res.data.message || `${res.data.deletedCount} question(s) deleted successfully.`);
+        // ...then revalidate against the backend so counts/stats/pagination stay fully in sync.
+        fetchInitialData();
+      } else {
+        showToast(res.data?.message || 'Bulk delete failed.');
+      }
+    } catch (err: any) {
+      // Never pretend it succeeded — keep the selection intact so the user can retry or inspect.
+      showToast(err.response?.data?.message || 'Bulk delete failed. No questions were deleted.');
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
+  // Future bulk actions (change difficulty/topic/type, export selected, approve/reject selected,
+  // etc.) should follow the same shape as handleBulkDeleteQuestions: read selectedQuestionIds,
+  // call a real backend endpoint, then reconcile local state from the response — and get their
+  // own button in the bulk action toolbar below, next to "Delete Selected".
 
   const handleQuestionFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1887,10 +1974,52 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              {/* Bulk action toolbar — appears only when one or more questions are selected */}
+              {selectedQuestionIds.size > 0 && (
+                <div className="erp-card flex flex-wrap items-center justify-between gap-2 border-l-4 border-l-red-500 bg-red-50/40">
+                  <span className="text-xs font-bold text-slate-900">
+                    ✓ {selectedQuestionIds.size} question{selectedQuestionIds.size === 1 ? '' : 's'} selected
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {/* Future bulk actions (change difficulty/topic/type, export selected, etc.)
+                        get their own button here, next to Delete Selected. */}
+                    <button
+                      onClick={() => setIsBulkDeleteConfirmOpen(true)}
+                      className="erp-btn-danger py-1 px-3 text-[11px]"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1" />
+                      <span>Delete Selected</span>
+                    </button>
+                    <button
+                      onClick={handleClearSelection}
+                      className="erp-btn-secondary py-1 px-3 text-[11px]"
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="erp-table-container">
                 <table className="erp-table">
                   <thead>
                     <tr>
+                      <th className="w-8">
+                        <input
+                          type="checkbox"
+                          className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          checked={individualQuestions.length > 0 && individualQuestions.every((q: any) => selectedQuestionIds.has(q.id))}
+                          ref={(el) => {
+                            if (el) {
+                              const visibleCount = individualQuestions.length;
+                              const selectedVisibleCount = individualQuestions.filter((q: any) => selectedQuestionIds.has(q.id)).length;
+                              el.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleCount;
+                            }
+                          }}
+                          onChange={handleToggleSelectAllVisible}
+                          title="Select all questions on this page"
+                        />
+                      </th>
                       <th>Question Code</th>
                       <th>Question Statement</th>
                       <th>Question Type</th>
@@ -1902,13 +2031,21 @@ export default function AdminDashboard() {
                   <tbody>
                     {individualQuestions.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="py-8 text-center text-slate-500">
+                        <td colSpan={7} className="py-8 text-center text-slate-500">
                           No individually authored questions found in Question Bank database.
                         </td>
                       </tr>
                     ) : (
                       individualQuestions.map((q) => (
-                        <tr key={q.id}>
+                        <tr key={q.id} className={selectedQuestionIds.has(q.id) ? 'bg-blue-50/40' : ''}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              checked={selectedQuestionIds.has(q.id)}
+                              onChange={() => handleToggleSelectQuestion(q.id)}
+                            />
+                          </td>
                           <td className="font-mono font-bold text-[#1E40AF]">{q.id.slice(0, 8)}</td>
                           <td className="font-semibold text-slate-900 max-w-xs truncate">{q.text}</td>
                           <td><span className="erp-badge-gray">{q.type}</span></td>
@@ -2401,6 +2538,43 @@ export default function AdminDashboard() {
                 <button type="submit" className="erp-btn-primary py-1.5 text-xs">Save Faculty</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {isBulkDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-md w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Delete {selectedQuestionIds.size} selected question{selectedQuestionIds.size === 1 ? '' : 's'}?</h3>
+              <button
+                onClick={() => setIsBulkDeleteConfirmOpen(false)}
+                disabled={isBulkDeleting}
+                className="text-slate-400 hover:text-slate-600 disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600">
+              This action will permanently remove the selected questions from the Question Bank. Questions currently used in an examination will be skipped and reported, not deleted.
+            </p>
+            <div className="flex justify-end items-center gap-2 pt-1">
+              <button
+                onClick={() => setIsBulkDeleteConfirmOpen(false)}
+                disabled={isBulkDeleting}
+                className="erp-btn-secondary py-1.5 px-4 text-xs disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDeleteQuestions}
+                disabled={isBulkDeleting}
+                className="erp-btn-danger py-1.5 px-4 text-xs disabled:opacity-50"
+              >
+                {isBulkDeleting ? 'Deleting...' : 'Delete Questions'}
+              </button>
+            </div>
           </div>
         </div>
       )}

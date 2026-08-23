@@ -1,17 +1,21 @@
-// @ts-ignore — pdfjs-dist's legacy Node build has no bundled type declarations for this entrypoint
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { createCanvas } from '@napi-rs/canvas';
-
 /**
  * Renders PDF pages to PNG image buffers, for vision providers (like Groq) that accept images
  * but not a raw PDF file the way Gemini's inline_data does. Pure JS + prebuilt native canvas
  * bindings (@napi-rs/canvas ships prebuilt binaries per-platform, no system Ghostscript/Poppler
  * install required) — consistent with this app's free-tier hosting constraint.
+ *
+ * pdfjs-dist's legacy Node build is an ESM (.mjs) file using import.meta — loaded lazily via
+ * require() inside each method (not a static top-level import) so merely importing this class
+ * elsewhere (e.g. transitively through adminController.ts) doesn't force that module to be
+ * parsed. Node's own require(ESM) interop handles it fine at runtime; ts-jest's static-import
+ * transform does not, which broke every test that transitively imports adminController.ts.
  */
 export class PdfRasterService {
   public static async getPageCountFromBuffer(pdfBuffer: Buffer): Promise<number> {
+    // @ts-ignore — pdfjs-dist's legacy Node build has no bundled type declarations for this entrypoint
+    const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
     const data = new Uint8Array(pdfBuffer);
-    const loadingTask = (pdfjsLib as any).getDocument({ data, isEvalSupported: false });
+    const loadingTask = pdfjsLib.getDocument({ data, isEvalSupported: false });
     const pdfDoc = await loadingTask.promise;
     const count = pdfDoc.numPages;
     await pdfDoc.destroy();
@@ -29,8 +33,12 @@ export class PdfRasterService {
     endPage: number,
     scale: number = 2.0
   ): Promise<Buffer[]> {
+    // @ts-ignore — pdfjs-dist's legacy Node build has no bundled type declarations for this entrypoint
+    const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
+    const { createCanvas } = require('@napi-rs/canvas');
+
     const data = new Uint8Array(pdfBuffer);
-    const loadingTask = (pdfjsLib as any).getDocument({ data, isEvalSupported: false });
+    const loadingTask = pdfjsLib.getDocument({ data, isEvalSupported: false });
     const pdfDoc = await loadingTask.promise;
 
     const images: Buffer[] = [];

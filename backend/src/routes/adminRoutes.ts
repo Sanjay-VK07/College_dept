@@ -29,6 +29,8 @@ router.delete('/faculty/:id', requireRoles(Role.ADMIN), AdminController.deleteFa
 // Question Bank Management
 router.get('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getQuestions);
 router.post('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.createQuestion);
+// Registered before '/questions/:id' — otherwise Express would match "bulk" as the :id param.
+router.delete('/questions/bulk', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.bulkDeleteQuestions);
 router.delete('/questions/:id', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.deleteQuestion);
 router.get('/question-bank-documents', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getQuestionBankDocuments);
 
