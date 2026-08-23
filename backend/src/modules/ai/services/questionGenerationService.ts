@@ -433,7 +433,7 @@ export class QuestionGenerationService {
 
     // Computed outside the transaction — an embedding-provider network call inside a Prisma
     // transaction risks the transaction's own timeout.
-    const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(genQuestion.stem);
+    const embeddingFields = await EmbeddingProvider.getEmbeddingFields(genQuestion.stem);
 
     // Transactionally create live Question Bank record and update AIGeneratedQuestion status
     const [liveQuestion] = await prisma.$transaction(async (tx) => {
@@ -450,7 +450,7 @@ export class QuestionGenerationService {
           subtopicId: targetSubtopicId!,
           createdById: userId,
           generatedByAI: true,
-          embedding,
+          ...embeddingFields,
         },
       });
 

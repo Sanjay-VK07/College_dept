@@ -175,7 +175,7 @@ export class AIAssistantController {
       }
 
       // Save question
-      const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(question.text);
+      const embeddingFields = await EmbeddingProvider.getEmbeddingFields(question.text);
 
       const newQuestion = await prisma.question.create({
         data: {
@@ -192,7 +192,7 @@ export class AIAssistantController {
           generatedByAI: true,
           generationModel: process.env.AI_MODEL || 'gemini-1.5-flash',
           reviewStatus: AIQuestionReviewStatus.APPROVED, // Review approved by Faculty/Admin
-          embedding,
+          ...embeddingFields,
         },
       });
 

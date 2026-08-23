@@ -718,7 +718,7 @@ export class AdminController {
         return res.status(400).json({ success: false, message: 'No taxonomy subtopic found. Run seed script first.' });
       }
 
-      const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(text);
+      const embeddingFields = await EmbeddingProvider.getEmbeddingFields(text);
 
       const question = await prisma.question.create({
         data: {
@@ -733,7 +733,7 @@ export class AdminController {
           reference,
           subtopicId: subtopic.id,
           createdById: req.user!.id,
-          embedding,
+          ...embeddingFields,
         },
       });
 

@@ -63,7 +63,7 @@ export class ExcelImportService {
         correctAnswer = [0];
       }
 
-      const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(text);
+      const embeddingFields = await EmbeddingProvider.getEmbeddingFields(text);
 
       const question = await prisma.question.create({
         data: {
@@ -79,7 +79,7 @@ export class ExcelImportService {
           previousYear: row.PreviousYear || row.previousYear || '',
           subtopicId: row.subtopicId || defaultSubtopicId,
           createdById,
-          embedding,
+          ...embeddingFields,
         },
       });
 

@@ -4,6 +4,16 @@ import { performance } from 'perf_hooks';
 export interface EmbeddingResult {
   embedding: number[];
   durationMs: number;
+  /**
+   * True when the configured provider failed and a deterministic hash-based placeholder vector
+   * was substituted. Such a vector carries NO semantic meaning — it is only safe for code paths
+   * that need *a* vector of the right shape (e.g. a cosine ranking that will be re-checked
+   * elsewhere). Any correctness-sensitive consumer (duplicate detection above all) must treat
+   * `degraded: true` as "no embedding available" rather than silently comparing noise.
+   */
+  degraded: boolean;
+  /** Identifier of the model that produced the vector, or 'fallback-hash' when degraded. */
+  model: string;
 }
 
 export interface IEmbeddingProvider {
@@ -24,6 +34,8 @@ export class EmbeddingProvider {
       return {
         embedding: new Array(dimension).fill(0),
         durationMs,
+        degraded: true,
+        model: 'empty-input',
       };
     }
 
@@ -34,26 +46,62 @@ export class EmbeddingProvider {
       return {
         embedding,
         durationMs,
+        degraded: false,
+        model: EmbeddingProvider.activeModelId(),
       };
     } catch (err: any) {
+      // Loud on purpose: a misconfigured or unreachable embedding provider used to fail
+      // silently here, handing back a hash-based vector that looks valid (right length, unit
+      // norm) but encodes nothing. Downstream that turns into meaningless similarity scores,
+      // so the failure must be visible in logs AND flagged in the return value.
+      console.error(
+        `[EmbeddingProvider] Embedding generation FAILED via provider "${(process.env.EMBEDDING_PROVIDER || 'local').toLowerCase()}" ` +
+          `(model "${EmbeddingProvider.activeModelId()}"): ${err?.message || err}. ` +
+          `Returning a non-semantic placeholder vector — semantic comparisons must be skipped.`
+      );
       const vector = this.generateDeterministicVector(text, dimension);
       const durationMs = Math.round(performance.now() - startTime);
       return {
         embedding: vector,
         durationMs,
+        degraded: true,
+        model: 'fallback-hash',
       };
     }
   }
 
+  /** The model id the currently-configured provider will use, for logging and provenance. */
+  public static activeModelId(): string {
+    const provider = (process.env.EMBEDDING_PROVIDER || 'local').toLowerCase();
+    if (provider === 'gemini') return process.env.EMBEDDING_MODEL || 'gemini-embedding-001';
+    if (provider === 'openai') return process.env.EMBEDDING_MODEL || 'text-embedding-3-small';
+    if (provider === 'ollama') return process.env.OLLAMA_EMBEDDING_MODEL || 'all-minilm';
+    return 'local-prng';
+  }
+
   /**
-   * Embedding for persisting alongside a Question row at creation time, used for semantic
-   * duplicate detection later (see questionSimilarityService.ts). Named separately from
-   * generateQueryEmbedding to make the call site's intent explicit even though it delegates
-   * to the same resilient (never-throws) implementation.
+   * Embedding for persisting alongside a Question row, used for semantic duplicate detection
+   * later (see questionSimilarityService.ts).
+   *
+   * Returns an EMPTY array when a real embedding could not be produced. Storing nothing is
+   * strictly better than storing a placeholder: an empty embedding is already understood
+   * downstream as "no vector available, fall back to lexical comparison", whereas a persisted
+   * hash vector would silently poison every future duplicate check against that row.
    */
   public static async getEmbeddingOrEmpty(text: string): Promise<number[]> {
-    const { embedding } = await this.generateQueryEmbedding(text);
-    return embedding;
+    const { embedding, degraded } = await this.generateQueryEmbedding(text);
+    return degraded ? [] : embedding;
+  }
+
+  /**
+   * Prisma-ready embedding fields for a Question write. Always persist BOTH together — an
+   * embedding without its model tag cannot be safely compared later (see
+   * questionSimilarityService.ts), so spread this whole object rather than setting
+   * `embedding` alone.
+   */
+  public static async getEmbeddingFields(text: string): Promise<{ embedding: number[]; embeddingModel: string | null }> {
+    const { embedding, degraded, model } = await this.generateQueryEmbedding(text);
+    return degraded ? { embedding: [], embeddingModel: null } : { embedding, embeddingModel: model };
   }
 
   /**

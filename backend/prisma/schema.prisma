@@ -97,6 +97,11 @@ model Question {
   reviewStatus      AIQuestionReviewStatus?
   currentVersion    Int                     @default(1)
   embedding         Float[]
+  // Which model produced `embedding`. Vectors from different models occupy different spaces, so
+  // cosine similarity between them is meaningless even when the dimensions happen to match
+  // (e.g. gemini-embedding-001 and all-minilm are both 384-d). Duplicate detection compares only
+  // vectors sharing this tag; anything else falls back to lexical comparison.
+  embeddingModel    String?
   aiSolutions       AISolution[]
   mockTestQuestions MockTestQuestion[]
   createdBy         User                    @relation("CreatedQuestions", fields: [createdById], references: [id])

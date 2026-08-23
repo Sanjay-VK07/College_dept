@@ -22,7 +22,7 @@ export class QuestionController {
         subtopicId,
       } = req.body;
 
-      const embedding = await EmbeddingProvider.getEmbeddingOrEmpty(text);
+      const embeddingFields = await EmbeddingProvider.getEmbeddingFields(text);
 
       const question = await prisma.question.create({
         data: {
@@ -39,7 +39,7 @@ export class QuestionController {
           imageUrl,
           subtopicId,
           createdById: req.user!.id,
-          embedding,
+          ...embeddingFields,
         },
       });
 
