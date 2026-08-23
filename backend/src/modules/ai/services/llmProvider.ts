@@ -339,10 +339,15 @@ export class LocalLLMProvider implements LLMProvider {
   }
 }
 
+import { OllamaProvider } from './ollamaProvider';
+
 export class LLMFactory {
   public static getProvider(): LLMProvider {
     const provider = (process.env.LLM_PROVIDER || process.env.AI_PROVIDER || 'local').toLowerCase();
 
+    if (provider === 'ollama') {
+      return new OllamaProvider();
+    }
     if (provider === 'gemini') {
       return new GeminiProvider();
     }

@@ -125,6 +125,7 @@ export default function AdminDashboard() {
   // AI Solution & Exam Assembly States
   const [pendingSolutions, setPendingSolutions] = useState<any[]>([]);
   const [isGeneratingSolutionId, setIsGeneratingSolutionId] = useState<string | null>(null);
+  const [deletingQuestionId, setDeletingQuestionId] = useState<string | null>(null);
   const [isAssemblingExam, setIsAssemblingExam] = useState<boolean>(false);
   const [examAssembleTitle, setExamAssembleTitle] = useState<string>('');
   const [examAssembleCount, setExamAssembleCount] = useState<number>(10);
@@ -574,13 +575,36 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteQuestion = async (id: string) => {
+    if (!id || deletingQuestionId === id) return;
     if (!confirm('Are you sure you want to delete this question?')) return;
+
+    console.log('[QUESTION DELETE UI] requestedId=', id);
+    setDeletingQuestionId(id);
     try {
-      await api.delete(`/admin/questions/${id}`);
-      showToast('Question removed from Question Bank');
-      fetchInitialData();
+      const res = await api.delete(`/admin/questions/${id}`);
+      if (res.data?.success || res.status === 200) {
+        showToast(res.data?.message || 'Question removed from Question Bank');
+        setQuestions((prev) => prev.filter((q) => q.id !== id));
+      }
     } catch (err: any) {
-      showToast('Failed to delete question');
+      const status = err.response?.status;
+      const errCode = err.response?.data?.code;
+      const errMsg = err.response?.data?.message;
+
+      console.warn('[QUESTION DELETE UI Error]:', status, errCode, errMsg);
+
+      if (status === 409 || errCode === 'QUESTION_IN_USE') {
+        showToast(errMsg || 'This question is currently used in an exam and cannot be deleted.');
+      } else if (status === 404 || errCode === 'QUESTION_NOT_FOUND') {
+        showToast('Question no longer exists.');
+        setQuestions((prev) => prev.filter((q) => q.id !== id));
+      } else if (status === 403 || errCode === 'UNAUTHORIZED') {
+        showToast(errMsg || 'You are not authorized to delete this question.');
+      } else {
+        showToast(errMsg || 'Unable to delete the question right now.');
+      }
+    } finally {
+      setDeletingQuestionId(null);
     }
   };
 
@@ -2062,8 +2086,13 @@ export default function AdminDashboard() {
                                 <Sparkles className={`w-3 h-3 mr-1 ${isGeneratingSolutionId === q.id ? 'animate-spin' : ''}`} />
                                 <span>{isGeneratingSolutionId === q.id ? 'Generating...' : 'AI Solution'}</span>
                               </button>
-                              <button onClick={() => handleDeleteQuestion(q.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete Question">
-                                <Trash2 className="w-3.5 h-3.5" />
+                              <button
+                                disabled={deletingQuestionId === q.id}
+                                onClick={() => handleDeleteQuestion(q.id)}
+                                className="p-1.5 text-red-600 hover:bg-red-50 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+                                title="Delete Question"
+                              >
+                                <Trash2 className={`w-3.5 h-3.5 ${deletingQuestionId === q.id ? 'animate-spin' : ''}`} />
                               </button>
                             </div>
                           </td>

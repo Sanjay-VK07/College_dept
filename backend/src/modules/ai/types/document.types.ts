@@ -48,6 +48,11 @@ export interface DocumentStorageProvider {
   getAuthorizedAccess(storageKey: string): Promise<string>;
 
   /**
+   * Checks if a file exists in physical storage.
+   */
+  fileExists(storageKey: string): Promise<boolean>;
+
+  /**
    * Deletes the file from storage.
    */
   delete(storageKey: string): Promise<void>;

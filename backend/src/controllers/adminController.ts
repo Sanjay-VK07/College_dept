@@ -401,19 +401,47 @@ export class AdminController {
     try {
       const { id } = req.params;
       const student = await prisma.user.findUnique({ where: { id } });
-      await prisma.user.delete({ where: { id } });
+      if (!student) {
+        return res.status(404).json({ success: false, message: 'Student record not found' });
+      }
+
+      // Preflight dependency check across ownership and assignment relations
+      const [questionCount, mockTestCount, docCount, assignmentCount] = await Promise.all([
+        prisma.question.count({ where: { createdById: id } }),
+        prisma.mockTest.count({ where: { createdById: id } }),
+        prisma.aIDocument.count({ where: { uploadedById: id } }),
+        prisma.testAssignment.count({ where: { studentId: id } }),
+      ]);
+
+      if (questionCount > 0 || mockTestCount > 0 || docCount > 0 || assignmentCount > 0) {
+        return res.status(400).json({
+          success: false,
+          code: 'USER_HAS_DEPENDENT_RECORDS',
+          message: 'Student account cannot be deleted because dependent records exist in system.',
+          summary: {
+            questions: questionCount,
+            mockTests: mockTestCount,
+            documents: docCount,
+            examAssignments: assignmentCount,
+          },
+        });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.user.delete({ where: { id } });
+      });
 
       await AuditLogger.log({
         userId: req.user?.id,
         action: 'DELETE_STUDENT',
         resource: 'User',
-        details: `Deleted student account: ${student?.name || id}`,
+        details: `Deleted student account: ${student.name || id}`,
         ipAddress: req.ip,
       });
 
       await NotificationController.createSystemNotification(
         'Student Deleted',
-        `Student account ${student?.name || id} was deleted from database`,
+        `Student account ${student.name || id} was deleted from database`,
         'warning',
         'Admin'
       );
@@ -552,7 +580,35 @@ export class AdminController {
     try {
       const { id } = req.params;
       const faculty = await prisma.user.findUnique({ where: { id } });
-      await prisma.user.delete({ where: { id } });
+      if (!faculty) {
+        return res.status(404).json({ success: false, message: 'Faculty member not found' });
+      }
+
+      // Preflight dependency check across created questions, tests, documents, and invigilation assignments
+      const [questionCount, mockTestCount, docCount, invigilatorCount] = await Promise.all([
+        prisma.question.count({ where: { createdById: id } }),
+        prisma.mockTest.count({ where: { createdById: id } }),
+        prisma.aIDocument.count({ where: { uploadedById: id } }),
+        prisma.invigilatorAssignment.count({ where: { facultyId: id } }),
+      ]);
+
+      if (questionCount > 0 || mockTestCount > 0 || docCount > 0 || invigilatorCount > 0) {
+        return res.status(400).json({
+          success: false,
+          code: 'USER_HAS_DEPENDENT_RECORDS',
+          message: 'Faculty account cannot be deleted because dependent questions, tests, or assignments exist.',
+          summary: {
+            questions: questionCount,
+            mockTests: mockTestCount,
+            documents: docCount,
+            invigilatorAssignments: invigilatorCount,
+          },
+        });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.user.delete({ where: { id } });
+      });
 
       await AuditLogger.log({
         userId: req.user?.id,
@@ -564,7 +620,7 @@ export class AdminController {
 
       await NotificationController.createSystemNotification(
         'Faculty Deleted',
-        `Faculty member ${faculty?.name || id} removed from directory`,
+        `Faculty member ${faculty.name || id} removed from directory`,
         'warning',
         'Admin'
       );
@@ -705,20 +761,70 @@ export class AdminController {
   public static async deleteQuestion(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
+      const userId = req.user!.id;
+      const role = req.user!.role;
 
-      const question = await prisma.question.findUnique({ where: { id } });
+      console.log(`[QUESTION DELETE] userId=${userId} questionId=${id} routeReached=true`);
+
+      // 1. Check question existence and authorization
+      const question = await prisma.question.findUnique({
+        where: { id },
+        select: { id: true, createdById: true },
+      });
+
       if (!question) {
-        return res.status(404).json({ success: false, message: 'Question not found' });
+        return res.status(404).json({
+          success: false,
+          code: 'QUESTION_NOT_FOUND',
+          message: 'Question not found.',
+        });
       }
 
-      if (req.user!.role === Role.FACULTY && question.createdById !== req.user!.id) {
-        return res.status(403).json({ success: false, message: 'Unauthorized to delete this question' });
+      if (role === Role.FACULTY && question.createdById !== userId) {
+        return res.status(403).json({
+          success: false,
+          code: 'UNAUTHORIZED',
+          message: 'Unauthorized to delete this question.',
+        });
       }
 
-      await prisma.question.delete({ where: { id } });
+      // 2. Preflight dependency check: verify question is not in use in exams or student responses
+      const [mockTestUsageCount, responseUsageCount, solutionUsageCount] = await Promise.all([
+        prisma.mockTestQuestion.count({ where: { questionId: id } }),
+        prisma.questionResponse.count({ where: { questionId: id } }),
+        prisma.aISolution.count({ where: { questionId: id } }),
+      ]);
 
+      console.log(
+        `[QUESTION DELETE] questionId=${id} mockTestCount=${mockTestUsageCount} responseCount=${responseUsageCount} solutionCount=${solutionUsageCount}`
+      );
+
+      if (mockTestUsageCount > 0 || responseUsageCount > 0 || solutionUsageCount > 0) {
+        return res.status(409).json({
+          success: false,
+          code: 'QUESTION_IN_USE',
+          message: 'This question is currently used and cannot be deleted.',
+        });
+      }
+
+      // 3. Race-safe atomic deletion
+      const deleteResult = await prisma.question.deleteMany({
+        where: { id },
+      });
+
+      console.log(`[QUESTION DELETE] questionId=${id} deleteCount=${deleteResult.count}`);
+
+      if (deleteResult.count === 0) {
+        return res.status(404).json({
+          success: false,
+          code: 'QUESTION_NOT_FOUND',
+          message: 'Question not found.',
+        });
+      }
+
+      // 4. Record audit log only upon successful deletion
       await AuditLogger.log({
-        userId: req.user?.id,
+        userId,
         action: 'DELETE_QUESTION',
         resource: 'Question',
         details: `Deleted question ID ${id}`,
@@ -732,7 +838,64 @@ export class AdminController {
         'Admin'
       );
 
-      return res.status(200).json({ success: true, message: 'Question deleted' });
+      return res.status(200).json({
+        success: true,
+        code: 'QUESTION_DELETED',
+        message: 'Question deleted successfully.',
+        data: { id },
+      });
+    } catch (error: any) {
+      console.error('[AdminController.deleteQuestion Error]:', error?.message || error);
+      return res.status(500).json({
+        success: false,
+        code: 'SERVER_ERROR',
+        message: 'Unable to delete the question right now.',
+      });
+    }
+  }
+
+  /**
+   * Phase 9 Diagnostic: Returns metadata for documents where DB record exists but storage file is missing
+   */
+  public static async getStorageOrphans(req: AuthRequest, res: Response) {
+    try {
+      const documents = await prisma.aIDocument.findMany({
+        select: {
+          id: true,
+          title: true,
+          fileName: true,
+          storageKey: true,
+          status: true,
+          createdAt: true,
+        },
+      });
+
+      const orphans: Array<{
+        id: string;
+        title: string;
+        fileName: string;
+        status: string;
+        createdAt: string;
+      }> = [];
+
+      for (const doc of documents) {
+        const fileExists = await LocalStorageProvider.prototype.fileExists?.call(new LocalStorageProvider(), doc.storageKey) ?? false;
+        if (!fileExists) {
+          orphans.push({
+            id: doc.id,
+            title: doc.title,
+            fileName: doc.fileName,
+            status: doc.status,
+            createdAt: doc.createdAt.toISOString(),
+          });
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        count: orphans.length,
+        data: orphans,
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }

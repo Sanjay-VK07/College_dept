@@ -116,7 +116,15 @@ export class AuthController {
         },
       });
     } catch (error: any) {
-      return res.status(500).json({ success: false, message: error.message || 'Authentication failed' });
+      console.error('[AuthController.googleLogin Error]:', error?.message || error);
+      if (error?.code === 'P2024' || error?.message?.includes('Timed out fetching a new connection')) {
+        return res.status(503).json({
+          success: false,
+          code: 'DATABASE_POOL_EXHAUSTED',
+          message: 'Database is temporarily busy. Please try again.',
+        });
+      }
+      return res.status(500).json({ success: false, message: 'Authentication failed. Please try again.' });
     }
   }
 
@@ -151,7 +159,15 @@ export class AuthController {
         },
       });
     } catch (error: any) {
-      return res.status(500).json({ success: false, message: error.message });
+      console.error('[AuthController.getProfile Error]:', error?.message || error);
+      if (error?.code === 'P2024' || error?.message?.includes('Timed out fetching a new connection')) {
+        return res.status(503).json({
+          success: false,
+          code: 'DATABASE_POOL_EXHAUSTED',
+          message: 'Database is temporarily busy. Please try again.',
+        });
+      }
+      return res.status(500).json({ success: false, message: 'Unable to fetch user profile.' });
     }
   }
 }

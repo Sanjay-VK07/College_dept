@@ -5,7 +5,7 @@ const pdfParse = typeof pdfParseRaw === 'function' ? pdfParseRaw : (pdfParseRaw.
 import mammoth from 'mammoth';
 import { prisma } from '../../../config/prisma';
 import { AIDocumentStatus } from '@prisma/client';
-import { LocalStorageProvider } from './documentStorageService';
+import { LocalStorageProvider, documentStorageService } from './documentStorageService';
 import { EmbeddingFactory } from './embeddingProvider';
 import { NotificationController } from '../../../controllers/notificationController';
 import { ENV } from '../../../config/env';
@@ -219,6 +219,12 @@ export class DocumentProcessingService {
             },
           },
         });
+      }
+
+      // 5.5 Verify physical file exists in storage before setting READY
+      const physicalExists = await documentStorageService.fileExists(document.storageKey);
+      if (!physicalExists) {
+        throw new Error('DOCUMENT_STORAGE_MISSING: Physical file missing from storage before status completion.');
       }
 
       // 6. Transition status to READY

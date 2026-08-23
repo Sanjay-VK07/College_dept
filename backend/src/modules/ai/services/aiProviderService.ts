@@ -1,5 +1,6 @@
 import { AIResponseValidator } from '../utils/aiResponseValidator';
 import { AIResilience, AIResilienceError } from '../utils/aiResilience';
+import { OllamaProvider } from './ollamaProvider';
 
 export interface AIProviderMessage {
   role: 'user' | 'assistant' | 'system';
@@ -15,7 +16,7 @@ export interface AIProviderResult {
 
 export class AIProviderService {
   /**
-   * Generates AI response using configured LLM Provider (Gemini / OpenAI / Generic HTTP API).
+   * Generates AI response using configured LLM Provider (Ollama / Gemini / OpenAI / Generic HTTP API).
    * Strictly returns success: false with type AI_PROVIDER_UNAVAILABLE or AI_PROVIDER_TIMEOUT if API fails.
    * NO FAKE LOCAL FALLBACK RESPONSES.
    */
@@ -26,7 +27,12 @@ export class AIProviderService {
   ): Promise<AIProviderResult> {
     const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
     const apiKey = process.env.AI_API_KEY || '';
-    const model = process.env.AI_MODEL || (provider === 'openai' ? 'gpt-3.5-turbo' : 'gemini-1.5-flash');
+    const model = process.env.OLLAMA_CHAT_MODEL || process.env.AI_MODEL || (provider === 'openai' ? 'gpt-3.5-turbo' : 'gemini-1.5-flash');
+
+    if (provider === 'ollama') {
+      const ollamaProvider = new OllamaProvider();
+      return await ollamaProvider.generateResponse(systemPrompt, history, userMessage);
+    }
 
     if (!apiKey || provider === 'local') {
       if (process.env.NODE_ENV === 'test') {
