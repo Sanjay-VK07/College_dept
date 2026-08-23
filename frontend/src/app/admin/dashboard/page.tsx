@@ -2341,9 +2341,9 @@ export default function AdminDashboard() {
           )}
 
           {activeTab === 'AI_ASSISTANT' && (
-            <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl">
-              <AIExaminationAssistant role="ADMIN" />
-            </div>
+            // No dark padded shell here — the assistant renders its own chrome, and the Question
+            // Generator mode needs the full width rather than sitting inside a nested dark card.
+            <AIExaminationAssistant role="ADMIN" />
           )}
         </main>
       </div>

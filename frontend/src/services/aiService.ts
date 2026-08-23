@@ -140,8 +140,26 @@ export const aiService = {
     return res.data;
   },
 
-  async getDocuments(status?: string) {
-    const res = await api.get('/ai/documents', { params: { status } });
+  async getDocuments(status?: string, limit: number = 100) {
+    const res = await api.get('/ai/documents', { params: { status, limit } });
+    return res.data;
+  },
+
+  /** Subject → Module → Topic → Subtopic tree, used to scope generation to a real taxonomy. */
+  async getTaxonomy() {
+    const res = await api.get('/questions/taxonomy');
+    return res.data;
+  },
+
+  /** Real page-by-page structure-extraction progress for one uploaded document. */
+  async getDocumentProcessingStatus(documentId: string) {
+    const res = await api.get(`/admin/documents/${documentId}/processing-status`);
+    return res.data;
+  },
+
+  /** Kicks off structure extraction (OCR → question/answer-key detection → mapping). */
+  async processDocumentStructure(documentId: string) {
+    const res = await api.post(`/admin/documents/${documentId}/process-structure`);
     return res.data;
   },
 

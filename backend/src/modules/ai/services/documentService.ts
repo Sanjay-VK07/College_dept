@@ -147,6 +147,25 @@ export class DocumentService {
           uploadedById: true,
           createdAt: true,
           updatedAt: true,
+          processingError: true,
+          // Included so a resource listing can show real uploader names and real extraction
+          // progress (pages processed, questions/answers detected) without the client having to
+          // issue one extra status request per document.
+          uploadedBy: { select: { name: true } },
+          processingJob: {
+            select: {
+              status: true,
+              statusMessage: true,
+              totalPages: true,
+              pagesProcessed: true,
+              questionsFound: true,
+              answersFound: true,
+              mappingsResolved: true,
+              mappingsUncertain: true,
+              error: true,
+              updatedAt: true,
+            },
+          },
         },
       }),
     ]);
