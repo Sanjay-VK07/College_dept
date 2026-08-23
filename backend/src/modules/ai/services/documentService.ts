@@ -209,6 +209,11 @@ export class DocumentService {
       throw new Error('Access denied: You do not have permission to download this document.');
     }
 
+    const exists = await documentStorageService.fileExists(document.storageKey);
+    if (!exists) {
+      throw new Error('DOCUMENT_STORAGE_MISSING: The physical document file could not be found in storage.');
+    }
+
     const filePath = await documentStorageService.getAuthorizedAccess(document.storageKey);
 
     return {
@@ -216,6 +221,13 @@ export class DocumentService {
       fileName: document.fileName,
       mimeType: document.mimeType,
     };
+  }
+
+  /**
+   * Helper method to check if a document's storage file exists.
+   */
+  public static async verifyStorageExists(storageKey: string): Promise<boolean> {
+    return await documentStorageService.fileExists(storageKey);
   }
 
   /**

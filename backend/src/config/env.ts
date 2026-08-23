@@ -26,6 +26,15 @@ export const ENV = {
   EMBEDDING_API_KEY: process.env.EMBEDDING_API_KEY || process.env.AI_API_KEY || '',
   EMBEDDING_DIMENSION: parseInt(process.env.EMBEDDING_DIMENSION || '384', 10),
 
+  // Ollama Config
+  OLLAMA_BASE_URL: (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, ''),
+  OLLAMA_CHAT_MODEL: process.env.OLLAMA_CHAT_MODEL || 'llama3.2',
+  OLLAMA_EMBEDDING_MODEL: process.env.OLLAMA_EMBEDDING_MODEL || 'all-minilm',
+  OLLAMA_REQUEST_TIMEOUT_MS: parseInt(process.env.OLLAMA_REQUEST_TIMEOUT_MS || process.env.AI_PROVIDER_TIMEOUT_MS || '30000', 10),
+  OLLAMA_MAX_RETRIES: parseInt(process.env.OLLAMA_MAX_RETRIES || process.env.AI_MAX_RETRIES || '3', 10),
+  OLLAMA_INITIAL_RETRY_DELAY_MS: parseInt(process.env.OLLAMA_INITIAL_RETRY_DELAY_MS || process.env.AI_INITIAL_RETRY_DELAY_MS || '500', 10),
+  OLLAMA_MAX_RETRY_DELAY_MS: parseInt(process.env.OLLAMA_MAX_RETRY_DELAY_MS || process.env.AI_MAX_RETRY_DELAY_MS || '3000', 10),
+
   // RAG Thresholds
   RAG_HIGH_CONFIDENCE_THRESHOLD: parseFloat(process.env.RAG_HIGH_CONFIDENCE_THRESHOLD || '0.75'),
   RAG_MEDIUM_CONFIDENCE_THRESHOLD: parseFloat(process.env.RAG_MEDIUM_CONFIDENCE_THRESHOLD || '0.50'),

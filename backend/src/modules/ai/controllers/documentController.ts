@@ -199,12 +199,20 @@ export class DocumentController {
       return res.sendFile(filePath);
     } catch (err: any) {
       console.error('Controller error in downloadDocument:', err.message);
+      if (err.message.includes('DOCUMENT_STORAGE_MISSING') || err.message.includes('File not found in storage')) {
+        return res.status(404).json({
+          success: false,
+          code: 'DOCUMENT_STORAGE_MISSING',
+          message: 'The requested document file could not be found in storage.',
+        });
+      }
+
       const status = err.message.includes('Access denied')
         ? 403
         : err.message.includes('not found')
         ? 404
         : 500;
-      
+
       const cleanMessage = status === 500 ? 'An unexpected error occurred while downloading file.' : err.message;
       return res.status(status).json({ success: false, message: cleanMessage });
     }

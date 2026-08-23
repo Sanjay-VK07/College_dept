@@ -216,10 +216,27 @@ export class LocalEmbeddingProvider implements IEmbeddingProvider {
   }
 }
 
+export class OllamaEmbeddingProvider implements IEmbeddingProvider {
+  private ollamaProvider: OllamaProvider;
+
+  constructor() {
+    this.ollamaProvider = new OllamaProvider();
+  }
+
+  public async getEmbedding(text: string): Promise<number[]> {
+    return await this.ollamaProvider.generateEmbedding(text);
+  }
+}
+
+import { OllamaProvider } from './ollamaProvider';
+
 export class EmbeddingFactory {
   public static getProvider(): IEmbeddingProvider {
     const provider = (process.env.EMBEDDING_PROVIDER || 'local').toLowerCase();
 
+    if (provider === 'ollama') {
+      return new OllamaEmbeddingProvider();
+    }
     if (provider === 'openai') {
       return new OpenAIEmbeddingProvider();
     }

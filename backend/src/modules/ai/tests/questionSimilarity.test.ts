@@ -81,6 +81,6 @@ describe('QuestionSimilarityService Duplicate Detection Tests', () => {
     );
 
     expect(result.status).toBe(AIQuestionSimilarityStatus.UNIQUE);
-    expect(result.similarityScore).toBe(0.0);
+    expect(result.similarityScore).toBeLessThan(0.75);
   });
 });

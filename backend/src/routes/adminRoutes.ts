@@ -47,6 +47,7 @@ router.get('/export-report/:testId', requireRoles(Role.FACULTY, Role.ADMIN), Adm
 // Security & System Settings
 router.get('/settings', requireRoles(Role.ADMIN), AdminController.getSystemSettings);
 router.put('/settings', requireRoles(Role.ADMIN), AdminController.updateSystemSetting);
+router.get('/diagnostics/storage-orphans', requireRoles(Role.ADMIN), AdminController.getStorageOrphans);
 
 // Document Structure Extraction (Phase 1 — real OCR/question/answer-key mapping pipeline)
 router.post('/documents/:documentId/process-structure', requireRoles(Role.FACULTY, Role.ADMIN), DocumentStructureController.enqueueProcessing);

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { prisma } from '../config/prisma';
 import { ENV } from '../config/env';
 import { AICircuitBreakerService } from '../modules/ai/services/aiCircuitBreakerService';
+import { OllamaProvider } from '../modules/ai/services/ollamaProvider';
 
 const router = Router();
 
@@ -56,7 +57,7 @@ router.get('/ready', async (req: Request, res: Response) => {
 router.get('/ai', async (req: Request, res: Response) => {
   const circuitState = await AICircuitBreakerService.getStateAsync();
   const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
-  const hasApiKey = Boolean(process.env.AI_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY);
+  const hasApiKey = Boolean(process.env.AI_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || (provider === 'ollama'));
 
   let isVectorSearchAvailable = false;
   try {
@@ -66,21 +67,30 @@ router.get('/ai', async (req: Request, res: Response) => {
     isVectorSearchAvailable = false;
   }
 
+  let ollamaHealth: any = null;
+  if (provider === 'ollama') {
+    const ollama = new OllamaProvider();
+    ollamaHealth = await ollama.healthCheck();
+  }
+
   return res.status(200).json({
     success: true,
     data: {
-      aiStatus: circuitState.circuitBreakerOpen ? 'PAUSED' : 'OPERATIONAL',
+      aiStatus: circuitState.circuitBreakerOpen ? 'PAUSED' : (ollamaHealth ? (ollamaHealth.ok ? 'OPERATIONAL' : 'UNAVAILABLE') : 'OPERATIONAL'),
       circuitBreaker: circuitState,
       provider: {
         configuredProvider: provider,
         hasApiKeyConfigured: hasApiKey,
         routingMode: circuitState.routingMode,
-        activeModel: circuitState.activeModel,
+        activeModel: provider === 'ollama' ? ENV.OLLAMA_CHAT_MODEL : circuitState.activeModel,
+        ollamaStatus: ollamaHealth ? (ollamaHealth.ok ? 'AVAILABLE' : 'UNAVAILABLE') : undefined,
+        ollamaDetails: ollamaHealth || undefined,
       },
       embedding: {
         provider: ENV.EMBEDDING_PROVIDER,
-        model: ENV.EMBEDDING_MODEL,
+        model: ENV.EMBEDDING_PROVIDER === 'ollama' ? ENV.OLLAMA_EMBEDDING_MODEL : ENV.EMBEDDING_MODEL,
         dimension: ENV.EMBEDDING_DIMENSION,
+        status: ENV.EMBEDDING_PROVIDER === 'ollama' ? (ollamaHealth?.embeddingModelAvailable ? 'COMPATIBLE' : 'UNCHECKED') : 'COMPATIBLE',
       },
       vectorSearch: {
         available: isVectorSearchAvailable,

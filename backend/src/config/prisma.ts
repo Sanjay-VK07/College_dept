@@ -44,18 +44,3 @@ prisma.$use(async (params, next) => {
     activeQueries--;
   }
 });
-
-// Graceful shutdown handling to release DB connections when Node process exits
-const handleShutdown = async (signal: string) => {
-  console.log(`[Prisma] Received ${signal}. Disconnecting database connection pool...`);
-  try {
-    await prisma.$disconnect();
-  } catch (err) {
-    console.error('[Prisma] Error during disconnect:', err);
-  } finally {
-    process.exit(0);
-  }
-};
-
-process.once('SIGINT', () => handleShutdown('SIGINT'));
-process.once('SIGTERM', () => handleShutdown('SIGTERM'));

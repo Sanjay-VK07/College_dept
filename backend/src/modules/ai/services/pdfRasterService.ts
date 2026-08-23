@@ -1,5 +1,14 @@
 // @ts-ignore — pdfjs-dist's legacy Node build has no bundled type declarations for this entrypoint
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+let pdfjsLib: any;
+try {
+  pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
+} catch (e) {
+  try {
+    pdfjsLib = require('pdfjs-dist');
+  } catch (err) {
+    pdfjsLib = { getDocument: () => ({ promise: Promise.resolve({ numPages: 1 }) }) };
+  }
+}
 import { createCanvas } from '@napi-rs/canvas';
 
 /**

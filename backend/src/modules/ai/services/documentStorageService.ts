@@ -52,6 +52,18 @@ export class LocalStorageProvider implements DocumentStorageProvider {
   }
 
   /**
+   * Checks if a file exists in physical storage.
+   */
+  public async fileExists(storageKey: string): Promise<boolean> {
+    if (!storageKey) return false;
+    const absolutePath = path.resolve(this.baseDir, storageKey);
+    if (!absolutePath.startsWith(this.baseDir)) {
+      return false;
+    }
+    return fs.existsSync(absolutePath);
+  }
+
+  /**
    * Deletes the file and its parent document directory if empty.
    */
   public async delete(storageKey: string): Promise<void> {

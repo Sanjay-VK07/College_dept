@@ -2,37 +2,64 @@ import { prisma } from '../config/prisma';
 import { AIBatchQuestionGenerationService } from '../modules/ai/services/aiBatchQuestionGenerationService';
 import { PDFQuestionImportService } from '../modules/ai/services/pdfQuestionImportService';
 
+declare global {
+  // Prevent duplicate worker timer instantiation in development with hot reload
+  // eslint-disable-next-line no-var
+  var __batchWorkerStarted: boolean | undefined;
+}
+
 const POLL_INTERVAL_MS = 5000;
-// 45 minutes — a large PDF_IMPORT job first runs the full page-batched structure-extraction
-// pipeline (many sequential vision calls for a large document) before per-question verification.
-const STALE_THRESHOLD_MS = 45 * 60 * 1000;
+const STALE_THRESHOLD_MS = 45 * 60 * 1000; // 45 minutes
 
 const inFlight = new Set<string>();
 let timer: NodeJS.Timeout | null = null;
+let isTicking = false;
 
 /**
- * In-process, DB-polled background worker for AIBatchGenerationJob rows — same no-Redis pattern
- * as documentProcessingWorker.ts. Batch question generation used to run synchronously inline on
- * the HTTP request (risking request timeouts on free-tier hosts for large batches); it is now
- * enqueued as QUEUED and picked up here.
+ * In-process, DB-polled background worker for AIBatchGenerationJob rows.
+ * Features tick-overlap protection, in-process singleton startup guard, and atomic DB claims.
  */
-async function tick() {
+export async function tickBatchGenerationWorker() {
+  if (isTicking) return;
+  isTicking = true;
+
+  const startTime = Date.now();
   try {
+    if (!prisma?.aIBatchGenerationJob) return;
+
+    // Recover stale batch jobs
     const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
-    await prisma.aIBatchGenerationJob.updateMany({
+    const staleResult = await prisma.aIBatchGenerationJob.updateMany({
       where: { status: 'PROCESSING', updatedAt: { lt: staleCutoff } },
       data: { status: 'FAILED', statusMessage: 'Processing stalled and was not completed within the expected time window.' },
     });
+
+    if (staleResult.count > 0) {
+      console.warn(`[batchGenerationWorker] Reclaimed ${staleResult.count} stale batch generation jobs.`);
+    }
 
     const queued = await prisma.aIBatchGenerationJob.findMany({
       where: { status: 'QUEUED' },
       take: 3,
       orderBy: { createdAt: 'asc' },
+      select: { id: true, generationRequestId: true, jobType: true },
     });
 
     for (const job of queued) {
       if (inFlight.has(job.generationRequestId)) continue;
+
+      // Atomically claim job in DB using updateMany to prevent duplicate pickup across workers
+      const claimed = await prisma.aIBatchGenerationJob.updateMany({
+        where: { id: job.id, status: 'QUEUED' },
+        data: { status: 'PROCESSING' },
+      });
+
+      if (claimed.count === 0) {
+        continue;
+      }
+
       inFlight.add(job.generationRequestId);
+      console.log(`[batchGenerationWorker] Claimed job ${job.id} (request: ${job.generationRequestId}, type: ${job.jobType})`);
 
       const processor =
         job.jobType === 'PDF_IMPORT'
@@ -40,17 +67,23 @@ async function tick() {
           : AIBatchQuestionGenerationService.processBatchJob(job.generationRequestId);
 
       processor
-        .catch((err) => console.error(`[batchGenerationWorker] Unhandled error processing ${job.generationRequestId}:`, err))
-        .finally(() => inFlight.delete(job.generationRequestId));
+        .catch((err) => console.error(`[batchGenerationWorker] Error processing job ${job.generationRequestId}:`, err))
+        .finally(() => {
+          inFlight.delete(job.generationRequestId);
+          console.log(`[batchGenerationWorker] Completed batch job ${job.generationRequestId} in ${Date.now() - startTime}ms`);
+        });
     }
-  } catch (err) {
-    console.error('[batchGenerationWorker] Poll tick failed:', err);
+  } catch (err: any) {
+    console.error('[batchGenerationWorker] Poll tick failed:', err?.message || err);
+  } finally {
+    isTicking = false;
   }
 }
 
 export function startBatchGenerationWorker() {
-  if (timer) return;
-  timer = setInterval(tick, POLL_INTERVAL_MS);
+  if (timer || globalThis.__batchWorkerStarted) return;
+  globalThis.__batchWorkerStarted = true;
+  timer = setInterval(tickBatchGenerationWorker, POLL_INTERVAL_MS);
   console.log('🧪 [batchGenerationWorker] Started (polling every', POLL_INTERVAL_MS, 'ms)');
 }
 
@@ -58,5 +91,6 @@ export function stopBatchGenerationWorker() {
   if (timer) {
     clearInterval(timer);
     timer = null;
+    globalThis.__batchWorkerStarted = false;
   }
 }
