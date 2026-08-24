@@ -2,6 +2,7 @@ import { prisma } from '../../../config/prisma';
 import { LocalStorageProvider } from './documentStorageService';
 import { PdfSplitService } from './pdfSplitService';
 import { GroqProvider, GeminiProvider, LLMProvider } from './llmProvider';
+import { OllamaProvider } from './ollamaProvider';
 import { QuestionIdNormalizationService } from './questionIdNormalizationService';
 
 // This pipeline deliberately runs on Groq, not the app's general LLM_PROVIDER setting: Gemini's
@@ -12,16 +13,25 @@ import { QuestionIdNormalizationService } from './questionIdNormalizationService
 // 3 full-resolution page images can exceed 8,000 tokens on its own (confirmed via live 413s).
 // One page per request keeps each call safely inside that budget.
 const STRUCTURE_EXTRACTION_PROVIDER = (process.env.DOCUMENT_STRUCTURE_PROVIDER || 'groq').toLowerCase();
-const PAGES_PER_BATCH = STRUCTURE_EXTRACTION_PROVIDER === 'groq' ? 1 : 8;
-// Spacing between requests when using Groq — measured empirically at ~3,200-3,350 tokens per
-// single-page request (scale 1.3), against an 8,000 TPM budget: sustainable rate is 8000/3300*60
-// ≈ 24.7s/request. 15s was proactively spacing but still landing inside the same rolling minute
-// window and needing 2 retries almost every time; 27s leaves real margin so requests succeed on
-// the first attempt (net faster overall than racing into 429s and recovering via backoff).
-const INTER_BATCH_DELAY_MS = STRUCTURE_EXTRACTION_PROVIDER === 'groq' ? 27000 : 3000;
+// Ollama runs locally with no token-per-minute/per-day quota to budget against, so its batch size
+// is set by practical local-inference load (a 26B vision model over many images at once is slow
+// and memory-heavy) rather than by a rate limit.
+const PAGES_PER_BATCH = STRUCTURE_EXTRACTION_PROVIDER === 'groq' ? 1 : STRUCTURE_EXTRACTION_PROVIDER === 'ollama' ? 2 : 8;
+// Spacing between requests when using Groq. Earlier measurements on sparser test PDFs suggested
+// ~3,200-3,350 tokens/request, and 27s was set from that — but real content-dense pages in an
+// actual textbook cost up to ~3,985 tokens (confirmed via live 429 "Requested" values during a
+// real 469-page import). Against the 8,000 TPM budget, that page's break-even interval alone is
+// 60*3985/8000 ≈ 29.9s — meaning 27s was already mathematically insufficient before accounting
+// for any timing jitter, which is exactly what caused a ~30-40% batch-skip rate on that run. 45s
+// gives real margin above the worst page cost seen so far, not just the bare break-even point.
+// Ollama has no external quota to pace against — the delay there just avoids saturating local
+// CPU/GPU with back-to-back requests.
+const INTER_BATCH_DELAY_MS = STRUCTURE_EXTRACTION_PROVIDER === 'groq' ? 45000 : STRUCTURE_EXTRACTION_PROVIDER === 'ollama' ? 1000 : 3000;
 
 function getStructureExtractionProvider(): LLMProvider {
-  return STRUCTURE_EXTRACTION_PROVIDER === 'gemini' ? new GeminiProvider() : new GroqProvider();
+  if (STRUCTURE_EXTRACTION_PROVIDER === 'gemini') return new GeminiProvider();
+  if (STRUCTURE_EXTRACTION_PROVIDER === 'ollama') return new OllamaProvider();
+  return new GroqProvider();
 }
 
 interface BatchPageResult {
@@ -63,10 +73,23 @@ interface BatchExtractionResult {
  */
 export class DocumentStructureService {
   public static async processDocument(documentId: string): Promise<void> {
+    // processDocument() always re-walks the document from page 1 (no resume-from-last-page
+    // capability), so the per-run counters must reset here on every call — otherwise a re-queued
+    // run keeps incrementing on top of a stale prior total and reports progress far ahead of the
+    // real, currently-extracted content.
     const job = await prisma.documentProcessingJob.upsert({
       where: { documentId },
       create: { documentId, status: 'EXTRACTING' },
-      update: { status: 'EXTRACTING', error: null, statusMessage: null },
+      update: {
+        status: 'EXTRACTING',
+        error: null,
+        statusMessage: null,
+        pagesProcessed: 0,
+        questionsFound: 0,
+        answersFound: 0,
+        mappingsResolved: 0,
+        mappingsUncertain: 0,
+      },
     });
 
     try {
@@ -116,97 +139,7 @@ export class DocumentStructureService {
           continue;
         }
 
-        // Deliberately not wrapped in a single Prisma interactive transaction: a batch's worth
-        // of pages/questions/answers is too much sequential DB work to reliably fit inside
-        // Prisma's default 5s transaction window (each write to this remote DB has consistently
-        // taken 1s+ this session), and this process is idempotent/re-runnable per batch anyway —
-        // page upserts and bulk createMany calls below don't need cross-row atomicity.
-        const pageIdByNumber = new Map<number, string>();
-
-        for (const p of result.pages) {
-          const absolutePageNumber = batch.startPage + (p.pageNumber - 1);
-          const page = await prisma.documentPage.upsert({
-            where: { documentId_pageNumber: { documentId, pageNumber: absolutePageNumber } },
-            create: {
-              documentId,
-              pageNumber: absolutePageNumber,
-              rawText: p.text || null,
-              extractionMethod: 'VISION_OCR',
-              pageType: p.pageType,
-              classificationConfidence: p.confidence,
-            },
-            update: {
-              rawText: p.text || null,
-              pageType: p.pageType,
-              classificationConfidence: p.confidence,
-            },
-          });
-          pageIdByNumber.set(absolutePageNumber, page.id);
-        }
-
-        const questionRows: any[] = [];
-        const answerRows: any[] = [];
-
-        for (const q of result.questions) {
-          const absolutePageNumber = batch.startPage + (q.pageNumber - 1);
-          const pageId = pageIdByNumber.get(absolutePageNumber);
-          if (!pageId) continue; // model referenced a page it didn't classify — skip rather than guess
-
-          const normalized = QuestionIdNormalizationService.normalize(q.questionId);
-          if (!normalized) continue;
-
-          questionRows.push({
-            documentId,
-            rawQuestionId: q.questionId,
-            normalizedQuestionId: normalized,
-            questionText: q.text,
-            options: q.options as any,
-            questionType: q.type,
-            sourcePageId: pageId,
-            imageRefs: [],
-          });
-
-          // An answer given immediately after the question on the same page (common in short
-          // quizzes/compact question sets) — persist it as a real ExtractedAnswer on the same
-          // page so the deterministic mapping pass below can match it, instead of silently
-          // discarding it. Separate multi-page ANSWER_KEY sections (the common case for real
-          // exam papers, tested earlier) are still captured via result.answers below.
-          if (q.inlineAnswer !== null && q.inlineAnswer !== undefined) {
-            answerRows.push({
-              documentId,
-              rawQuestionId: q.questionId,
-              normalizedQuestionId: normalized,
-              answerValue: q.inlineAnswer as any,
-              explanation: null,
-              sourcePageId: pageId,
-            });
-          }
-        }
-
-        for (const a of result.answers) {
-          const absolutePageNumber = batch.startPage + (a.pageNumber - 1);
-          const pageId = pageIdByNumber.get(absolutePageNumber);
-          if (!pageId) continue;
-
-          const normalized = QuestionIdNormalizationService.normalize(a.questionId);
-          if (!normalized) continue;
-
-          answerRows.push({
-            documentId,
-            rawQuestionId: a.questionId,
-            normalizedQuestionId: normalized,
-            answerValue: a.answer as any,
-            explanation: a.explanation,
-            sourcePageId: pageId,
-          });
-        }
-
-        if (questionRows.length > 0) {
-          await prisma.extractedQuestion.createMany({ data: questionRows });
-        }
-        if (answerRows.length > 0) {
-          await prisma.extractedAnswer.createMany({ data: answerRows });
-        }
+        await this.persistBatchResult(documentId, batch, result);
 
         await prisma.documentProcessingJob.update({
           where: { id: job.id },
@@ -246,11 +179,124 @@ export class DocumentStructureService {
     }
   }
 
-  private static async extractBatch(
+  /**
+   * Persists one batch's extraction result into the real schema (DocumentPage/ExtractedQuestion/
+   * ExtractedAnswer) — shared by the full processDocument() run and the bounded benchmark script,
+   * so both write through the exact same logic and format.
+   */
+  public static async persistBatchResult(
+    documentId: string,
+    batch: { startPage: number; endPage: number },
+    result: BatchExtractionResult
+  ): Promise<void> {
+    // Deliberately not wrapped in a single Prisma interactive transaction: a batch's worth
+    // of pages/questions/answers is too much sequential DB work to reliably fit inside
+    // Prisma's default 5s transaction window (each write to this remote DB has consistently
+    // taken 1s+ this session), and this process is idempotent/re-runnable per batch anyway —
+    // page upserts and bulk createMany calls below don't need cross-row atomicity.
+    const pageIdByNumber = new Map<number, string>();
+
+    for (const p of result.pages) {
+      const absolutePageNumber = batch.startPage + (p.pageNumber - 1);
+      const page = await prisma.documentPage.upsert({
+        where: { documentId_pageNumber: { documentId, pageNumber: absolutePageNumber } },
+        create: {
+          documentId,
+          pageNumber: absolutePageNumber,
+          rawText: p.text || null,
+          extractionMethod: 'VISION_OCR',
+          pageType: p.pageType,
+          classificationConfidence: p.confidence,
+        },
+        update: {
+          rawText: p.text || null,
+          pageType: p.pageType,
+          classificationConfidence: p.confidence,
+        },
+      });
+      pageIdByNumber.set(absolutePageNumber, page.id);
+    }
+
+    const questionRows: any[] = [];
+    const answerRows: any[] = [];
+
+    for (const q of result.questions) {
+      const absolutePageNumber = batch.startPage + (q.pageNumber - 1);
+      const pageId = pageIdByNumber.get(absolutePageNumber);
+      if (!pageId) continue; // model referenced a page it didn't classify — skip rather than guess
+
+      const normalized = QuestionIdNormalizationService.normalize(q.questionId);
+      if (!normalized) continue;
+
+      questionRows.push({
+        documentId,
+        rawQuestionId: q.questionId,
+        normalizedQuestionId: normalized,
+        questionText: q.text,
+        options: q.options as any,
+        questionType: q.type,
+        sourcePageId: pageId,
+        imageRefs: [],
+      });
+
+      // An answer given immediately after the question on the same page (common in short
+      // quizzes/compact question sets) — persist it as a real ExtractedAnswer on the same
+      // page so the deterministic mapping pass below can match it, instead of silently
+      // discarding it. Separate multi-page ANSWER_KEY sections (the common case for real
+      // exam papers, tested earlier) are still captured via result.answers below.
+      if (q.inlineAnswer !== null && q.inlineAnswer !== undefined) {
+        answerRows.push({
+          documentId,
+          rawQuestionId: q.questionId,
+          normalizedQuestionId: normalized,
+          answerValue: q.inlineAnswer as any,
+          explanation: null,
+          sourcePageId: pageId,
+        });
+      }
+    }
+
+    for (const a of result.answers) {
+      const absolutePageNumber = batch.startPage + (a.pageNumber - 1);
+      const pageId = pageIdByNumber.get(absolutePageNumber);
+      if (!pageId) continue;
+
+      const normalized = QuestionIdNormalizationService.normalize(a.questionId);
+      if (!normalized) continue;
+
+      answerRows.push({
+        documentId,
+        rawQuestionId: a.questionId,
+        normalizedQuestionId: normalized,
+        answerValue: a.answer as any,
+        explanation: a.explanation,
+        sourcePageId: pageId,
+      });
+    }
+
+    if (questionRows.length > 0) {
+      await prisma.extractedQuestion.createMany({ data: questionRows });
+    }
+    if (answerRows.length > 0) {
+      await prisma.extractedAnswer.createMany({ data: answerRows });
+    }
+  }
+
+  /**
+   * Sends one page-range batch to the configured vision provider and parses its structured
+   * output. Public so the bounded benchmark script (see scripts/testPdfStructurePipeline.ts) can
+   * reuse the exact same prompt/schema/parsing as the real pipeline — never a separate format.
+   *
+   * `onOllamaTiming` is honored only when `provider` is an OllamaProvider instance (checked via
+   * instanceof below); it's how the benchmark script gets a real rasterization-vs-inference time
+   * split without duplicating OllamaProvider's request logic. Groq/Gemini are unaffected.
+   */
+  public static async extractBatch(
     provider: LLMProvider,
     batchPdfBuffer: Buffer,
     startPage: number,
-    endPage: number
+    endPage: number,
+    onOllamaTiming?: (t: { rasterMs: number; requestMs: number }) => void
   ): Promise<BatchExtractionResult> {
     const systemPrompt = `You are a document structure analyzer for academic/exam PDFs (textbooks, question banks, previous-year exam papers). You will be given a short excerpt (a contiguous page range) of a larger PDF, page by page, including scanned/image pages with no selectable text — read those visually.
 
@@ -262,9 +308,23 @@ For every entry you find on an ANSWER_KEY page (a table like "1.1.9 -> A, 1.1.10
 
 Do not invent questions, answers, or page classifications that aren't actually present. If a page is genuinely ambiguous, classify it UNKNOWN rather than guessing.
 
+Each page's "text" field must preserve the page's real structure and content, not just a flat text dump:
+- Keep headings, paragraphs, and lists recognizable (e.g. prefix headings with "# ", list items with "- ").
+- Reproduce tables as markdown tables.
+- Reproduce equations/formulas as LaTeX where possible, inline where they appear.
+- For every image, diagram, chart, figure, or illustration on the page, insert an inline marker at
+  the position it appears: "[FIGURE: <what it shows, including any data/labels/trend visible>]".
+  Never silently skip a visual element — if something is present but illegible, still mark
+  "[FIGURE: illegible/unclear content]" rather than omitting it.
+  Include any caption text verbatim next to its marker.
+- If a figure or image itself contains meaningful text (a labeled diagram, a screenshot with text,
+  an infographic), transcribe that text inside the marker too.
+
+Do not invent visual content that isn't there — only describe what is actually visible on the page.
+
 Output ONLY a strict JSON object, no markdown, no commentary, matching exactly:
 {
-  "pages": [{ "pageNumber": <1-based page number WITHIN THIS EXCERPT, first page = 1>, "pageType": "THEORY"|"QUESTION"|"ANSWER_KEY"|"REFERENCE"|"APPENDIX"|"UNKNOWN", "confidence": 0.0-1.0, "text": "<full text of the page>" }],
+  "pages": [{ "pageNumber": <1-based page number WITHIN THIS EXCERPT, first page = 1>, "pageType": "THEORY"|"QUESTION"|"ANSWER_KEY"|"REFERENCE"|"APPENDIX"|"UNKNOWN", "confidence": 0.0-1.0, "text": "<full structured text of the page, per the rules above>" }],
   "questions": [{ "questionId": "1.1.10(a)", "pageNumber": <1-based within this excerpt>, "text": "...", "options": ["A","B","C","D"] or null, "type": "MCQ"|"MSQ"|"NAT"|"UNKNOWN", "inlineAnswer": <value or null> }],
   "answers": [{ "questionId": "1.1.10", "pageNumber": <1-based within this excerpt>, "answer": <value>, "explanation": "..." or null }]
 }`;
@@ -272,7 +332,10 @@ Output ONLY a strict JSON object, no markdown, no commentary, matching exactly:
     const userPrompt = `This excerpt covers original document pages ${startPage}-${endPage} (${endPage - startPage + 1} pages). Analyze every page in this excerpt and return the JSON described above. Use page numbers relative to THIS EXCERPT ONLY (first page of the excerpt = 1), not the original document's page numbers.`;
 
     const base64Pdf = batchPdfBuffer.toString('base64');
-    const responseText = await provider.generateWithFile(systemPrompt, userPrompt, base64Pdf, 'application/pdf');
+    const responseText =
+      provider instanceof OllamaProvider
+        ? await provider.generateWithFile(systemPrompt, userPrompt, base64Pdf, 'application/pdf', onOllamaTiming)
+        : await provider.generateWithFile(systemPrompt, userPrompt, base64Pdf, 'application/pdf');
 
     // Defensive: some vision models (e.g. Groq's qwen3.6) support a "thinking" mode that wraps
     // reasoning in <think> tags before the actual answer — reasoning_effort:'none' is set to

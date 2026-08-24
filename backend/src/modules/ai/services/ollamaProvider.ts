@@ -4,6 +4,7 @@ import { LLMProvider } from './llmProvider';
 import { IEmbeddingProvider } from './embeddingProvider';
 import { AIResilience, AIResilienceError } from '../utils/aiResilience';
 import { AIResponseValidator } from '../utils/aiResponseValidator';
+import { PdfRasterService } from './pdfRasterService';
 
 export interface OllamaUsageStats {
   promptEvalCount?: number;
@@ -16,11 +17,13 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
   private baseUrl: string;
   private chatModel: string;
   private embeddingModel: string;
+  private visionModel: string;
 
   constructor(chatModelOverride?: string) {
     this.baseUrl = (ENV.OLLAMA_BASE_URL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
     this.chatModel = chatModelOverride || ENV.OLLAMA_CHAT_MODEL || process.env.OLLAMA_CHAT_MODEL || 'llama3.2';
     this.embeddingModel = ENV.OLLAMA_EMBEDDING_MODEL || process.env.OLLAMA_EMBEDDING_MODEL || 'all-minilm';
+    this.visionModel = process.env.OLLAMA_VISION_MODEL || this.chatModel;
   }
 
   /**
@@ -217,12 +220,91 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
   }
 
   /**
-   * Unsupported file vision extraction fallback for Ollama.
+   * Ollama's /api/chat accepts inline base64 images per message, not a raw PDF — each page is
+   * rasterized to a PNG first via PdfRasterService (same approach GroqProvider uses), then sent
+   * as a multi-image vision request to the configured local vision model (OLLAMA_VISION_MODEL,
+   * defaults to the chat model). This runs entirely on local hardware: no per-minute/per-day
+   * token quota to exhaust, at the cost of depending on local compute for speed/throughput.
    */
-  public async generateWithFile(): Promise<string> {
-    throw new Error(
-      'NOT_SUPPORTED: OllamaProvider does not support direct inline PDF file processing. Process document pages with PDF rasterization or OCR first.'
+  public async generateWithFile(
+    systemPrompt: string,
+    userPrompt: string,
+    fileBase64: string,
+    mimeType: string,
+    onTiming?: (t: { rasterMs: number; requestMs: number }) => void
+  ): Promise<string> {
+    if (mimeType !== 'application/pdf') {
+      throw new Error(`NOT_SUPPORTED: OllamaProvider.generateWithFile only supports application/pdf, got ${mimeType}.`);
+    }
+
+    const pdfBuffer = Buffer.from(fileBase64, 'base64');
+    const pageCount = await PdfRasterService.getPageCountFromBuffer(pdfBuffer);
+
+    const rasterStart = Date.now();
+    const images = await PdfRasterService.renderPageRangeToImages(pdfBuffer, 1, pageCount, 1.5);
+    const rasterMs = Date.now() - rasterStart;
+
+    const timeoutMs = parseInt(process.env.OLLAMA_VISION_TIMEOUT_MS || '', 10) || 180000;
+    const requestStart = Date.now();
+
+    const result = await AIResilience.executeWithResilience(
+      async (signal) => {
+        const endpoint = `${this.baseUrl}/api/chat`;
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: this.visionModel,
+            stream: false,
+            messages: [
+              {
+                role: 'user',
+                content: `${systemPrompt}\n\n${userPrompt}`,
+                images: images.map((img) => img.toString('base64')),
+              },
+            ],
+          }),
+          signal,
+        });
+
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => '');
+          const status = response.status;
+
+          if (status === 404) {
+            throw new AIResilienceError(
+              `Ollama Vision Model Not Found (HTTP 404): Model '${this.visionModel}' is not installed locally. Run 'ollama pull ${this.visionModel}'. (${errBody})`,
+              'NON_RETRYABLE_ERROR',
+              404
+            );
+          }
+
+          const err: any = new Error(`Ollama API returned HTTP status ${status}${errBody ? `: ${errBody}` : ''}`);
+          err.status = status;
+          throw err;
+        }
+
+        const data: any = await response.json();
+        const content = data?.message?.content;
+        if (content && content.trim().length > 0) {
+          return content;
+        }
+
+        throw new Error('Empty or invalid content returned from Ollama vision chat API.');
+      },
+      {
+        operationName: 'OllamaProvider.generateWithFile',
+        timeoutMs,
+        // No API quota to wait out on a retry, so keep attempts low — a failure here is far more
+        // likely to be a real error (model not installed, malformed request) than a transient one.
+        maxRetries: 2,
+        initialDelayMs: 3000,
+        maxDelayMs: 15000,
+      }
     );
+
+    onTiming?.({ rasterMs, requestMs: Date.now() - requestStart });
+    return result;
   }
 
   /**
