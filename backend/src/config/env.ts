@@ -15,7 +15,7 @@ export const ENV = {
   JWT_SECRET: requireEnv('JWT_SECRET'),
   DATABASE_URL: requireEnv('DATABASE_URL'),
   DIRECT_URL: requireEnv('DIRECT_URL'),
-  ALLOWED_DOMAINS: (process.env.ALLOWED_DOMAINS || 'cit.edu.in,college.edu.in').split(',').map((d) => d.trim()),
+  ALLOWED_DOMAINS: (process.env.ALLOWED_DOMAINS || 'citchennai.net').split(',').map((d) => d.trim()),
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
   CHUNK_SIZE: parseInt(process.env.CHUNK_SIZE || '500', 10),
   CHUNK_OVERLAP: parseInt(process.env.CHUNK_OVERLAP || '50', 10),

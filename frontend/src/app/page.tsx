@@ -7,7 +7,7 @@ import api from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('ganesh@cit.edu.in');
+  const [email, setEmail] = useState('ganesh@citchennai.net');
   const [registerNo, setRegisterNo] = useState('71762105042');
   const [role, setRole] = useState<'STUDENT' | 'FACULTY' | 'ADMIN'>('STUDENT');
   const [errorMsg, setErrorMsg] = useState('');
@@ -57,7 +57,7 @@ export default function LoginPage() {
       }
     } catch (err: any) {
       setErrorMsg(
-        err.response?.data?.message || 'Authentication failed. Please use your official university domain account (@cit.edu.in).'
+        err.response?.data?.message || 'Authentication failed. Please use your official university domain account (@citchennai.net).'
       );
     } finally {
       setLoading(false);
@@ -68,11 +68,11 @@ export default function LoginPage() {
     setRole(selectedRole);
     setErrorMsg('');
     if (selectedRole === 'FACULTY') {
-      setEmail('faculty@cit.edu.in');
+      setEmail('faculty@citchennai.net');
     } else if (selectedRole === 'ADMIN') {
-      setEmail('admin@cit.edu.in');
+      setEmail('admin@citchennai.net');
     } else {
-      setEmail('ganesh@cit.edu.in');
+      setEmail('ganesh@citchennai.net');
       setRegisterNo('71762105042');
     }
   };
@@ -116,7 +116,7 @@ export default function LoginPage() {
           <div className="bg-amber-50 border border-amber-200 rounded-md p-3 text-xs text-amber-900 flex items-start space-x-2.5">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <span className="font-semibold">Restricted Access Notice:</span> Only authorized institutional domain accounts (e.g. <b>@cit.edu.in</b>) are permitted to sign in.
+              <span className="font-semibold">Restricted Access Notice:</span> Only authorized institutional domain accounts (e.g. <b>@citchennai.net</b>) are permitted to sign in.
             </div>
           </div>
 
@@ -162,7 +162,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                placeholder="ananya.sharma@cit.edu.in"
+                placeholder="ananya.sharma@citchennai.net"
                 className="erp-input"
               />
             </div>

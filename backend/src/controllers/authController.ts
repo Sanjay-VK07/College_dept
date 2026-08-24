@@ -9,7 +9,7 @@ import { NotificationController } from './notificationController';
 export class AuthController {
   /**
    * Google Auth Login / Mock Login endpoint
-   * Validates college domain e.g. @cit.edu.in
+   * Validates college domain e.g. @citchennai.net
    */
   public static async googleLogin(req: Request, res: Response) {
     try {
@@ -33,7 +33,7 @@ export class AuthController {
 
         return res.status(403).json({
           success: false,
-          message: `Access Denied: Domain '@${emailDomain}' is not an authorized college email domain. Please use your official college account (@cit.edu.in).`,
+          message: `Access Denied: Domain '@${emailDomain}' is not an authorized college email domain. Please use your official college account (@citchennai.net).`,
         });
       }
 
