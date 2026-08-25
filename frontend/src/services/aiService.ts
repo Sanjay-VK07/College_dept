@@ -482,4 +482,119 @@ export const aiService = {
     const res = await api.get('/ai/performance-insights');
     return res.data;
   },
+
+  /**
+   * Smart Question Paper Builder & Question Bank APIs
+   */
+  async getQuestionBankSubjects() {
+    const res = await api.get('/ai/question-bank/subjects');
+    return res.data;
+  },
+
+  async getTopicAvailability(subjectId: string) {
+    const res = await api.get('/ai/question-bank/topics', { params: { subjectId } });
+    return res.data;
+  },
+
+  async previewQuestionPaper(payload: {
+    subjectId: string;
+    selectedTopicIds: string[];
+    paperMode: 'TOTAL_COUNT' | 'TOPIC_BLUEPRINT';
+    totalQuestions?: number;
+    topicBlueprint?: Record<string, number>;
+    difficultyDistribution: { EASY: number; MEDIUM: number; HARD: number };
+    typeDistribution: { MCQ: number; MSQ: number; NAT: number };
+    randomSeed?: number | string;
+  }) {
+    const res = await api.post('/ai/question-paper/preview', payload);
+    return res.data;
+  },
+
+  async startShortfallGeneration(payload: any) {
+    const res = await api.post('/ai/question-paper/generate', payload);
+    return res.data;
+  },
+
+  async getShortfallJobStatus(jobId: string) {
+    const res = await api.get(`/ai/question-paper/generation/${jobId}`);
+    return res.data;
+  },
+
+  async regenerateSelection(payload: any) {
+    const res = await api.post('/ai/question-paper/regenerate-selection', payload);
+    return res.data;
+  },
+
+  async finalizeQuestionPaper(payload: {
+    title: string;
+    description?: string;
+    subjectId: string;
+    selectedQuestionIds: string[];
+    examSettings: {
+      targetDepartment?: string;
+      durationMinutes?: number;
+      totalMarks?: number;
+      negativeMarking?: boolean;
+      solutionVisibility?: string;
+      instructions?: string;
+      startTime?: string | Date;
+      endTime?: string | Date;
+    };
+  }) {
+    const res = await api.post('/ai/question-paper/finalize', payload);
+    return res.data;
+  },
+
+  async publishExamination(mockTestId: string) {
+    const res = await api.post(`/ai/question-paper/exams/${mockTestId}/publish`);
+    return res.data;
+  },
+
+  async deleteQuestionBankQuestion(questionId: string) {
+    const res = await api.delete(`/ai/question-bank/questions/${questionId}`);
+    return res.data;
+  },
+
+  async bulkDeleteQuestionBankQuestions(ids: string[]) {
+    const res = await api.post('/ai/question-bank/questions/bulk-delete', { ids });
+    return res.data;
+  },
+
+  async previewJSONLImport(fileContent: string | File) {
+    if (typeof fileContent === 'string') {
+      const res = await api.post('/ai/question-bank/preview-jsonl', { fileContent });
+      return res.data;
+    }
+    const formData = new FormData();
+    formData.append('file', fileContent);
+    const res = await api.post('/ai/question-bank/preview-jsonl', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  },
+
+  async importJSONL(fileContent: string | File) {
+    if (typeof fileContent === 'string') {
+      const res = await api.post('/ai/question-bank/import-jsonl', { fileContent });
+      return res.data;
+    }
+    const formData = new FormData();
+    formData.append('file', fileContent);
+    const res = await api.post('/ai/question-bank/import-jsonl', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  },
+
+  async searchQuestionBank(params: {
+    query?: string;
+    topic?: string;
+    verificationStatus?: string;
+    origin?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const res = await api.get('/ai/question-bank/search', { params });
+    return res.data;
+  },
 };

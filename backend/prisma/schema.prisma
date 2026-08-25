@@ -76,39 +76,57 @@ model Subtopic {
 }
 
 model Question {
-  id                String                  @id @default(uuid())
-  text              String
-  type              QuestionType
-  difficulty        Difficulty              @default(MEDIUM)
-  marks             Float                   @default(1.0)
-  negativeMarks     Float                   @default(0.33)
-  options           Json
-  correctAnswer     Json
-  explanation       String?
-  reference         String?
-  previousYear      String?
-  imageUrl          String?
-  subtopicId        String
-  createdById       String
-  createdAt         DateTime                @default(now())
-  updatedAt         DateTime                @updatedAt
-  generatedByAI     Boolean                 @default(false)
-  generationModel   String?
-  reviewStatus      AIQuestionReviewStatus?
-  currentVersion    Int                     @default(1)
-  embedding         Float[]
-  // Which model produced `embedding`. Vectors from different models occupy different spaces, so
-  // cosine similarity between them is meaningless even when the dimensions happen to match
-  // (e.g. gemini-embedding-001 and all-minilm are both 384-d). Duplicate detection compares only
-  // vectors sharing this tag; anything else falls back to lexical comparison.
-  embeddingModel    String?
-  aiSolutions       AISolution[]
-  mockTestQuestions MockTestQuestion[]
-  createdBy         User                    @relation("CreatedQuestions", fields: [createdById], references: [id])
-  subtopic          Subtopic                @relation(fields: [subtopicId], references: [id])
-  aiSources         QuestionAISource[]
-  responses         QuestionResponse[]
-  versions          QuestionVersion[]
+  id                 String                  @id @default(uuid())
+  text               String
+  type               QuestionType
+  difficulty         Difficulty              @default(MEDIUM)
+  marks              Float                   @default(1.0)
+  negativeMarks      Float                   @default(0.33)
+  options            Json
+  correctAnswer      Json
+  explanation        String?
+  reference          String?
+  previousYear       String?
+  imageUrl           String?
+  subtopicId         String
+  createdById        String
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  generatedByAI      Boolean                 @default(false)
+  generationModel    String?
+  reviewStatus       AIQuestionReviewStatus?
+  customId           String?                 @unique
+  rawAnswer          String?
+  containsFigure     Boolean                 @default(false)
+  textExtractionUsed Boolean                 @default(true)
+  visualExtractionUsed Boolean               @default(false)
+  visualMetadata     Json?
+  origin             QuestionOrigin          @default(SOURCE)
+  verificationStatus VerificationStatus      @default(VERIFIED)
+  sourceDocumentId   String?
+  sourcePage         Int?
+  sourceChapter      String?
+  sourceSection      String?
+  sourceHeading      String?
+  currentVersion     Int                     @default(1)
+  embedding          Float[]
+  embeddingModel     String?
+  aiSolutions        AISolution[]
+  mockTestQuestions  MockTestQuestion[]
+  createdBy          User                    @relation("CreatedQuestions", fields: [createdById], references: [id])
+  subtopic           Subtopic                @relation(fields: [subtopicId], references: [id])
+  sourceDocument     AIDocument?             @relation("DocumentQuestions", fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  aiSources          QuestionAISource[]
+  responses          QuestionResponse[]
+  versions           QuestionVersion[]
+
+  @@index([subtopicId])
+  @@index([verificationStatus])
+  @@index([origin])
+  @@index([type])
+  @@index([difficulty])
+  @@index([sourceDocumentId])
+  @@index([customId])
 }
 
 // Immutable point-in-time snapshot of a Question's gradable content. Created whenever the
@@ -313,6 +331,7 @@ model AIDocument {
   uploadedBy               User                   @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
   chunks                   AIDocumentChunk[]
   aiSources                QuestionAISource[]
+  questions                Question[]             @relation("DocumentQuestions")
   pages                    DocumentPage[]
   extractedQuestions       ExtractedQuestion[]
   extractedAnswers         ExtractedAnswer[]
@@ -687,6 +706,8 @@ enum QuestionType {
   MCQ
   MSQ
   NAT
+  FREE_RESPONSE
+  UNKNOWN
 }
 
 enum Difficulty {
@@ -839,3 +860,18 @@ enum ExamStatus {
   COMPLETED
   ARCHIVED
 }
+
+enum QuestionOrigin {
+  SOURCE
+  AI_GENERATED
+}
+
+enum VerificationStatus {
+  EXTRACTED
+  VALIDATING
+  VERIFIED
+  UNANSWERED_IN_SOURCE
+  NEEDS_REVIEW
+  REJECTED
+}
+

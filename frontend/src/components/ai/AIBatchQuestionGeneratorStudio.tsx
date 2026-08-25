@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { aiService } from '@/services/aiService';
 import {
   BookOpen,
@@ -16,6 +16,16 @@ import {
   Clock,
   Eye,
   Trash2,
+  Layers,
+  Sliders,
+  Sparkles,
+  ArrowRight,
+  ShieldCheck,
+  Calendar,
+  Send,
+  HelpCircle,
+  Search,
+  FileSpreadsheet,
 } from 'lucide-react';
 import api from '@/lib/api';
 
@@ -23,23 +33,17 @@ interface AIBatchQuestionGeneratorStudioProps {
   role?: string;
 }
 
-type StepId = 'resources' | 'configure' | 'generate' | 'verify' | 'review';
+type StepId = 'resources' | 'topics' | 'configure' | 'generate' | 'review';
 
 const STEPS: Array<{ id: StepId; index: string; label: string }> = [
   { id: 'resources', index: '01', label: 'Resources' },
-  { id: 'configure', index: '02', label: 'Configure' },
-  { id: 'generate', index: '03', label: 'Generate' },
-  { id: 'verify', index: '04', label: 'Verify' },
+  { id: 'topics', index: '02', label: 'Topics' },
+  { id: 'configure', index: '03', label: 'Configure' },
+  { id: 'generate', index: '04', label: 'Generate' },
   { id: 'review', index: '05', label: 'Review' },
 ];
 
-const TERMINAL_STATUSES = ['COMPLETED', 'GENERATED_PARTIAL_BATCH', 'FAILED'];
-
-/**
- * Distributes `total` across percentage buckets so the parts always sum exactly to `total`.
- * Uses the largest-remainder (Hamilton) method — the same apportionment the backend applies —
- * so the counts shown here match what the server will actually plan.
- */
+/** Apportions numbers using largest-remainder algorithm */
 function apportion(total: number, parts: Record<string, number>): Record<string, number> {
   const keys = Object.keys(parts);
   const exact: Record<string, number> = {};
@@ -66,86 +70,90 @@ function apportion(total: number, parts: Record<string, number>): Record<string,
   return floored;
 }
 
-/** Maps a raw backend document-processing status to a readable institutional label. */
-const PROCESSING_STAGE_LABEL: Record<string, string> = {
-  QUEUED: 'Queued',
-  EXTRACTING: 'Extracting text',
-  OCR: 'OCR processing',
-  STRUCTURING: 'Analyzing document structure',
-  INDEXING: 'Indexing content',
-  CLASSIFYING: 'Classifying content',
-  MAPPING: 'Mapping answer keys',
-  COMPLETED: 'Ready',
-  COMPLETED_WITH_ERRORS: 'Ready (partial)',
-  FAILED: 'Processing failed',
-};
-
 export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorStudioProps> = ({ role = 'FACULTY' }) => {
   const [activeStep, setActiveStep] = useState<StepId>('resources');
 
-  // Bounds & governance (admin-configured, fetched from backend — never hardcoded)
-  const [minCount, setMinCount] = useState(50);
-  const [maxCount, setMaxCount] = useState(500);
-  const [autoPublishVerified, setAutoPublishVerified] = useState(true);
-  const [maxRegenerationAttempts, setMaxRegenerationAttempts] = useState(2);
-  const [savingSettings, setSavingSettings] = useState(false);
+  // Governance & Bounds
+  const [minCount] = useState(1);
+  const [maxCount] = useState(500);
 
-  // Step 1 — Resources
+  // Step 1 — Resources & JSONL Question Bank Import
   const [documents, setDocuments] = useState<any[]>([]);
-  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const jsonlFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Resource bulk delete — separate from selectedDocIds (which picks resources to generate
-  // FROM and is deliberately restricted to ready ones). Delete selection has no such
-  // restriction: failed/in-progress resources must be deletable too.
-  const [selectedDeleteIds, setSelectedDeleteIds] = useState<Set<string>>(new Set());
-  const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
-  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  // JSONL Import State
+  const [jsonlFile, setJsonlFile] = useState<File | null>(null);
+  const [jsonlPreview, setJsonlPreview] = useState<any | null>(null);
+  const [jsonlImportResult, setJsonlImportResult] = useState<any | null>(null);
+  const [isParsingJSONL, setIsParsingJSONL] = useState(false);
+  const [isImportingJSONL, setIsImportingJSONL] = useState(false);
 
-  // Step 2 — Configuration
-  const [totalQuestions, setTotalQuestions] = useState(50);
+  // Step 2 — Subject & Topics Availability Matrix (Real DB counts)
+  const [subjects, setSubjects] = useState<any[]>([]);
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>('');
+  const [topicAvailability, setTopicAvailability] = useState<any[]>([]);
+  const [loadingTopics, setLoadingTopics] = useState(false);
+  const [selectedTopicIds, setSelectedTopicIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+
+  // Step 3 — Paper Configuration (Mode A: Total Count vs Mode B: Topic Blueprint)
+  const [paperMode, setPaperMode] = useState<'TOTAL_COUNT' | 'TOPIC_BLUEPRINT'>('TOTAL_COUNT');
+  const [totalQuestions, setTotalQuestions] = useState<number>(50);
+  const [topicBlueprint, setTopicBlueprint] = useState<Record<string, number>>({});
+  const [generationMode, setGenerationMode] = useState<'EXISTING_ONLY' | 'GENERATE_MISSING'>('GENERATE_MISSING');
+
+  // Distribution
   const [easyPercent, setEasyPercent] = useState(20);
   const [medPercent, setMedPercent] = useState(50);
   const [hardPercent, setHardPercent] = useState(30);
   const [mcqPercent, setMcqPercent] = useState(60);
   const [msqPercent, setMsqPercent] = useState(10);
   const [natPercent, setNatPercent] = useState(30);
+
   const [negativeMarking, setNegativeMarking] = useState(true);
   const [solutionVisibility, setSolutionVisibility] = useState('SHOW_AFTER_RESULT');
   const [sourceReferences, setSourceReferences] = useState(true);
 
-  // Taxonomy (real Subject → Module → Topic → Subtopic tree)
-  const [taxonomy, setTaxonomy] = useState<any[]>([]);
-  const [selectedSubjectId, setSelectedSubjectId] = useState('');
-  const [selectedTopicId, setSelectedTopicId] = useState('');
-  const [selectedSubtopicId, setSelectedSubtopicId] = useState('');
-
-  // Step 3/4 — Generation job
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [jobStatus, setJobStatus] = useState<string | null>(null);
-  const [jobResult, setJobResult] = useState<any>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
+  // Step 4 — Preview & Async Shortfall Job State
+  const [previewData, setPreviewData] = useState<any | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [isGeneratingShortfall, setIsGeneratingShortfall] = useState(false);
+  const [shortfallJobId, setShortfallJobId] = useState<string | null>(null);
+  const [shortfallJobStatus, setShortfallJobStatus] = useState<string | null>(null);
+  const [shortfallJobMessage, setShortfallJobMessage] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Step 5 — Review
+  // Step 5 — Review Table & Final Exam Draft
+  const [paperQuestions, setPaperQuestions] = useState<any[]>([]);
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
-  const [detailQuestion, setDetailQuestion] = useState<any | null>(null);
-  const [bulkConfirm, setBulkConfirm] = useState<null | 'approve' | 'reject'>(null);
-  const [isBulkActing, setIsBulkActing] = useState(false);
-  const [actioningId, setActioningId] = useState<string | null>(null);
+
+  // Finalized Exam Draft State
+  const [finalizedExam, setFinalizedExam] = useState<any | null>(null);
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [examSettings, setExamSettings] = useState({
+    title: '',
+    description: '',
+    targetDepartment: '',
+    durationMinutes: 180,
+    totalMarks: 100,
+    instructions: 'Read all questions carefully. Negative marking applies to incorrect MCQ answers.',
+  });
 
   const [toast, setToast] = useState<string>('');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(''), 5000);
   };
 
-  // ---------------------------------------------------------------- data loading
-
+  // Load Resources & Subjects on Mount
   const loadDocuments = useCallback(async () => {
     setLoadingDocs(true);
     try {
@@ -158,79 +166,315 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
     }
   }, []);
 
+  const loadSubjects = useCallback(async () => {
+    try {
+      const res = await aiService.getQuestionBankSubjects();
+      if (res?.success && res.data?.length > 0) {
+        setSubjects(res.data);
+        if (!selectedSubjectId) setSelectedSubjectId(res.data[0].id);
+      }
+    } catch (e: any) {
+      console.error('Failed to load subjects:', e);
+    }
+  }, [selectedSubjectId]);
+
   useEffect(() => {
-    (async () => {
-      try {
-        const boundsRes = await aiService.getMinMaxConfigBounds();
-        if (boundsRes?.success) {
-          setMinCount(boundsRes.minCount || 50);
-          setMaxCount(boundsRes.maxCount || 500);
-          setTotalQuestions((prev) => Math.max(prev, boundsRes.minCount || 50));
-        }
-      } catch { /* bounds fall back to the defaults above */ }
+    loadDocuments();
+    loadSubjects();
+  }, [loadDocuments, loadSubjects]);
 
-      try {
-        const taxRes = await aiService.getTaxonomy();
-        if (taxRes?.success) setTaxonomy(taxRes.data || []);
-      } catch { /* taxonomy is optional scoping — generation still works without it */ }
+  // Load Topic Availability Matrix when subject changes
+  const loadTopicAvailability = useCallback(async (subjId: string) => {
+    if (!subjId) return;
+    setLoadingTopics(true);
+    try {
+      const res = await aiService.getTopicAvailability(subjId);
+      if (res?.success) {
+        setTopicAvailability(res.data || []);
+        setSelectedTopicIds((res.data || []).map((t: any) => t.topicId));
+      }
+    } catch (e: any) {
+      setErrorMsg(e.response?.data?.message || 'Failed to load topic availability.');
+    } finally {
+      setLoadingTopics(false);
+    }
+  }, []);
 
-      try {
-        const settingsRes = await aiService.getGenerationSettings();
-        if (settingsRes?.success) {
-          setAutoPublishVerified(settingsRes.data.autoPublishVerified);
-          setMaxRegenerationAttempts(settingsRes.data.maxRegenerationAttempts);
-        }
-      } catch { /* governance settings are admin-only; non-admins simply don't see the panel */ }
-
-      loadDocuments();
-    })();
-  }, [loadDocuments]);
-
-  // While any document is still processing, refresh the list so the pipeline stages advance
-  // from real backend job state (never a simulated timer).
   useEffect(() => {
-    const anyProcessing = documents.some(
-      (d) => d.processingJob && !['COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED'].includes(d.processingJob.status)
-    );
-    if (!anyProcessing) return;
-    const t = setInterval(loadDocuments, 5000);
-    return () => clearInterval(t);
-  }, [documents, loadDocuments]);
+    if (selectedSubjectId) {
+      loadTopicAvailability(selectedSubjectId);
+    }
+  }, [selectedSubjectId, loadTopicAvailability]);
 
-  // Keep the delete-selection in sync with whatever's actually still in the list (e.g. a
-  // background refresh picking up a deletion made elsewhere).
-  useEffect(() => {
-    setSelectedDeleteIds((prev) => {
-      const liveIds = new Set(documents.map((d) => d.id));
-      const next = new Set(Array.from(prev).filter((id) => liveIds.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [documents]);
-
+  // Clean up poll timer on unmount
   useEffect(() => () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current); }, []);
 
-  // ---------------------------------------------------------------- derived values
+  // Filter topic matrix by search query
+  const filteredTopicAvailability = topicAvailability.filter((t) => {
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const matchName = t.topicName.toLowerCase().includes(q);
+      if (!matchName) return false;
+    }
+    if (statusFilter === 'VERIFIED_ONLY') return t.verified > 0;
+    if (statusFilter === 'NEEDS_REVIEW_ONLY') return t.needsReview > 0;
+    if (statusFilter === 'UNANSWERED_ONLY') return t.unansweredInSource > 0;
+    return true;
+  });
 
+  // Calculate live availability summary across selected topics
+  const selectedTopicsInfo = topicAvailability.filter((t) => selectedTopicIds.includes(t.topicId));
+  const totalVerifiedAvailable = selectedTopicsInfo.reduce((sum, t) => sum + t.verified, 0);
+  const totalSourceQuestionsAvailable = selectedTopicsInfo.reduce((sum, t) => sum + t.sourceQuestions, 0);
+  const totalAIGeneratedAvailable = selectedTopicsInfo.reduce((sum, t) => sum + t.aiGenerated, 0);
+  const totalNeedsReviewAvailable = selectedTopicsInfo.reduce((sum, t) => sum + t.needsReview, 0);
+
+  // Distribution target calculation helpers
   const diffSum = easyPercent + medPercent + hardPercent;
   const typeSum = mcqPercent + msqPercent + natPercent;
-  const countInRange = totalQuestions >= minCount && totalQuestions <= maxCount;
 
-  const diffCounts = apportion(totalQuestions, { EASY: easyPercent, MEDIUM: medPercent, HARD: hardPercent });
-  const typeCounts = apportion(totalQuestions, { MCQ: mcqPercent, MSQ: msqPercent, NAT: natPercent });
+  // JSONL Question Bank Import Actions
+  const handleSelectJSONLFile = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    setErrorMsg(null);
+    setJsonlFile(file);
+    setIsParsingJSONL(true);
+    setJsonlPreview(null);
+    setJsonlImportResult(null);
 
-  const readyDocs = documents.filter(
-    (d) => d.status === 'READY' || d.processingJob?.status === 'COMPLETED' || d.processingJob?.status === 'COMPLETED_WITH_ERRORS'
-  );
-  const selectedDocs = documents.filter((d) => selectedDocIds.includes(d.id));
+    try {
+      const res = await aiService.previewJSONLImport(file);
+      if (res?.success) {
+        setJsonlPreview(res.data);
+      } else {
+        setErrorMsg(res?.message || 'Failed to parse JSONL file.');
+      }
+    } catch (e: any) {
+      setErrorMsg(e.response?.data?.message || 'Failed to parse JSONL file.');
+    } finally {
+      setIsParsingJSONL(false);
+    }
+  };
 
-  const canGenerate = selectedDocIds.length > 0 && countInRange && diffSum === 100 && typeSum === 100;
+  const handleExecuteJSONLImport = async () => {
+    if (!jsonlFile && !jsonlPreview) return;
+    setErrorMsg(null);
+    setIsImportingJSONL(true);
 
-  const subjects = taxonomy;
-  const topics = subjects.find((s: any) => s.id === selectedSubjectId)?.modules?.flatMap((m: any) => m.topics || []) || [];
-  const subtopics = topics.find((t: any) => t.id === selectedTopicId)?.subtopics || [];
+    try {
+      const res = await aiService.importJSONL(jsonlFile!);
+      if (res?.success) {
+        setJsonlImportResult(res.data);
+        showToast('JSONL Question Bank import complete!');
+        // Refresh Subjects and Topic Availability Matrix from PostgreSQL!
+        await loadSubjects();
+        if (selectedSubjectId) {
+          await loadTopicAvailability(selectedSubjectId);
+        }
+      } else {
+        setErrorMsg(res?.message || 'JSONL Import failed.');
+      }
+    } catch (e: any) {
+      setErrorMsg(e.response?.data?.message || 'JSONL Import failed.');
+    } finally {
+      setIsImportingJSONL(false);
+    }
+  };
 
-  // ---------------------------------------------------------------- actions
+  // Handle Paper Preview calculation
+  const handleCalculatePreview = async () => {
+    setErrorMsg(null);
+    if (selectedTopicIds.length === 0) {
+      setErrorMsg('Please select at least one topic.');
+      return;
+    }
+    if (diffSum !== 100 || typeSum !== 100) {
+      setErrorMsg('Percentages for difficulty and question type must total exactly 100%.');
+      return;
+    }
 
+    setIsLoadingPreview(true);
+    try {
+      const res = await aiService.previewQuestionPaper({
+        subjectId: selectedSubjectId,
+        selectedTopicIds,
+        paperMode,
+        totalQuestions,
+        topicBlueprint,
+        difficultyDistribution: { EASY: easyPercent, MEDIUM: medPercent, HARD: hardPercent },
+        typeDistribution: { MCQ: mcqPercent, MSQ: msqPercent, NAT: natPercent },
+      });
+
+      if (res?.success) {
+        setPreviewData(res.data);
+        setPaperQuestions(res.data.selectedQuestions || []);
+        setSelectedQuestionIds(new Set((res.data.selectedQuestions || []).map((q: any) => q.id)));
+        setActiveStep('configure');
+      }
+    } catch (e: any) {
+      setErrorMsg(e.response?.data?.message || 'Failed to calculate paper preview.');
+    } finally {
+      setIsLoadingPreview(false);
+    }
+  };
+
+  // Handle Async Shortfall AI Generation
+  const handleStartShortfallJob = async () => {
+    setErrorMsg(null);
+    if (!previewData) return;
+
+    if (previewData.aiRequiredCount === 0) {
+      setActiveStep('review');
+      return;
+    }
+
+    setIsGeneratingShortfall(true);
+    setShortfallJobStatus('QUEUED');
+    setShortfallJobMessage('Queued shortfall generation job...');
+    setActiveStep('generate');
+
+    try {
+      const res = await aiService.startShortfallGeneration({
+        subjectId: selectedSubjectId,
+        selectedTopicIds,
+        paperMode,
+        totalQuestions,
+        topicBlueprint,
+        difficultyDistribution: { EASY: easyPercent, MEDIUM: medPercent, HARD: hardPercent },
+        typeDistribution: { MCQ: mcqPercent, MSQ: msqPercent, NAT: natPercent },
+      });
+
+      if (!res?.success) {
+        setErrorMsg(res?.message || 'Shortfall generation request was rejected.');
+        setShortfallJobStatus('FAILED');
+        setIsGeneratingShortfall(false);
+        return;
+      }
+
+      const jobId = res.data.jobId;
+      setShortfallJobId(jobId);
+      pollShortfallJob(jobId);
+    } catch (e: any) {
+      setErrorMsg(e.response?.data?.message || 'Failed to start shortfall generation.');
+      setShortfallJobStatus('FAILED');
+      setIsGeneratingShortfall(false);
+    }
+  };
+
+  const pollShortfallJob = (jobId: string) => {
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await aiService.getShortfallJobStatus(jobId);
+        if (!res?.success) return;
+        const job = res.job;
+        setShortfallJobStatus(job.status);
+        setShortfallJobMessage(job.statusMessage);
+
+        if (['COMPLETED', 'FAILED'].includes(job.status)) {
+          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+          setIsGeneratingShortfall(false);
+
+          if (job.status === 'FAILED') {
+            setErrorMsg(job.statusMessage || 'Shortfall generation failed.');
+          } else {
+            const updatedPreview = await aiService.previewQuestionPaper({
+              subjectId: selectedSubjectId,
+              selectedTopicIds,
+              paperMode,
+              totalQuestions,
+              topicBlueprint,
+              difficultyDistribution: { EASY: easyPercent, MEDIUM: medPercent, HARD: hardPercent },
+              typeDistribution: { MCQ: mcqPercent, MSQ: msqPercent, NAT: natPercent },
+            });
+            if (updatedPreview?.success) {
+              setPreviewData(updatedPreview.data);
+              setPaperQuestions(updatedPreview.data.selectedQuestions || []);
+              setSelectedQuestionIds(new Set((updatedPreview.data.selectedQuestions || []).map((q: any) => q.id)));
+            }
+            setActiveStep('review');
+          }
+        }
+      } catch (err: any) {
+        console.error('[ShortfallPoll] Error:', err.message);
+      }
+    }, 3000);
+  };
+
+  // Finalize Paper into MockTest DRAFT (Never auto-published!)
+  const handleFinalizePaper = async () => {
+    setErrorMsg(null);
+    const selectedIds = Array.from(selectedQuestionIds);
+    if (selectedIds.length === 0) {
+      setErrorMsg('Please select at least one question for the paper.');
+      return;
+    }
+
+    setIsFinalizing(true);
+    try {
+      const selectedSubject = subjects.find((s) => s.id === selectedSubjectId);
+      const res = await aiService.finalizeQuestionPaper({
+        title: examSettings.title || `GATE ${selectedSubject?.name || 'Subject'} Examination Paper`,
+        description: examSettings.description || 'Assembled question paper using approved Question Bank questions.',
+        subjectId: selectedSubjectId,
+        selectedQuestionIds: selectedIds,
+        examSettings: {
+          targetDepartment: examSettings.targetDepartment || selectedSubject?.department || 'Computer Science and Engineering',
+          durationMinutes: examSettings.durationMinutes,
+          totalMarks: examSettings.totalMarks,
+          negativeMarking,
+          solutionVisibility,
+          instructions: examSettings.instructions,
+        },
+      });
+
+      if (res?.success) {
+        setFinalizedExam(res.mockTest);
+        showToast('Question paper finalized! MockTest draft created in database.');
+      }
+    } catch (e: any) {
+      setErrorMsg(e.response?.data?.message || 'Failed to finalize question paper.');
+    } finally {
+      setIsFinalizing(false);
+    }
+  };
+
+  // Explicit Publication Action
+  const handlePublishExamination = async () => {
+    if (!finalizedExam) return;
+    setIsPublishing(true);
+    try {
+      const res = await aiService.publishExamination(finalizedExam.id);
+      if (res?.success) {
+        setFinalizedExam(res.mockTest);
+        showToast('Examination explicitly published for students!');
+      }
+    } catch (e: any) {
+      showToast(e.response?.data?.message || 'Failed to publish examination.');
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  // Question Deletion with Safety Check
+  const handleDeleteQuestion = async (qId: string) => {
+    try {
+      await aiService.deleteQuestionBankQuestion(qId);
+      setPaperQuestions((prev) => prev.filter((q) => q.id !== qId));
+      setSelectedQuestionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(qId);
+        return next;
+      });
+      showToast('Question removed.');
+    } catch (e: any) {
+      showToast(e.response?.data?.message || 'Cannot delete question.');
+    }
+  };
+
+  // Handle Resource Upload
   const handleUploadFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setErrorMsg(null);
@@ -240,15 +484,14 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
         const res = await aiService.uploadDocument(file, file.name, 'FACULTY');
         const newDocId = res?.data?.id;
         if (newDocId) {
-          // Kick off real structure extraction so page/question detection progress is genuine.
           try {
             await aiService.processDocumentStructure(newDocId);
           } catch (e: any) {
-            showToast(`Uploaded "${file.name}", but structure extraction could not be queued: ${e.response?.data?.message || e.message}`);
+            showToast(`Uploaded "${file.name}", but structure extraction could not be queued.`);
           }
         }
       }
-      showToast('Upload complete. Structure extraction is running in the background.');
+      showToast('Upload complete. Structure extraction is running in background.');
       loadDocuments();
     } catch (e: any) {
       setErrorMsg(e.response?.data?.message || 'Upload failed.');
@@ -257,314 +500,32 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
     }
   };
 
-  const handleRemoveDocument = async (docId: string) => {
-    try {
-      await aiService.deleteDocument(docId);
-      setSelectedDocIds((prev) => prev.filter((id) => id !== docId));
-      setSelectedDeleteIds((prev) => {
-        if (!prev.has(docId)) return prev;
-        const next = new Set(prev);
-        next.delete(docId);
-        return next;
-      });
-      showToast('Resource removed.');
-      loadDocuments();
-    } catch (e: any) {
-      showToast(e.response?.data?.message || 'Failed to remove resource.');
-    }
-  };
-
-  const handleToggleSelectDelete = (docId: string) => {
-    setSelectedDeleteIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(docId)) next.delete(docId);
-      else next.add(docId);
-      return next;
-    });
-  };
-
-  const handleToggleSelectAllDelete = () => {
-    setSelectedDeleteIds((prev) =>
-      prev.size === documents.length ? new Set() : new Set(documents.map((d) => d.id))
-    );
-  };
-
-  const handleClearDeleteSelection = () => setSelectedDeleteIds(new Set());
-
-  const handleBulkDeleteDocuments = async () => {
-    const ids = Array.from(selectedDeleteIds);
-    if (ids.length === 0) return;
-    setIsBulkDeleting(true);
-    try {
-      const outcomes = await Promise.allSettled(ids.map((id) => aiService.deleteDocument(id)));
-      const succeededIds = ids.filter((_, i) => outcomes[i].status === 'fulfilled');
-      const failed = outcomes
-        .map((o, i) => ({ o, id: ids[i] }))
-        .filter(({ o }) => o.status === 'rejected') as { o: PromiseRejectedResult; id: string }[];
-
-      setDocuments((prev) => prev.filter((d) => !succeededIds.includes(d.id)));
-      setSelectedDocIds((prev) => prev.filter((id) => !succeededIds.includes(id)));
-      setSelectedDeleteIds(new Set());
-      setIsBulkDeleteConfirmOpen(false);
-
-      if (failed.length === 0) {
-        showToast(`${succeededIds.length} resource(s) deleted.`);
-      } else {
-        const firstReason = failed[0].o.reason?.response?.data?.message || failed[0].o.reason?.message || 'Unknown error';
-        showToast(
-          `${succeededIds.length} deleted, ${failed.length} failed (e.g. "${firstReason}"). Failed resources were left in place.`
-        );
-      }
-      loadDocuments();
-    } finally {
-      setIsBulkDeleting(false);
-    }
-  };
-
-  const handleViewDocument = async (docId: string, fileName: string) => {
-    try {
-      const res = await api.get(`/ai/documents/${docId}/download`, { responseType: 'blob' });
-      const blobUrl = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-      window.open(blobUrl, '_blank');
-    } catch (e: any) {
-      showToast(e.response?.data?.message || `Failed to open ${fileName}`);
-    }
-  };
-
-  const handleSaveSettings = async () => {
-    setSavingSettings(true);
-    try {
-      const res = await aiService.updateGenerationSettings({ autoPublishVerified, maxRegenerationAttempts });
-      if (res?.success) {
-        setAutoPublishVerified(res.data.autoPublishVerified);
-        setMaxRegenerationAttempts(res.data.maxRegenerationAttempts);
-        showToast('Generation governance settings saved.');
-      }
-    } catch (e: any) {
-      showToast(e.response?.data?.message || 'Failed to save settings.');
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
-  const pollJob = (generationRequestId: string) => {
-    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    pollTimerRef.current = setInterval(async () => {
-      try {
-        const res = await aiService.getBatchJobStatus(generationRequestId);
-        if (!res?.success) return;
-        const job = res.job;
-        setJobStatus(job.status);
-        setJobResult(job);
-        setGeneratedQuestions(res.questions || []);
-
-        if (TERMINAL_STATUSES.includes(job.status)) {
-          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-          pollTimerRef.current = null;
-          setIsGenerating(false);
-          if (job.status === 'FAILED') {
-            setErrorMsg(job.statusMessage || 'Generation failed.');
-          } else {
-            setActiveStep('verify');
-          }
-        }
-      } catch (err: any) {
-        // A single failed poll is transient — keep polling rather than aborting a running job.
-        console.error('[QuestionGenerator] Poll error:', err.message);
-      }
-    }, 3000);
-  };
-
-  const handleGenerate = async () => {
-    setErrorMsg(null);
-    if (!canGenerate) return;
-
-    setIsGenerating(true);
-    setJobStatus('QUEUED');
-    setJobResult(null);
-    setGeneratedQuestions([]);
-    setActiveStep('generate');
-
-    const reqId = `gen_batch_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    try {
-      const res = await aiService.generateBatchQuestions({
-        totalQuestions,
-        difficultyDistribution: { EASY: easyPercent, MEDIUM: medPercent, HARD: hardPercent },
-        typeDistribution: { MCQ: mcqPercent, MSQ: msqPercent, NAT: natPercent },
-        negativeMarking,
-        solutionVisibility,
-        sourceReferences,
-        selectedResourceIds: selectedDocIds,
-        subjectId: selectedSubjectId || undefined,
-        topicId: selectedTopicId || undefined,
-        subtopicId: selectedSubtopicId || undefined,
-        generationRequestId: reqId,
-      });
-
-      if (!res?.success) {
-        setErrorMsg(res?.message || 'Generation request was rejected.');
-        setJobStatus('FAILED');
-        setIsGenerating(false);
-        return;
-      }
-
-      setJobResult(res);
-      setJobStatus(res.status);
-      if (TERMINAL_STATUSES.includes(res.status)) {
-        setGeneratedQuestions(res.questions || []);
-        setIsGenerating(false);
-      } else {
-        pollJob(reqId);
-      }
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.message || err.message || 'Failed to start generation.');
-      setJobStatus('FAILED');
-      setIsGenerating(false);
-    }
-  };
-
-  const handleApprove = async (qId: string) => {
-    setActioningId(qId);
-    try {
-      const res = await aiService.approveQuestion(qId);
-      if (res?.success) {
-        setGeneratedQuestions((prev) => prev.map((q) => (q.id === qId ? { ...q, status: 'APPROVED' } : q)));
-        setDetailQuestion((prev: any) => (prev?.id === qId ? { ...prev, status: 'APPROVED' } : prev));
-        showToast('Question approved and published to the Question Bank.');
-      }
-    } catch (e: any) {
-      showToast(e.response?.data?.message || 'Failed to approve question.');
-    } finally {
-      setActioningId(null);
-    }
-  };
-
-  const handleReject = async (qId: string) => {
-    setActioningId(qId);
-    try {
-      const res = await aiService.rejectQuestion(qId);
-      if (res?.success) {
-        setGeneratedQuestions((prev) => prev.map((q) => (q.id === qId ? { ...q, status: 'REJECTED' } : q)));
-        setDetailQuestion((prev: any) => (prev?.id === qId ? { ...prev, status: 'REJECTED' } : prev));
-        showToast('Question rejected.');
-      }
-    } catch (e: any) {
-      showToast(e.response?.data?.message || 'Failed to reject question.');
-    } finally {
-      setActioningId(null);
-    }
-  };
-
-  const handleBulkAction = async () => {
-    const ids = Array.from(selectedQuestionIds);
-    if (ids.length === 0 || !bulkConfirm) return;
-
-    setIsBulkActing(true);
-    const succeeded: string[] = [];
-    const failed: string[] = [];
-
-    // No bulk approve/reject endpoint exists for AI-generated candidates yet, so these run as
-    // real sequential API calls. Every outcome is counted honestly — a partial failure is
-    // reported as a partial failure, never rolled up into a blanket success message.
-    for (const id of ids) {
-      try {
-        const res = bulkConfirm === 'approve' ? await aiService.approveQuestion(id) : await aiService.rejectQuestion(id);
-        if (res?.success) succeeded.push(id);
-        else failed.push(id);
-      } catch {
-        failed.push(id);
-      }
-    }
-
-    const newStatus = bulkConfirm === 'approve' ? 'APPROVED' : 'REJECTED';
-    setGeneratedQuestions((prev) => prev.map((q) => (succeeded.includes(q.id) ? { ...q, status: newStatus } : q)));
-    setSelectedQuestionIds(new Set(failed));
-    setIsBulkActing(false);
-    setBulkConfirm(null);
-
-    showToast(
-      failed.length === 0
-        ? `${succeeded.length} question(s) ${bulkConfirm === 'approve' ? 'approved' : 'rejected'}.`
-        : `${succeeded.length} succeeded, ${failed.length} failed. Failed items remain selected.`
-    );
-  };
-
-  const toggleQuestionSelection = (id: string) => {
-    setSelectedQuestionIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const reviewableQuestions = generatedQuestions;
-  const allReviewSelected = reviewableQuestions.length > 0 && reviewableQuestions.every((q) => selectedQuestionIds.has(q.id));
-
-  const toggleSelectAllReview = () => {
-    if (allReviewSelected) setSelectedQuestionIds(new Set());
-    else setSelectedQuestionIds(new Set(reviewableQuestions.map((q) => q.id)));
-  };
-
-  // Faculty workload: surface anything needing a human first, verified items last.
-  const REVIEW_PRIORITY: Record<string, number> = {
-    ANSWER_CONFLICT: 0,
-    REQUIRES_REVIEW: 1,
-    FAIL: 2,
-    UNVERIFIED: 3,
-    PASS: 4,
-  };
-  const sortedReviewQuestions = [...reviewableQuestions].sort(
-    (a, b) => (REVIEW_PRIORITY[a.verificationStatus] ?? 3) - (REVIEW_PRIORITY[b.verificationStatus] ?? 3)
-  );
-
-  // ---------------------------------------------------------------- shared UI bits
-
-  const VerificationBadge = ({ status }: { status?: string }) => {
-    if (status === 'PASS')
-      return (
+  const VerificationBadge = ({ status, origin }: { status?: string; origin?: string }) => (
+    <div className="flex items-center gap-1">
+      {origin === 'AI_GENERATED' ? (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+          <Sparkles className="w-3 h-3" /> AI
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+          <FileText className="w-3 h-3" /> Source
+        </span>
+      )}
+      {status === 'VERIFIED' ? (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
           <CheckCircle2 className="w-3 h-3" /> Verified
         </span>
-      );
-    if (status === 'ANSWER_CONFLICT')
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200">
-          <AlertTriangle className="w-3 h-3" /> Source conflict
+      ) : status === 'UNANSWERED_IN_SOURCE' ? (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-300">
+          <HelpCircle className="w-3 h-3" /> Unanswered in Source
         </span>
-      );
-    if (status === 'FAIL')
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200">
-          <X className="w-3 h-3" /> Failed verification
+      ) : (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+          <Clock className="w-3 h-3" /> Needs Review
         </span>
-      );
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-        <Clock className="w-3 h-3" /> Needs review
-      </span>
-    );
-  };
-
-  const PercentField = ({ label, value, onChange, count }: { label: string; value: number; onChange: (v: number) => void; count: number }) => (
-    <div className="flex items-center justify-between gap-3 py-2">
-      <label className="text-xs font-medium text-slate-700 w-20 shrink-0">{label}</label>
-      <div className="flex items-center gap-2 shrink-0">
-        <input
-          type="number"
-          min={0}
-          max={100}
-          value={value}
-          onChange={(e) => onChange(Math.max(0, Math.min(100, Number(e.target.value))))}
-          className="w-20 px-2.5 py-1.5 rounded border border-slate-300 bg-white text-slate-900 text-xs font-mono text-right focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-        />
-        <span className="text-xs text-slate-500 w-4">%</span>
-        <span className="text-xs font-mono text-slate-600 w-24 text-right">{count} question{count === 1 ? '' : 's'}</span>
-      </div>
+      )}
     </div>
   );
-
-  // ---------------------------------------------------------------- render
 
   return (
     <div className="bg-slate-50 min-h-full">
@@ -574,23 +535,35 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
         </div>
       )}
 
-      {/* Institutional header */}
+      {/* Institutional Header */}
       <div className="bg-white border-b border-slate-200 px-6 py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-base font-bold text-slate-900 uppercase tracking-wide">AI Question Generator</h1>
+            <h1 className="text-base font-bold text-slate-900 uppercase tracking-wide">
+              Smart Question Paper Builder
+            </h1>
             <p className="text-xs text-slate-600 mt-1 max-w-3xl">
-              Generate source-grounded GATE questions from Faculty/Admin uploaded academic resources.
+              Intelligent, availability-aware examination authoring from normalized Question Bank &amp; indexed source material.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-1 rounded bg-blue-50 text-blue-800 border border-blue-200">Source-grounded</span>
-            <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-1 rounded bg-slate-100 text-slate-700 border border-slate-200">AI-assisted</span>
-            <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-1 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">Automatic verification</span>
+            <button
+              onClick={() => jsonlFileInputRef.current?.click()}
+              className="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" /> Upload Question Bank (.JSONL)
+            </button>
+            <input
+              ref={jsonlFileInputRef}
+              type="file"
+              accept=".jsonl,.txt"
+              className="hidden"
+              onChange={(e) => { handleSelectJSONLFile(e.target.files); e.target.value = ''; }}
+            />
           </div>
         </div>
 
-        {/* Step indicator */}
+        {/* 5-Step Indicator */}
         <div className="flex flex-wrap items-center gap-1 mt-4 overflow-x-auto">
           {STEPS.map((s, idx) => {
             const isActive = activeStep === s.id;
@@ -623,16 +596,178 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
           <div className="bg-red-50 border border-red-200 rounded p-3 flex items-start gap-2.5 text-red-800">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span className="text-xs">{errorMsg}</span>
-            <button onClick={() => setErrorMsg(null)} className="ml-auto text-red-400 hover:text-red-700"><X className="w-4 h-4" /></button>
+            <button onClick={() => setErrorMsg(null)} className="ml-auto text-red-400 hover:text-red-700">
+              <X className="w-4 h-4" />
+            </button>
           </div>
         )}
 
+        {/* JSONL IMPORT PREVIEW & COMPLETION MODAL / VIEW */}
+        {jsonlPreview && !jsonlImportResult && (
+          <section className="bg-white border-2 border-emerald-600 rounded p-6 space-y-5 shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div>
+                <h2 className="text-sm font-bold uppercase text-slate-900">Chapter 1 Question Bank Import Preview</h2>
+                <p className="text-xs text-slate-500 mt-0.5">File: <span className="font-mono font-bold text-slate-800">{jsonlPreview.fileName}</span></p>
+              </div>
+              <button onClick={() => setJsonlPreview(null)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 text-xs font-mono text-center">
+              <div className="p-3 bg-slate-50 border rounded">
+                <div className="text-slate-500 text-[10px]">Records</div>
+                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.totalRecords}</div>
+              </div>
+              <div className="p-3 bg-slate-50 border rounded">
+                <div className="text-slate-500 text-[10px]">Topics</div>
+                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.topicsCount}</div>
+              </div>
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded">
+                <div className="text-emerald-700 text-[10px]">Verified</div>
+                <div className="font-bold text-emerald-900 mt-1">{jsonlPreview.verifiedCount}</div>
+              </div>
+              <div className="p-3 bg-slate-100 border border-slate-300 rounded">
+                <div className="text-slate-700 text-[10px]">Unanswered</div>
+                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.unansweredInSourceCount}</div>
+              </div>
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded">
+                <div className="text-amber-700 text-[10px]">Needs Review</div>
+                <div className="font-bold text-amber-900 mt-1">{jsonlPreview.needsReviewCount}</div>
+              </div>
+              <div className="p-3 bg-slate-50 border rounded">
+                <div className="text-slate-500 text-[10px]">Rejected</div>
+                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.rejectedCount}</div>
+              </div>
+              <div className="p-3 bg-slate-50 border rounded">
+                <div className="text-slate-500 text-[10px]">Duplicates</div>
+                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.duplicateCount}</div>
+              </div>
+              <div className="p-3 bg-slate-50 border rounded">
+                <div className="text-slate-500 text-[10px]">Invalid</div>
+                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.invalidCount}</div>
+              </div>
+            </div>
+
+            {/* Topic Breakdown Table */}
+            <div className="border border-slate-200 rounded max-h-60 overflow-y-auto">
+              <table className="w-full text-xs font-mono">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 sticky top-0">
+                  <tr className="text-left">
+                    <th className="px-3 py-2 font-semibold">Topic</th>
+                    <th className="px-3 py-2 font-semibold text-center">Total</th>
+                    <th className="px-3 py-2 font-semibold text-center">Verified</th>
+                    <th className="px-3 py-2 font-semibold text-center">Unanswered</th>
+                    <th className="px-3 py-2 font-semibold text-center">Needs Review</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {jsonlPreview.topicBreakdown.map((t: any) => (
+                    <tr key={t.topicHeading}>
+                      <td className="px-3 py-2 font-semibold text-slate-900">{t.topicHeading}</td>
+                      <td className="px-3 py-2 text-center">{t.total}</td>
+                      <td className="px-3 py-2 text-center text-emerald-700 font-bold">{t.verified}</td>
+                      <td className="px-3 py-2 text-center text-slate-600">{t.unansweredInSource}</td>
+                      <td className="px-3 py-2 text-center text-amber-700">{t.needsReview}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
+              <button onClick={() => setJsonlPreview(null)} className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded hover:bg-slate-50">
+                Cancel
+              </button>
+              <button
+                onClick={handleExecuteJSONLImport}
+                disabled={isImportingJSONL}
+                className="px-6 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isImportingJSONL ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Import {jsonlPreview.totalRecords} Questions to PostgreSQL
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* JSONL IMPORT COMPLETION SCREEN */}
+        {jsonlImportResult && (
+          <section className="bg-emerald-50 border-2 border-emerald-600 rounded p-6 space-y-4 text-emerald-950">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+              <div>
+                <h2 className="text-base font-bold uppercase">CHAPTER 1 IMPORT COMPLETE</h2>
+                <p className="text-xs text-emerald-800 mt-0.5">
+                  Successfully transactionally imported {jsonlImportResult.importedCount} questions into PostgreSQL.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 text-xs font-mono text-center">
+              <div className="p-2.5 bg-white border border-emerald-200 rounded">
+                <div className="text-slate-500 text-[10px]">Processed</div>
+                <div className="font-bold text-slate-900">{jsonlImportResult.totalProcessed}</div>
+              </div>
+              <div className="p-2.5 bg-white border border-emerald-200 rounded">
+                <div className="text-slate-500 text-[10px]">Imported</div>
+                <div className="font-bold text-emerald-700">{jsonlImportResult.importedCount}</div>
+              </div>
+              <div className="p-2.5 bg-white border border-emerald-200 rounded">
+                <div className="text-slate-500 text-[10px]">Skipped</div>
+                <div className="font-bold text-slate-700">{jsonlImportResult.skippedCount}</div>
+              </div>
+              <div className="p-2.5 bg-white border border-emerald-200 rounded">
+                <div className="text-slate-500 text-[10px]">Duplicates</div>
+                <div className="font-bold text-slate-700">{jsonlImportResult.duplicateCount}</div>
+              </div>
+              <div className="p-2.5 bg-white border border-emerald-200 rounded">
+                <div className="text-slate-500 text-[10px]">VERIFIED</div>
+                <div className="font-bold text-emerald-700">{jsonlImportResult.verifiedCount}</div>
+              </div>
+              <div className="p-2.5 bg-white border border-emerald-200 rounded">
+                <div className="text-slate-500 text-[10px]">UNANSWERED</div>
+                <div className="font-bold text-slate-700">{jsonlImportResult.unansweredCount}</div>
+              </div>
+              <div className="p-2.5 bg-white border border-emerald-200 rounded">
+                <div className="text-slate-500 text-[10px]">NEEDS REVIEW</div>
+                <div className="font-bold text-amber-700">{jsonlImportResult.needsReviewCount}</div>
+              </div>
+              <div className="p-2.5 bg-white border border-emerald-200 rounded">
+                <div className="text-slate-500 text-[10px]">REJECTED</div>
+                <div className="font-bold text-slate-700">{jsonlImportResult.rejectedCount}</div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => {
+                  setJsonlImportResult(null);
+                  setJsonlPreview(null);
+                  setActiveStep('topics');
+                }}
+                className="px-5 py-2 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-bold rounded flex items-center gap-1.5"
+              >
+                View Question Bank <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </section>
+        )}
+
         {/* ============================ STEP 1 — RESOURCES ============================ */}
-        {activeStep === 'resources' && (
+        {activeStep === 'resources' && !jsonlPreview && !jsonlImportResult && (
           <div className="space-y-5">
             <section className="bg-white border border-slate-200 rounded">
-              <header className="px-5 py-3 border-b border-slate-200">
-                <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Source Resources</h2>
+              <header className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+                <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Source Resources &amp; Question Bank Files</h2>
+                <button
+                  type="button"
+                  onClick={() => jsonlFileInputRef.current?.click()}
+                  className="px-3 py-1.5 rounded bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 flex items-center gap-1 cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" /> Upload Question Bank (.JSONL)
+                </button>
               </header>
               <div className="p-5">
                 <div
@@ -644,26 +779,28 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                   }`}
                 >
                   <UploadCloud className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-slate-800">Upload academic resources</p>
-                  <p className="text-xs text-slate-500 mt-1">Drag &amp; drop PDF / e-book / study material</p>
-                  <p className="text-[11px] text-slate-400 mt-2">Supported: PDF • Scanned PDF • E-book • Text-based academic resources</p>
-                  <button
-                    type="button"
-                    disabled={isUploading}
-                    onClick={() => fileInputRef.current?.click()}
-                    className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded bg-[#1E40AF] text-white text-xs font-semibold hover:bg-blue-800 disabled:opacity-50"
-                  >
-                    {isUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
-                    {isUploading ? 'Uploading...' : 'Browse Files'}
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".pdf,.docx,.txt"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => { handleUploadFiles(e.target.files); e.target.value = ''; }}
-                  />
+                  <p className="text-sm font-semibold text-slate-800">Upload academic resources or Question Bank files</p>
+                  <p className="text-xs text-slate-500 mt-1">Drag &amp; drop PDF / e-book / JSONL files</p>
+                  <p className="text-[11px] text-slate-400 mt-2">Supported: PDF • Scanned PDF • JSONL Question Banks</p>
+                  <div className="flex items-center justify-center gap-3 mt-4">
+                    <button
+                      type="button"
+                      disabled={isUploading}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded bg-[#1E40AF] text-white text-xs font-semibold hover:bg-blue-800 disabled:opacity-50"
+                    >
+                      {isUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+                      {isUploading ? 'Uploading...' : 'Browse Resources'}
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,.docx,.txt"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => { handleUploadFiles(e.target.files); e.target.value = ''; }}
+                    />
+                  </div>
                 </div>
               </div>
             </section>
@@ -673,132 +810,242 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                 <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
                   Uploaded Resources ({documents.length})
                 </h2>
-                <button onClick={loadDocuments} disabled={loadingDocs} className="text-xs text-blue-700 hover:underline flex items-center gap-1 disabled:opacity-50">
-                  <RefreshCw className={`w-3 h-3 ${loadingDocs ? 'animate-spin' : ''}`} /> Refresh
-                </button>
-              </header>
-
-              {selectedDeleteIds.size > 0 && (
-                <div className="px-5 py-2 border-b border-slate-200 bg-blue-50/60 flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-slate-800">{selectedDeleteIds.size} selected</span>
-                  <div className="flex items-center gap-2">
-                    <button onClick={handleClearDeleteSelection} className="text-xs text-slate-600 hover:underline">
-                      Clear Selection
-                    </button>
-                    <button
-                      onClick={() => setIsBulkDeleteConfirmOpen(true)}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-red-700 text-white text-xs font-semibold hover:bg-red-800"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" /> Delete Selected
-                    </button>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={loadDocuments} disabled={loadingDocs} className="text-xs text-blue-700 hover:underline flex items-center gap-1 disabled:opacity-50">
+                    <RefreshCw className={`w-3 h-3 ${loadingDocs ? 'animate-spin' : ''}`} /> Refresh
+                  </button>
+                  <button
+                    onClick={() => setActiveStep('topics')}
+                    className="px-4 py-1.5 rounded bg-[#1E40AF] text-white text-xs font-semibold hover:bg-blue-800 flex items-center gap-1"
+                  >
+                    Next: Topic Availability <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-              )}
+              </header>
 
               {documents.length === 0 ? (
                 <div className="px-5 py-6 text-center">
                   <p className="text-xs font-semibold text-slate-700">No resources uploaded yet.</p>
-                  <p className="text-xs text-slate-500 mt-1">Upload a GATE-related resource to begin question generation.</p>
+                  <p className="text-xs text-slate-500 mt-1">Upload a GATE-related resource or JSONL Question Bank to begin.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr className="text-left text-slate-600">
-                        <th className="px-3 py-2 font-semibold w-8">
-                          <input
-                            type="checkbox"
-                            className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
-                            checked={documents.length > 0 && selectedDeleteIds.size === documents.length}
-                            ref={(el) => {
-                              if (el) el.indeterminate = selectedDeleteIds.size > 0 && selectedDeleteIds.size < documents.length;
-                            }}
-                            title="Select all for deletion"
-                            onChange={handleToggleSelectAllDelete}
-                          />
-                        </th>
-                        <th className="px-3 py-2 font-semibold w-8" title="Use this resource for generation"></th>
                         <th className="px-3 py-2 font-semibold">Resource Name</th>
                         <th className="px-3 py-2 font-semibold">Type</th>
                         <th className="px-3 py-2 font-semibold">Pages</th>
                         <th className="px-3 py-2 font-semibold">Processing Status</th>
-                        <th className="px-3 py-2 font-semibold">Detected</th>
-                        <th className="px-3 py-2 font-semibold">Uploaded By</th>
+                        <th className="px-3 py-2 font-semibold">Detected Questions</th>
                         <th className="px-3 py-2 font-semibold">Uploaded</th>
-                        <th className="px-3 py-2 font-semibold">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {documents.map((doc) => {
                         const job = doc.processingJob;
-                        const isReady = job?.status === 'COMPLETED' || job?.status === 'COMPLETED_WITH_ERRORS' || doc.status === 'READY';
-                        const isFailed = job?.status === 'FAILED' || doc.status === 'FAILED';
-                        const inProgress = job && !['COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED'].includes(job.status);
+                        const isReady = job?.status === 'COMPLETED' || doc.status === 'READY';
                         return (
-                          <tr key={doc.id} className={selectedDeleteIds.has(doc.id) ? 'bg-red-50/40' : selectedDocIds.includes(doc.id) ? 'bg-blue-50/40' : ''}>
-                            <td className="px-3 py-2.5">
-                              <input
-                                type="checkbox"
-                                className="rounded text-red-600 focus:ring-red-500 cursor-pointer"
-                                checked={selectedDeleteIds.has(doc.id)}
-                                title="Select for deletion"
-                                onChange={() => handleToggleSelectDelete(doc.id)}
-                              />
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <input
-                                type="checkbox"
-                                className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                checked={selectedDocIds.includes(doc.id)}
-                                disabled={!isReady}
-                                title={isReady ? 'Use this resource for generation' : 'Resource is not ready yet'}
-                                onChange={() =>
-                                  setSelectedDocIds((prev) =>
-                                    prev.includes(doc.id) ? prev.filter((id) => id !== doc.id) : [...prev, doc.id]
-                                  )
-                                }
-                              />
-                            </td>
-                            <td className="px-3 py-2.5 font-semibold text-slate-900 max-w-xs truncate" title={doc.title}>{doc.title}</td>
+                          <tr key={doc.id}>
+                            <td className="px-3 py-2.5 font-semibold text-slate-900">{doc.title}</td>
                             <td className="px-3 py-2.5 text-slate-600">{doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType || '—'}</td>
-                            <td className="px-3 py-2.5 font-mono text-slate-700">
-                              {job?.totalPages
-                                ? inProgress
-                                  ? `${job.pagesProcessed}/${job.totalPages}`
-                                  : `${job.totalPages}`
-                                : '—'}
-                            </td>
+                            <td className="px-3 py-2.5 font-mono text-slate-700">{job?.totalPages || '—'}</td>
                             <td className="px-3 py-2.5">
-                              {isFailed ? (
-                                <span className="inline-flex items-center gap-1 text-red-700 font-semibold">
-                                  <X className="w-3 h-3" /> {PROCESSING_STAGE_LABEL[job?.status] || 'Failed'}
-                                </span>
-                              ) : isReady ? (
+                              {isReady ? (
                                 <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
-                                  <CheckCircle2 className="w-3 h-3" /> {job ? PROCESSING_STAGE_LABEL[job.status] : 'Ready'}
-                                </span>
-                              ) : job ? (
-                                <span className="inline-flex items-center gap-1 text-blue-700 font-semibold">
-                                  <Loader2 className="w-3 h-3 animate-spin" /> {PROCESSING_STAGE_LABEL[job.status] || job.status}
+                                  <CheckCircle2 className="w-3 h-3" /> Ready
                                 </span>
                               ) : (
-                                <span className="text-slate-500">{doc.status}</span>
+                                <span className="inline-flex items-center gap-1 text-blue-700 font-semibold">
+                                  <Loader2 className="w-3 h-3 animate-spin" /> Processing
+                                </span>
                               )}
                             </td>
-                            <td className="px-3 py-2.5 font-mono text-slate-700">
-                              {job ? `${job.questionsFound}Q / ${job.mappingsResolved} mapped` : '—'}
-                            </td>
-                            <td className="px-3 py-2.5 text-slate-600">{doc.uploadedBy?.name || '—'}</td>
+                            <td className="px-3 py-2.5 font-mono text-slate-700">{job?.questionsFound || 0} extracted</td>
                             <td className="px-3 py-2.5 font-mono text-slate-500">{new Date(doc.createdAt).toLocaleDateString()}</td>
-                            <td className="px-3 py-2.5">
-                              <div className="flex items-center gap-1">
-                                <button onClick={() => handleViewDocument(doc.id, doc.title)} className="p-1.5 text-blue-700 hover:bg-blue-50 rounded" title="View resource">
-                                  <Eye className="w-3.5 h-3.5" />
-                                </button>
-                                <button onClick={() => handleRemoveDocument(doc.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Remove resource">
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* ============================ STEP 2 — TOPIC AVAILABILITY MATRIX ============================ */}
+        {activeStep === 'topics' && (
+          <div className="space-y-5">
+            {/* Subject Selector & Live Availability Summary */}
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+              <div className="lg:col-span-3 bg-white border border-slate-200 rounded p-5 space-y-3">
+                <label className="block text-xs font-bold uppercase text-slate-700 tracking-wider">Select Subject</label>
+                <select
+                  value={selectedSubjectId}
+                  onChange={(e) => setSelectedSubjectId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded text-xs font-semibold text-slate-900 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  {subjects.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.code}) — {s.totalTopics} Topics / {s.totalQuestions} Questions
+                    </option>
+                  ))}
+                </select>
+
+                {/* Filter and Search Bar */}
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search topic or ID (e.g. 1.5.41 or Cache Memory)..."
+                      className="w-full pl-9 pr-3 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="px-3 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-700 font-semibold"
+                  >
+                    <option value="ALL">All Statuses</option>
+                    <option value="VERIFIED_ONLY">Verified Only</option>
+                    <option value="NEEDS_REVIEW_ONLY">Needs Review Only</option>
+                    <option value="UNANSWERED_ONLY">Unanswered Only</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Live Metric Summary Panel */}
+              <div className="bg-slate-900 text-white rounded p-4 flex flex-col justify-between">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Selection Summary</div>
+                  <div className="mt-2 space-y-1 font-mono text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Selected Topics:</span>
+                      <span className="font-bold text-white">{selectedTopicIds.length}</span>
+                    </div>
+                    <div className="flex justify-between text-emerald-400">
+                      <span>Verified Available:</span>
+                      <span className="font-bold">{totalVerifiedAvailable}</span>
+                    </div>
+                    <div className="flex justify-between text-blue-400">
+                      <span>Source Questions:</span>
+                      <span className="font-bold">{totalSourceQuestionsAvailable}</span>
+                    </div>
+                    <div className="flex justify-between text-purple-400">
+                      <span>AI Generated:</span>
+                      <span className="font-bold">{totalAIGeneratedAvailable}</span>
+                    </div>
+                    <div className="flex justify-between text-amber-400">
+                      <span>Needs Review:</span>
+                      <span className="font-bold">{totalNeedsReviewAvailable}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-[10px] text-slate-400 mt-3 pt-2 border-t border-slate-800">
+                  Only VERIFIED questions count toward immediately usable question pool.
+                </div>
+              </div>
+            </div>
+
+            {/* Real DB-Driven Topic Matrix */}
+            <section className="bg-white border border-slate-200 rounded">
+              <header className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+                <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                  Indexed Question Bank Topics ({filteredTopicAvailability.length})
+                </h2>
+                <div className="flex items-center gap-3">
+                  <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 font-semibold cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={filteredTopicAvailability.length > 0 && selectedTopicIds.length === filteredTopicAvailability.length}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedTopicIds(filteredTopicAvailability.map((t) => t.topicId));
+                        else setSelectedTopicIds([]);
+                      }}
+                      className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    Select All Filtered
+                  </label>
+                  <button
+                    onClick={handleCalculatePreview}
+                    disabled={selectedTopicIds.length === 0}
+                    className="px-4 py-1.5 rounded bg-[#1E40AF] text-white text-xs font-semibold hover:bg-blue-800 disabled:opacity-50 flex items-center gap-1"
+                  >
+                    Configure Paper <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </header>
+
+              {loadingTopics ? (
+                <div className="p-8 text-center text-slate-500 text-xs flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> Querying PostgreSQL topic availability...
+                </div>
+              ) : filteredTopicAvailability.length === 0 ? (
+                <div className="p-8 text-center text-slate-500 text-xs">
+                  No topics available for this subject in the database.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-left">
+                      <tr>
+                        <th className="px-4 py-2.5 font-semibold w-10">Select</th>
+                        <th className="px-4 py-2.5 font-semibold">Topic Name</th>
+                        <th className="px-4 py-2.5 font-semibold text-center">Total</th>
+                        <th className="px-4 py-2.5 font-semibold text-center">Verified</th>
+                        <th className="px-4 py-2.5 font-semibold text-center">Needs Review</th>
+                        <th className="px-4 py-2.5 font-semibold text-center">Source Qs</th>
+                        <th className="px-4 py-2.5 font-semibold text-center">AI Qs</th>
+                        <th className="px-4 py-2.5 font-semibold text-center">MCQ / MSQ / NAT</th>
+                        <th className="px-4 py-2.5 font-semibold text-center">Easy / Med / Hard</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredTopicAvailability.map((t) => {
+                        const isSelected = selectedTopicIds.includes(t.topicId);
+                        return (
+                          <tr key={t.topicId} className={isSelected ? 'bg-blue-50/40' : ''}>
+                            <td className="px-4 py-2.5 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  if (e.target.checked) setSelectedTopicIds((prev) => [...prev, t.topicId]);
+                                  else setSelectedTopicIds((prev) => prev.filter((id) => id !== t.topicId));
+                                }}
+                                className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </td>
+                            <td className="px-4 py-2.5 font-semibold text-slate-900">
+                              {t.topicName}
+                              {!t.hasSourceMaterial && (
+                                <span className="ml-2 text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                  No Source Material
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 font-mono text-center">{t.total}</td>
+                            <td className="px-4 py-2.5 font-mono text-center font-bold text-emerald-700">
+                              {t.verified > 0 ? (
+                                <span className="bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded border border-emerald-200">
+                                  {t.verified} verified
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">No verified questions</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 font-mono text-center text-amber-700">{t.needsReview}</td>
+                            <td className="px-4 py-2.5 font-mono text-center text-blue-700">{t.sourceQuestions}</td>
+                            <td className="px-4 py-2.5 font-mono text-center text-purple-700">{t.aiGenerated}</td>
+                            <td className="px-4 py-2.5 font-mono text-center text-slate-600">
+                              {t.types.MCQ} / {t.types.MSQ} / {t.types.NAT}
+                            </td>
+                            <td className="px-4 py-2.5 font-mono text-center text-slate-600">
+                              {t.difficulty.EASY} / {t.difficulty.MEDIUM} / {t.difficulty.HARD}
                             </td>
                           </tr>
                         );
@@ -808,731 +1055,380 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                 </div>
               )}
             </section>
-
-            {/* Per-resource real pipeline detail for anything currently processing or failed */}
-            {documents.filter((d) => d.processingJob).map((doc) => {
-              const job = doc.processingJob;
-              const inProgress = !['COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED'].includes(job.status);
-              if (!inProgress && job.status !== 'FAILED' && job.status !== 'COMPLETED_WITH_ERRORS') return null;
-              return (
-                <section key={doc.id} className={`bg-white border rounded p-4 ${job.status === 'FAILED' ? 'border-red-200' : 'border-slate-200'}`}>
-                  <h3 className="text-xs font-bold text-slate-900 mb-2">{doc.title}</h3>
-                  {job.status === 'FAILED' ? (
-                    <p className="text-xs text-red-700 flex items-start gap-1.5">
-                      <X className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                      <span>Processing failed: {job.error || job.statusMessage || 'Unknown error.'}</span>
-                    </p>
-                  ) : (
-                    <div className="space-y-1.5 text-xs">
-                      <div className="flex items-center gap-2 text-slate-700">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Uploaded
-                      </div>
-                      <div className="flex items-center gap-2 text-slate-700">
-                        {job.totalPages ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />}
-                        {job.totalPages ? `${job.pagesProcessed} of ${job.totalPages} pages extracted` : 'Extracting pages'}
-                      </div>
-                      <div className="flex items-center gap-2 text-slate-700">
-                        {job.questionsFound > 0 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <Clock className="w-3.5 h-3.5 text-slate-400" />}
-                        {job.questionsFound} questions detected
-                      </div>
-                      <div className="flex items-center gap-2 text-slate-700">
-                        {job.mappingsResolved > 0 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <Clock className="w-3.5 h-3.5 text-slate-400" />}
-                        {job.mappingsResolved} answer keys mapped
-                        {job.mappingsUncertain > 0 && <span className="text-amber-700">({job.mappingsUncertain} uncertain)</span>}
-                      </div>
-                      {job.totalPages > 0 && (
-                        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden mt-2">
-                          <div className="h-full bg-blue-600 transition-all duration-500" style={{ width: `${Math.min(100, Math.round((job.pagesProcessed / job.totalPages) * 100))}%` }} />
-                        </div>
-                      )}
-                      {job.statusMessage && <p className="text-[11px] text-slate-500 pt-1">{job.statusMessage}</p>}
-                    </div>
-                  )}
-                </section>
-              );
-            })}
-
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-slate-600">
-                {selectedDocIds.length === 0
-                  ? readyDocs.length === 0
-                    ? 'No resources are ready for generation yet.'
-                    : 'Select one or more ready resources to continue.'
-                  : `${selectedDocIds.length} resource(s) selected.`}
-              </p>
-              <button
-                type="button"
-                disabled={selectedDocIds.length === 0}
-                onClick={() => setActiveStep('configure')}
-                className="px-5 py-2 rounded bg-[#1E40AF] text-white text-xs font-semibold hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Continue to Configuration →
-              </button>
-            </div>
           </div>
         )}
 
-        {/* ============================ STEP 2 — CONFIGURE ============================ */}
+        {/* ============================ STEP 3 — CONFIGURATION & SHORTFALL CHECK ============================ */}
         {activeStep === 'configure' && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-            {/* LEFT: configuration */}
-            <div className="xl:col-span-2 space-y-5">
-              <section className="bg-white border border-slate-200 rounded">
-                <header className="px-5 py-3 border-b border-slate-200">
-                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Question Paper Configuration</h2>
-                </header>
-                <div className="p-5 space-y-5">
+          <div className="space-y-5">
+            {/* Mode Selection */}
+            <div className="bg-white border border-slate-200 rounded p-5 space-y-4">
+              <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Paper Assembly Mode</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label
+                  onClick={() => setPaperMode('TOTAL_COUNT')}
+                  className={`p-4 border rounded cursor-pointer transition-colors ${
+                    paperMode === 'TOTAL_COUNT' ? 'border-blue-600 bg-blue-50/50' : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 font-bold text-xs text-slate-900">
+                    <input type="radio" checked={paperMode === 'TOTAL_COUNT'} onChange={() => {}} className="text-blue-600" />
+                    MODE A — Total Question Count
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Faculty enters a single total count. The system selects across all selected topics according to distribution.
+                  </p>
+                </label>
+
+                <label
+                  onClick={() => setPaperMode('TOPIC_BLUEPRINT')}
+                  className={`p-4 border rounded cursor-pointer transition-colors ${
+                    paperMode === 'TOPIC_BLUEPRINT' ? 'border-blue-600 bg-blue-50/50' : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 font-bold text-xs text-slate-900">
+                    <input type="radio" checked={paperMode === 'TOPIC_BLUEPRINT'} onChange={() => {}} className="text-blue-600" />
+                    MODE B — Topic-Wise Blueprint
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Faculty specifies exact required question count per selected topic. Validates each topic independently.
+                  </p>
+                </label>
+              </div>
+            </div>
+
+            {/* Custom Question Count & Blueprint inputs */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+              <div className="lg:col-span-2 bg-white border border-slate-200 rounded p-5 space-y-4">
+                {paperMode === 'TOTAL_COUNT' ? (
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">Total Questions</label>
-                    <input
-                      type="number"
-                      min={minCount}
-                      max={maxCount}
-                      value={totalQuestions}
-                      onChange={(e) => setTotalQuestions(Number(e.target.value))}
-                      className={`w-full max-w-xs px-3 py-2.5 rounded border bg-white text-slate-900 text-lg font-mono font-semibold focus:outline-none focus:ring-1 ${
-                        countInRange ? 'border-slate-300 focus:ring-blue-500 focus:border-blue-500' : 'border-red-400 focus:ring-red-500'
-                      }`}
-                    />
-                    <p className={`text-xs mt-1.5 ${countInRange ? 'text-slate-500' : 'text-red-700 font-semibold'}`}>
-                      Minimum: {minCount} &nbsp;•&nbsp; Maximum: {maxCount}
-                      {!countInRange && ' — value is outside the permitted range.'}
-                    </p>
-                  </div>
-
-                  <div className="border-t border-slate-100 pt-4">
-                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Target</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs text-slate-600 mb-1">Subject</label>
-                        <select
-                          value={selectedSubjectId}
-                          onChange={(e) => { setSelectedSubjectId(e.target.value); setSelectedTopicId(''); setSelectedSubtopicId(''); }}
-                          className="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        >
-                          <option value="">All Subjects</option>
-                          {subjects.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs text-slate-600 mb-1">Topic</label>
-                        <select
-                          value={selectedTopicId}
-                          onChange={(e) => { setSelectedTopicId(e.target.value); setSelectedSubtopicId(''); }}
-                          disabled={!selectedSubjectId}
-                          className="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs text-slate-900 disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        >
-                          <option value="">All Topics</option>
-                          {topics.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs text-slate-600 mb-1">Subtopic</label>
-                        <select
-                          value={selectedSubtopicId}
-                          onChange={(e) => setSelectedSubtopicId(e.target.value)}
-                          disabled={!selectedTopicId}
-                          className="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs text-slate-900 disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        >
-                          <option value="">All Subtopics</option>
-                          {subtopics.map((st: any) => <option key={st.id} value={st.id}>{st.name}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                    {subjects.length === 0 && (
-                      <p className="text-[11px] text-slate-500 mt-2">No taxonomy is configured yet — generation will use the full available source content.</p>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              <section className="bg-white border border-slate-200 rounded">
-                <header className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
-                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Difficulty Distribution</h2>
-                  <span className={`text-xs font-semibold ${diffSum === 100 ? 'text-emerald-700' : 'text-red-700'}`}>
-                    {diffSum === 100 ? '✓ Totals 100%' : `⚠ Must total 100% (currently ${diffSum}%)`}
-                  </span>
-                </header>
-                <div className="p-5 divide-y divide-slate-100">
-                  <PercentField label="Easy" value={easyPercent} onChange={setEasyPercent} count={diffCounts.EASY} />
-                  <PercentField label="Medium" value={medPercent} onChange={setMedPercent} count={diffCounts.MEDIUM} />
-                  <PercentField label="Hard" value={hardPercent} onChange={setHardPercent} count={diffCounts.HARD} />
-                </div>
-              </section>
-
-              <section className="bg-white border border-slate-200 rounded">
-                <header className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
-                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Question Type Distribution</h2>
-                  <span className={`text-xs font-semibold ${typeSum === 100 ? 'text-emerald-700' : 'text-red-700'}`}>
-                    {typeSum === 100 ? '✓ Totals 100%' : `⚠ Must total 100% (currently ${typeSum}%)`}
-                  </span>
-                </header>
-                <div className="p-5 divide-y divide-slate-100">
-                  <PercentField label="MCQ" value={mcqPercent} onChange={setMcqPercent} count={typeCounts.MCQ} />
-                  <PercentField label="MSQ" value={msqPercent} onChange={setMsqPercent} count={typeCounts.MSQ} />
-                  <PercentField label="NAT" value={natPercent} onChange={setNatPercent} count={typeCounts.NAT} />
-                </div>
-              </section>
-
-              <section className="bg-white border border-slate-200 rounded">
-                <header className="px-5 py-3 border-b border-slate-200">
-                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Exam Settings</h2>
-                </header>
-                <div className="p-5 space-y-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-semibold text-slate-800">Negative Marking</p>
-                      <p className="text-[11px] text-slate-500">Applies GATE-standard negative marks to MCQ items.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setNegativeMarking(!negativeMarking)}
-                      className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${negativeMarking ? 'bg-[#1E40AF]' : 'bg-slate-300'}`}
-                    >
-                      <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${negativeMarking ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between gap-4 border-t border-slate-100 pt-3">
-                    <div>
-                      <p className="text-xs font-semibold text-slate-800">Source References</p>
-                      <p className="text-[11px] text-slate-500">Attach the originating document and page to each question.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSourceReferences(!sourceReferences)}
-                      className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${sourceReferences ? 'bg-[#1E40AF]' : 'bg-slate-300'}`}
-                    >
-                      <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${sourceReferences ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                    </button>
-                  </div>
-                  <div className="border-t border-slate-100 pt-3">
-                    <label className="block text-xs font-semibold text-slate-800 mb-1.5">Solution Visibility</label>
-                    <select
-                      value={solutionVisibility}
-                      onChange={(e) => setSolutionVisibility(e.target.value)}
-                      className="w-full max-w-sm px-2.5 py-2 rounded border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    >
-                      <option value="SHOW_AFTER_RESULT">Visible after result publication</option>
-                      <option value="SHOW_IMMEDIATELY">Visible immediately after submission</option>
-                      <option value="HIDDEN">Hidden from students (Faculty only)</option>
-                    </select>
-                  </div>
-                </div>
-              </section>
-
-              {role === 'ADMIN' && (
-                <section className="bg-white border border-slate-200 rounded">
-                  <header className="px-5 py-3 border-b border-slate-200">
-                    <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Administrator — Generation Governance</h2>
-                  </header>
-                  <div className="p-5 space-y-3">
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <p className="text-xs font-semibold text-slate-800">Auto-publish verified questions</p>
-                        <p className="text-[11px] text-slate-500">Questions passing independent verification enter the Question Bank without manual approval.</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setAutoPublishVerified(!autoPublishVerified)}
-                        className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${autoPublishVerified ? 'bg-[#1E40AF]' : 'bg-slate-300'}`}
-                      >
-                        <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${autoPublishVerified ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                      </button>
-                    </div>
-                    <div className="flex items-center justify-between gap-4 border-t border-slate-100 pt-3">
-                      <div>
-                        <p className="text-xs font-semibold text-slate-800">Max regeneration rounds</p>
-                        <p className="text-[11px] text-slate-500">Extra attempts to make up a shortfall before reporting it honestly.</p>
-                      </div>
+                    <label className="block text-xs font-bold uppercase text-slate-700 tracking-wider mb-2">Total Questions</label>
+                    <div className="flex items-center gap-3">
                       <input
                         type="number"
-                        min={0}
-                        max={5}
-                        value={maxRegenerationAttempts}
-                        onChange={(e) => setMaxRegenerationAttempts(Number(e.target.value))}
-                        className="w-16 px-2 py-1.5 rounded border border-slate-300 text-xs font-mono text-right focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        min={minCount}
+                        max={maxCount}
+                        value={totalQuestions}
+                        onChange={(e) => setTotalQuestions(Math.max(minCount, Math.min(maxCount, Number(e.target.value))))}
+                        className="w-32 px-3 py-2 border border-slate-300 rounded font-mono text-sm font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
+                      <span className="text-xs text-slate-500">Configured bounds: {minCount} min – {maxCount} max</span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleSaveSettings}
-                      disabled={savingSettings}
-                      className="text-xs font-semibold text-blue-700 hover:underline disabled:opacity-50"
-                    >
-                      {savingSettings ? 'Saving...' : 'Save Governance Settings'}
-                    </button>
                   </div>
-                </section>
-              )}
-            </div>
-
-            {/* RIGHT: summary rail */}
-            <div className="space-y-5">
-              <section className="bg-white border border-slate-200 rounded">
-                <header className="px-5 py-3 border-b border-slate-200">
-                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Source Grounding</h2>
-                </header>
-                <div className="p-5 space-y-2">
-                  <p className="text-xs text-slate-600">
-                    Questions are generated only from the selected uploaded resources and indexed source content.
-                  </p>
-                  <ul className="space-y-1.5 pt-1">
-                    {[
-                      sourceReferences ? 'Source references attached' : 'Source references disabled',
-                      'Answer verification enabled',
-                      'Duplicate detection enabled',
-                    ].map((line, i) => (
-                      <li key={i} className="flex items-center gap-2 text-xs text-slate-700">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> {line}
-                      </li>
+                ) : (
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold uppercase text-slate-700 tracking-wider">Topic Blueprint Allocation</label>
+                    {selectedTopicsInfo.map((t) => (
+                      <div key={t.topicId} className="flex items-center justify-between gap-3 text-xs py-1 border-b border-slate-100">
+                        <span className="font-semibold text-slate-800">{t.topicName}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-500">Available: {t.verified}</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={topicBlueprint[t.topicId] || 0}
+                            onChange={(e) => setTopicBlueprint({ ...topicBlueprint, [t.topicId]: Math.max(0, Number(e.target.value)) })}
+                            className="w-20 px-2 py-1 border border-slate-300 rounded font-mono text-right text-xs"
+                          />
+                        </div>
+                      </div>
                     ))}
-                  </ul>
-                </div>
-              </section>
+                  </div>
+                )}
 
-              <section className="bg-white border border-slate-200 rounded">
-                <header className="px-5 py-3 border-b border-slate-200">
-                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Generation Summary</h2>
-                </header>
-                <dl className="p-5 space-y-3 text-xs">
-                  <div>
-                    <dt className="text-slate-500 mb-1">Source</dt>
-                    <dd className="text-slate-900 font-semibold">
-                      {selectedDocs.length === 0 ? <span className="text-red-700">No resource selected</span> : selectedDocs.map((d) => d.title).join(', ')}
-                    </dd>
+                {/* Difficulty Distribution */}
+                <div className="pt-4 border-t border-slate-200">
+                  <label className="block text-xs font-bold uppercase text-slate-700 tracking-wider mb-2">Difficulty Distribution (Sum 100%)</label>
+                  <div className="grid grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <span className="text-slate-600 font-medium">Easy %</span>
+                      <input type="number" value={easyPercent} onChange={(e) => setEasyPercent(Number(e.target.value))} className="w-full p-2 border rounded font-mono mt-1" />
+                    </div>
+                    <div>
+                      <span className="text-slate-600 font-medium">Medium %</span>
+                      <input type="number" value={medPercent} onChange={(e) => setMedPercent(Number(e.target.value))} className="w-full p-2 border rounded font-mono mt-1" />
+                    </div>
+                    <div>
+                      <span className="text-slate-600 font-medium">Hard %</span>
+                      <input type="number" value={hardPercent} onChange={(e) => setHardPercent(Number(e.target.value))} className="w-full p-2 border rounded font-mono mt-1" />
+                    </div>
                   </div>
-                  <div className="border-t border-slate-100 pt-2.5">
-                    <dt className="text-slate-500 mb-1">Scope</dt>
-                    <dd className="text-slate-900 font-semibold">
-                      {[
-                        subjects.find((s: any) => s.id === selectedSubjectId)?.name,
-                        topics.find((t: any) => t.id === selectedTopicId)?.name,
-                        subtopics.find((st: any) => st.id === selectedSubtopicId)?.name,
-                      ].filter(Boolean).join(' → ') || 'All available source content'}
-                    </dd>
+                </div>
+
+                {/* Question Type Distribution */}
+                <div className="pt-4 border-t border-slate-200">
+                  <label className="block text-xs font-bold uppercase text-slate-700 tracking-wider mb-2">Question Type Distribution (Sum 100%)</label>
+                  <div className="grid grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <span className="text-slate-600 font-medium">MCQ %</span>
+                      <input type="number" value={mcqPercent} onChange={(e) => setMcqPercent(Number(e.target.value))} className="w-full p-2 border rounded font-mono mt-1" />
+                    </div>
+                    <div>
+                      <span className="text-slate-600 font-medium">MSQ %</span>
+                      <input type="number" value={msqPercent} onChange={(e) => setMsqPercent(Number(e.target.value))} className="w-full p-2 border rounded font-mono mt-1" />
+                    </div>
+                    <div>
+                      <span className="text-slate-600 font-medium">NAT %</span>
+                      <input type="number" value={natPercent} onChange={(e) => setNatPercent(Number(e.target.value))} className="w-full p-2 border rounded font-mono mt-1" />
+                    </div>
                   </div>
-                  <div className="border-t border-slate-100 pt-2.5">
-                    <dt className="text-slate-500 mb-1">Questions</dt>
-                    <dd className="text-slate-900 font-bold text-base font-mono">{totalQuestions}</dd>
-                  </div>
-                  <div className="border-t border-slate-100 pt-2.5">
-                    <dt className="text-slate-500 mb-1">Difficulty</dt>
-                    <dd className="text-slate-900 font-mono">
-                      {easyPercent}% Easy · {medPercent}% Medium · {hardPercent}% Hard
-                    </dd>
-                  </div>
-                  <div className="border-t border-slate-100 pt-2.5">
-                    <dt className="text-slate-500 mb-1">Types</dt>
-                    <dd className="text-slate-900 font-mono">
-                      {mcqPercent}% MCQ · {msqPercent}% MSQ · {natPercent}% NAT
-                    </dd>
-                  </div>
-                  <div className="border-t border-slate-100 pt-2.5">
-                    <dt className="text-slate-500 mb-1">Verification</dt>
-                    <dd className="text-slate-900 font-semibold">Automatic</dd>
-                  </div>
-                </dl>
-                <div className="px-5 pb-5">
-                  <button
-                    type="button"
-                    disabled={!canGenerate || isGenerating}
-                    onClick={handleGenerate}
-                    className="w-full py-3 rounded bg-[#1E40AF] text-white text-xs font-bold hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    Generate {totalQuestions} Verified Questions
-                  </button>
-                  {!canGenerate && (
-                    <p className="text-[11px] text-red-700 mt-2">
-                      {selectedDocIds.length === 0
-                        ? 'Select at least one source resource in Step 1.'
-                        : !countInRange
-                        ? `Question count must be between ${minCount} and ${maxCount}.`
-                        : 'Both distributions must total exactly 100%.'}
-                    </p>
+                </div>
+              </div>
+
+              {/* Live Preview & Shortfall Calculation Panel */}
+              <div className="bg-slate-900 text-white rounded p-5 flex flex-col justify-between space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold uppercase text-slate-400 tracking-wider">Availability &amp; Shortfall Analysis</h3>
+                  {previewData ? (
+                    <div className="mt-3 space-y-2 font-mono text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Required Questions:</span>
+                        <span className="font-bold text-white">{previewData.requestedTotal}</span>
+                      </div>
+                      <div className="flex justify-between text-emerald-400">
+                        <span>Selected Existing:</span>
+                        <span className="font-bold">{previewData.selectedExistingCount}</span>
+                      </div>
+                      <div className="flex justify-between text-amber-400">
+                        <span>Shortfall Total:</span>
+                        <span className="font-bold">{previewData.aiRequiredCount}</span>
+                      </div>
+
+                      {previewData.aiRequiredCount > 0 ? (
+                        <div className="mt-3 p-3 bg-amber-950/60 border border-amber-800 rounded text-amber-200 text-[11px]">
+                          ⚠ {previewData.aiRequiredCount} additional questions required from AI generation.
+                        </div>
+                      ) : (
+                        <div className="mt-3 p-3 bg-emerald-950/60 border border-emerald-800 rounded text-emerald-200 text-[11px]">
+                          ✓ All {previewData.requestedTotal} questions can be created from existing verified questions.
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-400 mt-4">Click Calculate Preview to compute availability.</div>
                   )}
                 </div>
-              </section>
+
+                <div className="space-y-2 pt-4 border-t border-slate-800">
+                  <button
+                    onClick={handleCalculatePreview}
+                    disabled={isLoadingPreview}
+                    className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded transition-colors flex items-center justify-center gap-1"
+                  >
+                    {isLoadingPreview ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                    Recalculate Selection
+                  </button>
+
+                  <button
+                    onClick={() => setActiveStep('generate')}
+                    disabled={!previewData}
+                    className="w-full py-2.5 bg-[#1E40AF] hover:bg-blue-800 text-white text-xs font-bold rounded transition-colors flex items-center justify-center gap-1 disabled:opacity-50"
+                  >
+                    Proceed to Summary <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
 
-        {/* ============================ STEP 3 — GENERATE ============================ */}
+        {/* ============================ STEP 4 — GENERATION SUMMARY & AI JOB ============================ */}
         {activeStep === 'generate' && (
-          <section className="bg-white border border-slate-200 rounded">
-            <header className="px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-2">
-              <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Generation Progress</h2>
-              {jobStatus && (
-                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded border ${
-                  jobStatus === 'COMPLETED' ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                  : jobStatus === 'FAILED' ? 'bg-red-50 text-red-800 border-red-200'
-                  : 'bg-blue-50 text-blue-800 border-blue-200'
-                }`}>{jobStatus}</span>
-              )}
-            </header>
-
-            {!jobResult && !isGenerating ? (
-              <div className="px-5 py-8 text-center">
-                <p className="text-xs text-slate-600">No generation job has been started.</p>
-                <button onClick={() => setActiveStep('configure')} className="mt-2 text-xs text-blue-700 hover:underline">← Back to configuration</button>
+          <div className="space-y-5">
+            {isGeneratingShortfall ? (
+              <div className="bg-white border border-slate-200 rounded p-12 text-center space-y-4">
+                <Loader2 className="w-10 h-10 text-blue-600 animate-spin mx-auto" />
+                <h2 className="text-base font-bold text-slate-900">Generating Targeted Shortfall Questions</h2>
+                <p className="text-xs text-slate-600 max-w-md mx-auto">{shortfallJobMessage}</p>
+                <div className="font-mono text-xs text-slate-500">Status: {shortfallJobStatus}</div>
               </div>
             ) : (
-              <div className="p-5 space-y-4">
-                <div className="space-y-2">
-                  {[
-                    { label: 'Document retrieval', done: !!jobResult },
-                    { label: 'Question generation', done: (jobResult?.generatedCount ?? 0) > 0, active: isGenerating },
-                    { label: 'Independent verification', done: (jobResult?.verifiedCount ?? 0) > 0, active: isGenerating && (jobResult?.generatedCount ?? 0) > 0 },
-                    { label: 'Duplicate detection', done: (jobResult?.duplicateCount ?? 0) >= 0 && !isGenerating },
-                    { label: 'Question Bank insertion', done: (jobResult?.autoPublishedCount ?? 0) > 0 },
-                  ].map((stage, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs">
-                      {stage.done ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      ) : stage.active ? (
-                        <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
-                      ) : (
-                        <Clock className="w-4 h-4 text-slate-300 shrink-0" />
-                      )}
-                      <span className={stage.done ? 'text-slate-900 font-medium' : stage.active ? 'text-blue-800 font-medium' : 'text-slate-400'}>
-                        {stage.label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+              <div className="bg-white border border-slate-200 rounded p-6 space-y-5">
+                <header className="border-b border-slate-200 pb-3">
+                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Question Paper Configuration Summary</h2>
+                </header>
 
-                {jobResult && (
-                  <>
-                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-blue-600 transition-all duration-500"
-                        style={{ width: `${Math.min(100, Math.round(((jobResult.generatedCount || 0) / (jobResult.requestedCount || 1)) * 100))}%` }}
-                      />
+                {previewData && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono">
+                    <div className="p-3 bg-slate-50 border rounded">
+                      <div className="text-slate-500 text-[10px]">Subject</div>
+                      <div className="font-bold text-slate-900 mt-1">{subjects.find((s) => s.id === selectedSubjectId)?.name}</div>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                      {[
-                        { label: 'Requested', value: jobResult.requestedCount, tone: 'text-slate-900' },
-                        { label: 'Generated', value: jobResult.generatedCount, tone: 'text-blue-800' },
-                        { label: 'Verified', value: jobResult.verifiedCount, tone: 'text-emerald-800' },
-                        { label: 'Auto-published', value: jobResult.autoPublishedCount ?? 0, tone: 'text-teal-800' },
-                        { label: 'Duplicates', value: jobResult.duplicateCount, tone: 'text-amber-800' },
-                        { label: 'Failed', value: jobResult.failedCount, tone: 'text-red-800' },
-                      ].map((s) => (
-                        <div key={s.label} className="border border-slate-200 rounded p-2.5 text-center">
-                          <div className="text-[10px] text-slate-500 uppercase tracking-wider">{s.label}</div>
-                          <div className={`text-lg font-bold font-mono ${s.tone}`}>{s.value ?? 0}</div>
-                        </div>
-                      ))}
+                    <div className="p-3 bg-slate-50 border rounded">
+                      <div className="text-slate-500 text-[10px]">Selected Topics</div>
+                      <div className="font-bold text-slate-900 mt-1">{selectedTopicIds.length} topics</div>
                     </div>
-                    {jobResult.statusMessage && <p className="text-xs text-slate-600">{jobResult.statusMessage}</p>}
-                  </>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* ============================ STEP 4 — VERIFY ============================ */}
-        {activeStep === 'verify' && (
-          <section className="bg-white border border-slate-200 rounded">
-            <header className="px-5 py-3 border-b border-slate-200">
-              <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Verification Results</h2>
-            </header>
-            {!jobResult ? (
-              <div className="px-5 py-8 text-center">
-                <p className="text-xs text-slate-600">No verification results available.</p>
-              </div>
-            ) : (
-              <div className="p-5 space-y-4">
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                  {[
-                    { label: 'Generated Candidates', value: jobResult.generatedCount },
-                    { label: 'Verified', value: jobResult.verifiedCount },
-                    { label: 'Awaiting Review', value: jobResult.pendingReviewCount },
-                    { label: 'Auto-published', value: jobResult.autoPublishedCount ?? 0 },
-                    { label: 'Duplicates', value: jobResult.duplicateCount },
-                    { label: 'Failed', value: jobResult.failedCount },
-                  ].map((s) => (
-                    <div key={s.label} className="border border-slate-200 rounded p-3 text-center">
-                      <div className="text-[10px] text-slate-500 uppercase tracking-wider leading-tight">{s.label}</div>
-                      <div className="text-xl font-bold font-mono text-slate-900 mt-1">{s.value ?? 0}</div>
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded">
+                      <div className="text-emerald-700 text-[10px]">Source Verified Questions</div>
+                      <div className="font-bold text-emerald-900 mt-1">{previewData.selectedExistingCount}</div>
                     </div>
-                  ))}
-                </div>
-                {jobResult.regenerationRounds > 0 && (
-                  <p className="text-xs text-slate-600">
-                    {jobResult.regenerationRounds} automatic regeneration round(s) were attempted to make up shortfalls.
-                  </p>
-                )}
-                {jobResult.statusMessage && (
-                  <div className="bg-slate-50 border border-slate-200 rounded p-3">
-                    <p className="text-xs text-slate-700">{jobResult.statusMessage}</p>
+                    <div className="p-3 bg-purple-50 border border-purple-200 rounded">
+                      <div className="text-purple-700 text-[10px]">AI Shortfall Required</div>
+                      <div className="font-bold text-purple-900 mt-1">{previewData.aiRequiredCount}</div>
+                    </div>
                   </div>
                 )}
-                <div className="flex justify-end">
-                  <button onClick={() => setActiveStep('review')} className="px-5 py-2 rounded bg-[#1E40AF] text-white text-xs font-semibold hover:bg-blue-800">
-                    Review Questions →
+
+                {previewData?.sourceMaterialWarning && (
+                  <div className="p-4 bg-red-50 border border-red-200 rounded text-red-800 text-xs flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{previewData.sourceMaterialWarning}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+                  <button onClick={() => setActiveStep('configure')} className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded hover:bg-slate-50">
+                    Back to Configuration
+                  </button>
+                  <button
+                    onClick={handleStartShortfallJob}
+                    disabled={previewData?.aiRequiredCount > 0 && !previewData?.hasSourceMaterial}
+                    className="px-6 py-2 bg-[#1E40AF] hover:bg-blue-800 text-white text-xs font-bold rounded flex items-center gap-1 disabled:opacity-50"
+                  >
+                    {previewData?.aiRequiredCount > 0 ? `Generate ${previewData.aiRequiredCount} Missing Questions` : 'Assemble Question Paper'}
+                    <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
               </div>
             )}
-          </section>
+          </div>
         )}
 
-        {/* ============================ STEP 5 — REVIEW ============================ */}
+        {/* ============================ STEP 5 — QUESTION PAPER REVIEW & FINALIZATION ============================ */}
         {activeStep === 'review' && (
-          <section className="bg-white border border-slate-200 rounded">
-            <header className="px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                Question Review ({sortedReviewQuestions.length})
-              </h2>
-              {selectedQuestionIds.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-700">Selected: {selectedQuestionIds.size}</span>
-                  <button onClick={() => setBulkConfirm('approve')} className="px-3 py-1.5 rounded bg-emerald-700 text-white text-[11px] font-semibold hover:bg-emerald-800">
-                    Approve Selected
-                  </button>
-                  <button onClick={() => setBulkConfirm('reject')} className="px-3 py-1.5 rounded border border-red-300 text-red-700 text-[11px] font-semibold hover:bg-red-50">
-                    Reject Selected
-                  </button>
-                  <button onClick={() => setSelectedQuestionIds(new Set())} className="px-3 py-1.5 rounded border border-slate-300 text-slate-700 text-[11px] font-semibold hover:bg-slate-50">
-                    Clear
-                  </button>
+          <div className="space-y-5">
+            {finalizedExam ? (
+              /* Post-Finalization Examination Draft View */
+              <div className="bg-white border border-slate-200 rounded p-6 space-y-5">
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                    <div>
+                      <h2 className="text-sm font-bold text-emerald-900">Examination Draft Created!</h2>
+                      <p className="text-xs text-emerald-700 mt-0.5">
+                        Status: <span className="font-mono font-bold">DRAFT</span> (isPublished = false). Explicit publishing required.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handlePublishExamination}
+                      disabled={isPublishing}
+                      className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {isPublishing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                      Publish Examination
+                    </button>
+                  </div>
                 </div>
-              )}
-            </header>
 
-            {sortedReviewQuestions.length === 0 ? (
-              <div className="px-5 py-8 text-center">
-                <p className="text-xs text-slate-600">No verified questions available.</p>
+                {/* Exam Settings Form */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Exam Name</label>
+                    <input
+                      type="text"
+                      value={finalizedExam.title}
+                      readOnly
+                      className="w-full p-2 bg-slate-50 border rounded font-semibold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Target Department</label>
+                    <input
+                      type="text"
+                      value={finalizedExam.targetDepartment}
+                      readOnly
+                      className="w-full p-2 bg-slate-50 border rounded text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Duration (Minutes)</label>
+                    <input
+                      type="number"
+                      value={finalizedExam.durationMinutes}
+                      readOnly
+                      className="w-full p-2 bg-slate-50 border rounded font-mono text-slate-900"
+                    />
+                  </div>
+                </div>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr className="text-left text-slate-600">
-                      <th className="px-3 py-2 w-8">
-                        <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer" checked={allReviewSelected} onChange={toggleSelectAllReview} />
-                      </th>
-                      <th className="px-3 py-2 font-semibold w-10">#</th>
-                      <th className="px-3 py-2 font-semibold">Question</th>
-                      <th className="px-3 py-2 font-semibold">Type</th>
-                      <th className="px-3 py-2 font-semibold">Difficulty</th>
-                      <th className="px-3 py-2 font-semibold">Verification</th>
-                      <th className="px-3 py-2 font-semibold">Status</th>
-                      <th className="px-3 py-2 font-semibold">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {sortedReviewQuestions.map((q, idx) => (
-                      <tr key={q.id} className={selectedQuestionIds.has(q.id) ? 'bg-blue-50/40' : ''}>
-                        <td className="px-3 py-2.5">
-                          <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer" checked={selectedQuestionIds.has(q.id)} onChange={() => toggleQuestionSelection(q.id)} />
-                        </td>
-                        <td className="px-3 py-2.5 font-mono text-slate-500">{String(idx + 1).padStart(2, '0')}</td>
-                        <td className="px-3 py-2.5 text-slate-900 max-w-md truncate" title={q.stem}>{q.stem}</td>
-                        <td className="px-3 py-2.5"><span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold text-[10px]">{q.type}</span></td>
-                        <td className="px-3 py-2.5"><span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold text-[10px]">{q.difficulty}</span></td>
-                        <td className="px-3 py-2.5"><VerificationBadge status={q.verificationStatus} /></td>
-                        <td className="px-3 py-2.5">
-                          <span className={`text-[10px] font-bold uppercase ${
-                            q.status === 'APPROVED' ? 'text-emerald-700' : q.status === 'REJECTED' ? 'text-red-700' : 'text-slate-500'
-                          }`}>{q.status}</span>
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <button onClick={() => setDetailQuestion(q)} className="px-2.5 py-1 rounded border border-slate-300 text-slate-700 text-[10px] font-semibold hover:bg-slate-50">
-                            View
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+              /* Review Table & Finalize Action */
+              <div className="bg-white border border-slate-200 rounded">
+                <header className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                      Selected Question Paper Review ({paperQuestions.length} Questions)
+                    </h2>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Only VERIFIED questions enter the paper. Version snapshots are frozen at draft finalization.
+                    </p>
+                  </div>
 
-            {sortedReviewQuestions.length > 0 && (
-              <div className="px-5 py-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-slate-600">
-                  Only verified/approved questions are eligible for a published question paper.
-                </p>
-                <a href="/admin/dashboard" className="px-4 py-2 rounded border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50">
-                  Open Question Bank →
-                </a>
+                  <button
+                    onClick={handleFinalizePaper}
+                    disabled={isFinalizing || paperQuestions.length === 0}
+                    className="px-5 py-2 bg-[#1E40AF] hover:bg-blue-800 text-white text-xs font-bold rounded flex items-center gap-1 disabled:opacity-50"
+                  >
+                    {isFinalizing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                    Approve &amp; Create Draft
+                  </button>
+                </header>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-left">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">Question ID / Stem</th>
+                        <th className="px-3 py-2 font-semibold">Topic</th>
+                        <th className="px-3 py-2 font-semibold">Type</th>
+                        <th className="px-3 py-2 font-semibold">Difficulty</th>
+                        <th className="px-3 py-2 font-semibold">Origin &amp; Status</th>
+                        <th className="px-3 py-2 font-semibold">Answer</th>
+                        <th className="px-3 py-2 font-semibold">Source Ref</th>
+                        <th className="px-3 py-2 font-semibold">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {paperQuestions.map((q) => (
+                        <tr key={q.id}>
+                          <td className="px-3 py-2.5 font-medium text-slate-900 max-w-xs truncate" title={q.text}>
+                            {q.customId && <span className="font-mono text-blue-700 font-bold mr-1">[{q.customId}]</span>}
+                            {q.text}
+                          </td>
+                          <td className="px-3 py-2.5 text-slate-600">{q.subtopic?.topic?.name || q.sourceHeading || '—'}</td>
+                          <td className="px-3 py-2.5 font-mono text-slate-700">{q.type}</td>
+                          <td className="px-3 py-2.5 font-mono text-slate-700">{q.difficulty}</td>
+                          <td className="px-3 py-2.5">
+                            <VerificationBadge status={q.verificationStatus} origin={q.origin} />
+                          </td>
+                          <td className="px-3 py-2.5 font-mono font-bold text-emerald-700">
+                            {q.rawAnswer || JSON.stringify(q.correctAnswer)}
+                          </td>
+                          <td className="px-3 py-2.5 text-slate-500 font-mono">
+                            {q.sourceDocument?.title || (q.sourceHeading ? `Heading: ${q.sourceHeading}` : '—')}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <button
+                              onClick={() => handleDeleteQuestion(q.id)}
+                              className="p-1 text-red-600 hover:bg-red-50 rounded"
+                              title="Remove from paper"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
-          </section>
+          </div>
         )}
       </div>
-
-      {/* Question detail panel */}
-      {detailQuestion && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={() => setDetailQuestion(null)}>
-          <div className="bg-white rounded max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <header className="px-5 py-3 border-b border-slate-200 flex items-center justify-between sticky top-0 bg-white">
-              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Question Detail</h3>
-              <button onClick={() => setDetailQuestion(null)} className="text-slate-400 hover:text-slate-700"><X className="w-4 h-4" /></button>
-            </header>
-            <div className="p-5 space-y-4 text-xs">
-              <div>
-                <p className="text-slate-500 mb-1">Question</p>
-                <p className="text-slate-900 font-medium leading-relaxed">{detailQuestion.stem}</p>
-              </div>
-
-              {Array.isArray(detailQuestion.options) && detailQuestion.options.length > 0 && (
-                <div>
-                  <p className="text-slate-500 mb-1.5">Options</p>
-                  <div className="space-y-1.5">
-                    {detailQuestion.options.map((opt: any, i: number) => {
-                      const isCorrect = Array.isArray(detailQuestion.correctAnswer) && detailQuestion.correctAnswer.includes(i);
-                      return (
-                        <div key={i} className={`p-2 rounded border flex items-center justify-between ${isCorrect ? 'border-emerald-300 bg-emerald-50 font-semibold text-emerald-900' : 'border-slate-200 text-slate-700'}`}>
-                          <span>{String.fromCharCode(65 + i)}. {typeof opt === 'string' ? opt : opt.text}</span>
-                          {isCorrect && <Check className="w-3.5 h-3.5 text-emerald-700" />}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="border-t border-slate-100 pt-3">
-                <p className="text-slate-500 mb-1">Correct Answer</p>
-                <p className="text-slate-900 font-mono font-semibold">{JSON.stringify(detailQuestion.correctAnswer)}</p>
-              </div>
-
-              {detailQuestion.explanation && (
-                <div className="border-t border-slate-100 pt-3">
-                  <p className="text-slate-500 mb-1">Solution</p>
-                  <p className="text-slate-700 leading-relaxed">{detailQuestion.explanation}</p>
-                </div>
-              )}
-
-              {Array.isArray(detailQuestion.sourceDocumentIds) && detailQuestion.sourceDocumentIds.length > 0 && (
-                <div className="border-t border-slate-100 pt-3">
-                  <p className="text-slate-500 mb-1">Source</p>
-                  <p className="text-slate-800">
-                    {detailQuestion.sourceDocumentIds
-                      .map((id: string) => documents.find((d) => d.id === id)?.title || id)
-                      .join(', ')}
-                  </p>
-                </div>
-              )}
-
-              <div className="border-t border-slate-100 pt-3">
-                <p className="text-slate-500 mb-1.5">Verification</p>
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    {detailQuestion.provenanceValid ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <X className="w-3.5 h-3.5 text-red-600" />}
-                    <span className="text-slate-700">Source grounded</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {detailQuestion.verificationStatus === 'PASS' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />}
-                    <span className="text-slate-700">Answer independently verified</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {!detailQuestion.ambiguityDetected ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />}
-                    <span className="text-slate-700">No ambiguity detected</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {detailQuestion.similarityStatus === 'UNIQUE' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />}
-                    <span className="text-slate-700">Duplicate check: {detailQuestion.similarityStatus || 'n/a'}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <footer className="px-5 py-3 border-t border-slate-200 flex justify-end gap-2 sticky bottom-0 bg-white">
-              {detailQuestion.status === 'PENDING_REVIEW' ? (
-                <>
-                  <button
-                    onClick={() => handleReject(detailQuestion.id)}
-                    disabled={actioningId === detailQuestion.id}
-                    className="px-4 py-2 rounded border border-red-300 text-red-700 text-xs font-semibold hover:bg-red-50 disabled:opacity-50"
-                  >
-                    Reject
-                  </button>
-                  <button
-                    onClick={() => handleApprove(detailQuestion.id)}
-                    disabled={actioningId === detailQuestion.id}
-                    className="px-4 py-2 rounded bg-emerald-700 text-white text-xs font-semibold hover:bg-emerald-800 disabled:opacity-50"
-                  >
-                    {actioningId === detailQuestion.id ? 'Working...' : 'Approve'}
-                  </button>
-                </>
-              ) : (
-                <span className={`px-3 py-1.5 rounded text-xs font-semibold ${
-                  detailQuestion.status === 'APPROVED' ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-800'
-                }`}>{detailQuestion.status}</span>
-              )}
-            </footer>
-          </div>
-        </div>
-      )}
-
-      {/* Bulk action confirmation */}
-      {bulkConfirm && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded max-w-md w-full">
-            <header className="px-5 py-3 border-b border-slate-200">
-              <h3 className="text-sm font-bold text-slate-900">
-                {bulkConfirm === 'approve' ? 'Approve' : 'Reject'} {selectedQuestionIds.size} selected question{selectedQuestionIds.size === 1 ? '' : 's'}?
-              </h3>
-            </header>
-            <div className="p-5">
-              <p className="text-xs text-slate-600">
-                {bulkConfirm === 'approve'
-                  ? 'Approved questions are published to the live Question Bank and become eligible for question papers.'
-                  : 'Rejected questions are excluded from the Question Bank. This does not delete the generation record.'}
-              </p>
-            </div>
-            <footer className="px-5 py-3 border-t border-slate-200 flex justify-end gap-2">
-              <button onClick={() => setBulkConfirm(null)} disabled={isBulkActing} className="px-4 py-2 rounded border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">
-                Cancel
-              </button>
-              <button
-                onClick={handleBulkAction}
-                disabled={isBulkActing}
-                className={`px-4 py-2 rounded text-white text-xs font-semibold disabled:opacity-50 ${bulkConfirm === 'approve' ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-red-700 hover:bg-red-800'}`}
-              >
-                {isBulkActing ? 'Working...' : bulkConfirm === 'approve' ? 'Approve Questions' : 'Reject Questions'}
-              </button>
-            </footer>
-          </div>
-        </div>
-      )}
-
-      {/* Bulk resource-delete confirmation */}
-      {isBulkDeleteConfirmOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded max-w-md w-full">
-            <header className="px-5 py-3 border-b border-slate-200">
-              <h3 className="text-sm font-bold text-slate-900">
-                Delete {selectedDeleteIds.size} selected resource{selectedDeleteIds.size === 1 ? '' : 's'}?
-              </h3>
-            </header>
-            <div className="p-5">
-              <p className="text-xs text-slate-600">
-                This permanently removes the uploaded file and all extracted pages/questions/answers derived from it. This cannot be undone.
-              </p>
-            </div>
-            <footer className="px-5 py-3 border-t border-slate-200 flex justify-end gap-2">
-              <button
-                onClick={() => setIsBulkDeleteConfirmOpen(false)}
-                disabled={isBulkDeleting}
-                className="px-4 py-2 rounded border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleBulkDeleteDocuments}
-                disabled={isBulkDeleting}
-                className="px-4 py-2 rounded text-white text-xs font-semibold disabled:opacity-50 bg-red-700 hover:bg-red-800"
-              >
-                {isBulkDeleting ? 'Deleting...' : 'Delete Resources'}
-              </button>
-            </footer>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
