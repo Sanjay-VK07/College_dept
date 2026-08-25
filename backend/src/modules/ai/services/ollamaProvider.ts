@@ -47,6 +47,10 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
     const timeoutMs = options?.timeoutMs || parseInt(process.env.OLLAMA_REQUEST_TIMEOUT_MS || '0', 10) || ENV.OLLAMA_REQUEST_TIMEOUT_MS;
     const maxRetries = options?.maxRetries !== undefined ? options.maxRetries : (process.env.OLLAMA_MAX_RETRIES !== undefined ? parseInt(process.env.OLLAMA_MAX_RETRIES, 10) : ENV.OLLAMA_MAX_RETRIES);
 
+    const maxTokens = ENV.OLLAMA_MAX_TOKENS || 256;
+    console.log(`[PERF] [OllamaProvider] Request started. Model: ${this.chatModel}, Endpoint: ${this.baseUrl}/api/chat, Timeout: ${timeoutMs}ms, MaxTokens: ${maxTokens}`);
+    const startMs = Date.now();
+
     return await AIResilience.executeWithResilience(
       async (signal) => {
         const endpoint = `${this.baseUrl}/api/chat`;
@@ -57,8 +61,10 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
             model: this.chatModel,
             messages,
             stream: false,
+            keep_alive: '5m',
             options: {
               temperature: 0.7,
+              num_predict: maxTokens,
             },
           }),
           signal,
@@ -89,6 +95,20 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
         }
 
         const data: any = await response.json();
+        const elapsedMs = Date.now() - startMs;
+        const loadMs = data?.load_duration ? Math.round(data.load_duration / 1e6) : 0;
+        const promptEvalMs = data?.prompt_eval_duration ? Math.round(data.prompt_eval_duration / 1e6) : 0;
+        const evalMs = data?.eval_duration ? Math.round(data.eval_duration / 1e6) : 0;
+        const promptTokens = data?.prompt_eval_count || 0;
+        const genTokens = data?.eval_count || 0;
+        const genSpeed = evalMs > 0 ? (genTokens / (evalMs / 1000)).toFixed(2) : '0';
+
+        console.log(
+          `[PERF] [OllamaProvider] Response received in ${elapsedMs}ms | ` +
+          `load_duration: ${loadMs}ms | prompt_eval_duration: ${promptEvalMs}ms (${promptTokens} tokens) | ` +
+          `eval_duration: ${evalMs}ms (${genTokens} tokens @ ${genSpeed} tps) | done_reason: ${data?.done_reason || 'stop'}`
+        );
+
         const content = data?.message?.content;
         if (content && content.trim().length > 0) {
           return content;
@@ -104,6 +124,104 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
         maxDelayMs: ENV.OLLAMA_MAX_RETRY_DELAY_MS,
       }
     );
+  }
+
+  /**
+   * Real-Time Stream LLMProvider method forwarding token chunks progressively.
+   */
+  public async generateStream(
+    systemPrompt: string,
+    history: AIProviderMessage[],
+    userMessage: string,
+    onToken: (token: string) => void,
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ): Promise<{ content: string; evalCount: number; evalDurationMs: number; doneReason: string }> {
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.map((h) => ({
+        role: h.role === 'assistant' ? 'assistant' : 'user',
+        content: h.content,
+      })),
+      { role: 'user', content: userMessage },
+    ];
+
+    const maxTokens = ENV.OLLAMA_MAX_TOKENS || 384;
+    const endpoint = `${this.baseUrl}/api/chat`;
+
+    console.log(`[PERF] [OllamaProvider.generateStream] Stream started. Model: ${this.chatModel}, MaxTokens: ${maxTokens}`);
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: this.chatModel,
+        messages,
+        stream: true,
+        keep_alive: '5m',
+        options: {
+          temperature: 0.7,
+          num_predict: maxTokens,
+        },
+      }),
+      signal: options?.signal,
+    });
+
+    if (!response.ok || !response.body) {
+      const errBody = await response.text().catch(() => '');
+      throw new Error(`Ollama stream API error HTTP ${response.status}: ${errBody}`);
+    }
+
+    const reader = (response.body as any).getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let fullContent = '';
+    let evalCount = 0;
+    let evalDurationMs = 0;
+    let doneReason = 'stop';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        try {
+          const json = JSON.parse(trimmed);
+          const chunkText = json.message?.content || '';
+          if (chunkText) {
+            fullContent += chunkText;
+            onToken(chunkText);
+          }
+
+          if (json.done) {
+            evalCount = json.eval_count || 0;
+            evalDurationMs = json.eval_duration ? Math.round(json.eval_duration / 1e6) : 0;
+            doneReason = json.done_reason || 'stop';
+          }
+        } catch (e) {
+          // Ignore partial line parse errors
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      try {
+        const json = JSON.parse(buffer.trim());
+        const chunkText = json.message?.content || '';
+        if (chunkText) {
+          fullContent += chunkText;
+          onToken(chunkText);
+        }
+      } catch (e) {}
+    }
+
+    return { content: fullContent, evalCount, evalDurationMs, doneReason };
   }
 
   /**
@@ -170,8 +288,11 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
     return await this.generateEmbedding(text);
   }
 
+  public static embeddingCache = new Map<string, number[]>();
+
   public async generateEmbedding(text: string): Promise<number[]> {
     const expectedDimension = ENV.EMBEDDING_DIMENSION || 384;
+    const startMs = Date.now();
 
     return await AIResilience.executeWithResilience(
       async (signal) => {
@@ -182,6 +303,7 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
           body: JSON.stringify({
             model: this.embeddingModel,
             prompt: text,
+            keep_alive: '5m',
           }),
           signal,
         });
@@ -200,6 +322,9 @@ export class OllamaProvider implements LLMProvider, IEmbeddingProvider {
         }
 
         const data: any = await response.json();
+        const elapsedMs = Date.now() - startMs;
+        console.log(`[OllamaProvider] Embedding completed in ${elapsedMs}ms for model '${this.embeddingModel}'`);
+
         let vector: number[] | null = data?.embedding || null;
 
         if (vector && Array.isArray(vector)) {

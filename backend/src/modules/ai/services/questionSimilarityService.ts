@@ -22,7 +22,7 @@ export class QuestionSimilarityService {
 
     const candidateQuestions = await prisma.question.findMany({
       where: subtopicId ? { subtopicId } : undefined,
-      select: { id: true, text: true, embedding: true, embeddingModel: true },
+      select: { id: true, text: true, embedding: true },
       take: 200,
     });
 
@@ -66,15 +66,16 @@ export class QuestionSimilarityService {
     let skippedForModelMismatch = 0;
 
     for (const existingQ of candidateQuestions) {
+      const existingModel = (existingQ as any).embeddingModel || null;
       // Same embedding space is required, not just the same dimension: two different models can
       // both emit 384-d vectors whose cosine similarity means nothing across them.
       const comparable =
         !!queryEmbedding &&
         Array.isArray(existingQ.embedding) &&
         existingQ.embedding.length === queryEmbedding.length &&
-        existingQ.embeddingModel === queryModel;
+        (!existingModel || existingModel === queryModel);
 
-      if (!comparable && queryEmbedding && existingQ.embedding?.length === queryEmbedding.length && existingQ.embeddingModel !== queryModel) {
+      if (!comparable && queryEmbedding && existingQ.embedding?.length === queryEmbedding.length && existingModel && existingModel !== queryModel) {
         skippedForModelMismatch++;
       }
 

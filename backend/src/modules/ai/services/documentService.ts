@@ -2,18 +2,21 @@ import { prisma } from '../../../config/prisma';
 import { Role, AIDocumentVisibility, AIDocumentStatus, AIDocument } from '@prisma/client';
 import { documentStorageService } from './documentStorageService';
 import { DocumentAuthorizationService } from './documentAuthorizationService';
-import { validateUploadFile } from '../utils/documentValidation';
+import { validateUploadFile, validateUploadDiskFile, computeFileChecksum, computeFileChecksumFromPath, safeDeleteFile, MAX_DOCUMENT_UPLOAD_SIZE } from '../utils/documentValidation';
 import { DocumentMetadataDTO } from '../types/document.types';
 import { AuditLogger } from '../../../services/auditLogger';
 import { DocumentProcessingService } from './documentProcessingService';
 
+import { VectorCache } from './vectorCache';
+
 export class DocumentService {
   /**
    * Uploads a document: performs validations, uploads to storage, and writes metadata to database.
-   * If database write fails, performs best-effort cleanup of the stored file.
+   * Supports disk-based Multer storage (0 MB RAM overhead) and buffer fallback.
    */
   public static async uploadDocument(params: {
-    fileBuffer: Buffer;
+    file?: Express.Multer.File;
+    fileBuffer?: Buffer;
     fileName: string;
     mimeType: string;
     title: string;
@@ -21,45 +24,88 @@ export class DocumentService {
     userId: string;
     role: Role;
   }): Promise<DocumentMetadataDTO> {
-    const { fileBuffer, fileName, mimeType, title, visibility, userId, role } = params;
+    const { file, fileBuffer, fileName, mimeType, title, visibility, userId, role } = params;
 
-    // 1. Authorization check
-    if (!DocumentAuthorizationService.canUpload(role)) {
-      throw new Error('Forbidden: Your role is not authorized to upload documents.');
-    }
+    const cleanupTempFile = () => {
+      if (file?.path) {
+        safeDeleteFile(file.path);
+      }
+    };
 
-    // 2. Metadata payload validation
-    const cleanTitle = title?.trim();
-    if (!cleanTitle) {
-      throw new Error('Document title is required.');
-    }
-    if (cleanTitle.length > 255) {
-      throw new Error('Document title must not exceed 255 characters.');
-    }
-
-    // 3. File validation (layered checks: size, extension, MIME, magic bytes)
-    const validation = validateUploadFile(fileBuffer, fileName, mimeType);
-    if (!validation.valid) {
-      throw new Error(validation.error || 'Invalid file payload.');
-    }
-
-    // 4. Upload file to Storage provider
-    let storageKey: string;
     try {
-      storageKey = await documentStorageService.upload(fileBuffer, fileName, mimeType);
-    } catch (storageErr: any) {
-      console.error('Storage upload failed:', storageErr);
-      throw new Error(`Failed to upload file to storage: ${storageErr.message}`);
-    }
+      // 1. Authorization check
+      if (!DocumentAuthorizationService.canUpload(role)) {
+        throw new Error('Forbidden: Your role is not authorized to upload documents.');
+      }
 
-    // 5. Create Database record
-    try {
+      // 2. Metadata payload validation
+      const cleanTitle = title?.trim();
+      if (!cleanTitle) {
+        throw new Error('Document title is required.');
+      }
+      if (cleanTitle.length > 255) {
+        throw new Error('Document title must not exceed 255 characters.');
+      }
+
+      let fileSize = file ? file.size : fileBuffer ? fileBuffer.length : 0;
+
+      // 3. File validation (disk-based or buffer)
+      if (file?.path) {
+        const validation = validateUploadDiskFile(file.path, fileSize, fileName, mimeType);
+        if (!validation.valid) {
+          const err = new Error(validation.error || 'Invalid file payload.');
+          (err as any).status = validation.status || 400;
+          throw err;
+        }
+      } else if (fileBuffer && fileBuffer.length > 0) {
+        const validation = validateUploadFile(fileBuffer, fileName, mimeType);
+        if (!validation.valid) {
+          const err = new Error(validation.error || 'Invalid file payload.');
+          (err as any).status = fileBuffer.length > MAX_DOCUMENT_UPLOAD_SIZE ? 413 : 400;
+          throw err;
+        }
+      } else {
+        const err = new Error('File is empty or missing content.');
+        (err as any).status = 400;
+        throw err;
+      }
+
+      const checksum = file?.path
+        ? await computeFileChecksumFromPath(file.path)
+        : computeFileChecksum(fileBuffer!);
+
+      // 3.5 Duplicate Document Check per user
+      const existingDoc = await prisma.aIDocument.findFirst({
+        where: {
+          uploadedById: userId,
+          fileSize,
+          status: { not: AIDocumentStatus.FAILED },
+          title: cleanTitle,
+        },
+      });
+
+      if (existingDoc) {
+        const err = new Error(`Duplicate document upload detected. A document named "${cleanTitle}" with identical size already exists.`);
+        (err as any).status = 409;
+        (err as any).code = 'DUPLICATE_DOCUMENT';
+        throw err;
+      }
+
+      // 4. Upload file to Storage provider (disk copy or buffer write)
+      let storageKey: string;
+      if (file?.path && documentStorageService.uploadFromPath) {
+        storageKey = await documentStorageService.uploadFromPath(file.path, fileName, mimeType);
+      } else {
+        storageKey = await documentStorageService.upload(fileBuffer!, fileName, mimeType);
+      }
+
+      // 5. Create Database record
       const document = await prisma.aIDocument.create({
         data: {
           title: cleanTitle,
           fileName,
           mimeType,
-          fileSize: fileBuffer.length,
+          fileSize,
           visibility: visibility || AIDocumentVisibility.PRIVATE,
           status: AIDocumentStatus.UPLOADED, // Truthful initial state
           storageKey,
@@ -67,12 +113,15 @@ export class DocumentService {
         },
       });
 
+      // Invalidate in-memory vector cache on document creation
+      VectorCache.invalidate(`UPLOAD_DOCUMENT_${document.id}`);
+
       // Audit Log Entry
       await AuditLogger.log({
         userId,
         action: 'UPLOAD_AI_DOCUMENT',
         resource: 'AIDocument',
-        details: `Uploaded document "${cleanTitle}" (${fileName}, ${fileBuffer.length} bytes)`,
+        details: `Uploaded document "${cleanTitle}" (${fileName}, ${fileSize} bytes)`,
       });
 
       // Trigger background text extraction and chunking (Phase 2C)
@@ -81,17 +130,9 @@ export class DocumentService {
       });
 
       return document;
-    } catch (dbErr: any) {
-      console.error('Database record creation failed. Cleaning up storage...', dbErr);
-      
-      // Rollback: Attempt storage cleanup to prevent orphaned files (Case A)
-      try {
-        await documentStorageService.delete(storageKey);
-      } catch (cleanupErr) {
-        console.error('Failed to cleanup orphaned storage file:', cleanupErr);
-      }
-
-      throw new Error(`Failed to save document metadata: ${dbErr.message}`);
+    } catch (err: any) {
+      cleanupTempFile();
+      throw err;
     }
   }
 
@@ -276,6 +317,9 @@ export class DocumentService {
     await prisma.aIDocument.delete({
       where: { id: documentId },
     });
+
+    // Invalidate in-memory vector cache on document deletion
+    VectorCache.invalidate(`DELETE_DOCUMENT_${documentId}`);
 
     // Delete from storage
     try {

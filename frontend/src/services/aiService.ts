@@ -69,6 +69,85 @@ export const aiService = {
   },
 
   /**
+   * Sends a streaming chat message using fetch + SSE reader (POST /api/ai/chat/stream)
+   */
+  async sendStreamMessage(
+    message: string,
+    conversationId: string | undefined,
+    onStart: (data: { requestId: string; conversationId: string; userMessageId: string }) => void,
+    onQueued: (data: { position: number; queueSize: number }) => void,
+    onToken: (token: string) => void,
+    onDone: (data: { requestId: string; conversationId: string; messageId: string; queueWaitMs?: number; totalDurationMs: number; sources?: any[] }) => void,
+    onError: (error: { code: string; message: string }) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const token = typeof window !== 'undefined' ? (localStorage.getItem('gsmas_token') || localStorage.getItem('token') || '') : '';
+    const requestId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'req-' + Date.now();
+
+    const response = await fetch('/api/ai/chat/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ message, conversationId, requestId }),
+      signal,
+    });
+
+    if (!response.ok || !response.body) {
+      const errText = await response.text().catch(() => '');
+      onError({ code: 'HTTP_ERROR', message: `Server error ${response.status}: ${errText}` });
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() || '';
+
+      for (const block of blocks) {
+        const lines = block.split('\n');
+        let event = 'message';
+        let dataStr = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            event = line.substring(7).trim();
+          } else if (line.startsWith('data: ')) {
+            dataStr = line.substring(6).trim();
+          }
+        }
+
+        if (dataStr) {
+          try {
+            const data = JSON.parse(dataStr);
+            if (event === 'start') {
+              onStart(data);
+            } else if (event === 'queued') {
+              onQueued(data);
+            } else if (event === 'token') {
+              onToken(data.text);
+            } else if (event === 'done') {
+              onDone(data);
+            } else if (event === 'error') {
+              onError(data);
+            }
+          } catch (e) {
+            console.error('Failed to parse SSE data:', dataStr);
+          }
+        }
+      }
+    }
+  },
+
+  /**
    * Fetches all conversations belonging to the current user
    */
   async getConversations(): Promise<AIConversationSummary[]> {

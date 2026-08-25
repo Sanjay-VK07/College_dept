@@ -38,8 +38,8 @@ app.use(
 );
 
 // Payload Limits
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+app.use(express.json({ limit: '35mb' }));
+app.use(express.urlencoded({ extended: true, limit: '35mb' }));
 
 // Health & Readiness Probes
 app.use('/api/health', healthRoutes);

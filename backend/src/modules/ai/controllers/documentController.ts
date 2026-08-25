@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../../../middlewares/authMiddleware';
 import { DocumentService } from '../services/documentService';
 import { AIDocumentVisibility } from '@prisma/client';
+import { ENV } from '../../../config/env';
 import multer from 'multer';
 
 export class DocumentController {
@@ -34,7 +35,8 @@ export class DocumentController {
       }
 
       const document = await DocumentService.uploadDocument({
-        fileBuffer: req.file.buffer,
+        file: req.file,
+        fileBuffer: req.file.buffer || Buffer.alloc(0),
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
         title,
@@ -59,14 +61,18 @@ export class DocumentController {
       });
     } catch (err: any) {
       console.error('Controller error in uploadDocument:', err.message);
-      const status = err.message.includes('Forbidden')
+      let status = err.status || (err.message.includes('Forbidden')
         ? 403
-        : err.message.includes('limit') || err.message.includes('required') || err.message.includes('Invalid') || err.message.includes('mismatch') || err.message.includes('spoof')
+        : err.message.includes('Duplicate')
+        ? 409
+        : err.message.includes('exceeds limit')
+        ? 413
+        : err.message.includes('required') || err.message.includes('Invalid') || err.message.includes('mismatch') || err.message.includes('signature')
         ? 400
-        : 500;
+        : 500);
       
       const cleanMessage = status === 500 ? 'An unexpected error occurred during file upload.' : err.message;
-      return res.status(status).json({ success: false, message: cleanMessage });
+      return res.status(status).json({ success: false, message: cleanMessage, code: err.code });
     }
   }
 
@@ -295,8 +301,8 @@ export class DocumentController {
   public static handleMulterError(err: any, req: any, res: any, next: any) {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        const sizeMb = (parseInt(process.env.MAX_DOCUMENT_UPLOAD_SIZE || '10485760', 10) / (1024 * 1024)).toFixed(0);
-        return res.status(400).json({
+        const sizeMb = (ENV.MAX_DOCUMENT_UPLOAD_SIZE / (1024 * 1024)).toFixed(0);
+        return res.status(413).json({
           success: false,
           message: `File size exceeds limit of ${sizeMb}MB.`,
         });

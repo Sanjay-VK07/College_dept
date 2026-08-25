@@ -35,6 +35,24 @@ export class LocalStorageProvider implements DocumentStorageProvider {
   }
 
   /**
+   * Moves/copies file from temp disk path directly to storage (0 MB RAM allocation).
+   */
+  public async uploadFromPath(tempFilePath: string, fileName: string, mimeType: string): Promise<string> {
+    const docId = crypto.randomUUID();
+    const sanitizedName = sanitizeFileName(fileName);
+    const docDir = path.join(this.baseDir, docId);
+    this.ensureDirectoryExists(docDir);
+
+    const filePath = path.join(docDir, sanitizedName);
+    await fs.promises.copyFile(tempFilePath, filePath);
+
+    // Clean up temp file
+    fs.promises.unlink(tempFilePath).catch(() => {});
+
+    return path.join(docId, sanitizedName);
+  }
+
+  /**
    * Returns the absolute path of the local file for authorized streaming/reading.
    */
   public async getAuthorizedAccess(storageKey: string): Promise<string> {

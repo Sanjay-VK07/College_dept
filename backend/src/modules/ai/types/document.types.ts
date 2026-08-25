@@ -43,6 +43,11 @@ export interface DocumentStorageProvider {
   upload(fileBuffer: Buffer, fileName: string, mimeType: string): Promise<string>;
 
   /**
+   * Uploads a file from disk path directly to storage.
+   */
+  uploadFromPath?(tempFilePath: string, fileName: string, mimeType: string): Promise<string>;
+
+  /**
    * Generates a temporary access/stream URL or returns the file path for authorized access.
    */
   getAuthorizedAccess(storageKey: string): Promise<string>;

@@ -39,11 +39,15 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoadingChat, setIsLoadingChat] = useState(false);
+  const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
   const [editingConvId, setEditingConvId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
   // RAG references for current message or conversation
   const [citations, setCitations] = useState<any[]>([]);
+
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Practice Mode State (Student)
   const [practiceSubject, setPracticeSubject] = useState('');
@@ -61,8 +65,6 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
   const [insights, setInsights] = useState<any>(null);
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
 
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
   // Load basic lists
   useEffect(() => {
     fetchConversations();
@@ -70,6 +72,12 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
       fetchPracticeAttempts();
       fetchInsights();
     }
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
   }, [role]);
 
   // Scroll chat
@@ -156,6 +164,15 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
     }
   };
 
+  const handleStopChat = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoadingChat(false);
+    setStreamingStatus(null);
+  };
+
   const handleSendChat = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim() || isLoadingChat) return;
@@ -163,53 +180,85 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
     const text = inputText.trim();
     setInputText('');
 
+    const userMsgId = 'user-' + Date.now();
+    const tempAssistantId = 'assistant-' + Date.now();
+
     const userMsg: AIMessage = {
-      id: 'user-' + Date.now(),
+      id: userMsgId,
       role: 'USER',
       content: text,
       createdAt: new Date().toISOString(),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const tempAssistantMsg: AIMessage = {
+      id: tempAssistantId,
+      role: 'ASSISTANT',
+      content: '',
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMsg, tempAssistantMsg]);
     setIsLoadingChat(true);
+    setStreamingStatus('Searching knowledge base...');
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     try {
-      const response = await aiService.sendMessage(text, currentConversationId);
-      if (response.success) {
-        if (response.conversationId) {
-          setCurrentConversationId(response.conversationId);
-          fetchConversations();
-        }
-        if (response.message) {
-          setMessages((prev) => [...prev, response.message!]);
-        }
-        // Save citation sources if RAG matches
-        if (response.sources && response.sources.length > 0) {
-          setCitations(response.sources);
-        }
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: 'err-' + Date.now(),
-            role: 'ASSISTANT',
-            content: response.error || 'The AI service is currently unavailable. Please try again later.',
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-      }
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: 'err-' + Date.now(),
-          role: 'ASSISTANT',
-          content: 'Connection error. Please try again later.',
-          createdAt: new Date().toISOString(),
+      await aiService.sendStreamMessage(
+        text,
+        currentConversationId,
+        (data) => {
+          if (data.conversationId) {
+            setCurrentConversationId(data.conversationId);
+            fetchConversations();
+          }
+          setStreamingStatus('Preparing response...');
         },
-      ]);
+        (queuedData) => {
+          setStreamingStatus(`AI is busy. Waiting in queue... Position: ${queuedData.position}`);
+        },
+        (token) => {
+          setStreamingStatus(null);
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === tempAssistantId ? { ...msg, content: msg.content + token } : msg
+            )
+          );
+        },
+        (data) => {
+          if (data.sources && data.sources.length > 0) {
+            setCitations(data.sources);
+          }
+          if (data.messageId) {
+            setMessages((prev) =>
+              prev.map((msg) => (msg.id === tempAssistantId ? { ...msg, id: data.messageId } : msg))
+            );
+          }
+          setIsLoadingChat(false);
+          setStreamingStatus(null);
+        },
+        (error) => {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === tempAssistantId && !msg.content
+                ? { ...msg, content: error.message || 'An error occurred during response generation.' }
+                : msg
+            )
+          );
+          setIsLoadingChat(false);
+          setStreamingStatus(null);
+        },
+        abortController.signal
+      );
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('[Streaming Error]:', err);
+      }
     } finally {
       setIsLoadingChat(false);
+      setStreamingStatus(null);
+      abortControllerRef.current = null;
     }
   };
 
@@ -456,10 +505,10 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
                     </div>
                   ))
                 )}
-                {isLoadingChat && (
-                  <div className="flex items-center space-x-2 text-slate-500 bg-slate-850 border border-slate-750 rounded-2xl p-3 max-w-[40%] text-xs">
+                {isLoadingChat && streamingStatus && (
+                  <div className="flex items-center space-x-2 text-slate-400 bg-slate-850 border border-slate-750 rounded-2xl p-3 max-w-[50%] text-xs">
                     <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-                    <span>AI is formulating response...</span>
+                    <span>{streamingStatus}</span>
                   </div>
                 )}
                 <div ref={chatEndRef} />
@@ -495,14 +544,24 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
                   placeholder="Ask a question about reference materials or system analytics..."
                   className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-600 transition-colors"
                 />
-                <button
-                  type="submit"
-                  disabled={isLoadingChat || !inputText.trim()}
-                  className="px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all text-xs flex items-center space-x-1.5 disabled:opacity-50 disabled:hover:bg-blue-600 cursor-pointer"
-                >
-                  <span>Send</span>
-                  <Send className="w-3.5 h-3.5" />
-                </button>
+                {isLoadingChat ? (
+                  <button
+                    type="button"
+                    onClick={handleStopChat}
+                    className="px-5 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold transition-all text-xs flex items-center space-x-1.5 cursor-pointer"
+                  >
+                    <span>Stop</span>
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!inputText.trim()}
+                    className="px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all text-xs flex items-center space-x-1.5 disabled:opacity-50 disabled:hover:bg-blue-600 cursor-pointer"
+                  >
+                    <span>Send</span>
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </form>
             </div>
           )}

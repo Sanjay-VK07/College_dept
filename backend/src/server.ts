@@ -6,6 +6,7 @@ import { prisma } from './config/prisma';
 import { setupInvigilatorHub } from './socket/invigilatorHub';
 import { startDocumentProcessingWorker, stopDocumentProcessingWorker } from './jobs/documentProcessingWorker';
 import { startBatchGenerationWorker, stopBatchGenerationWorker } from './jobs/batchGenerationWorker';
+import { AIInferenceQueue } from './modules/ai/services/aiInferenceQueue';
 
 const server = http.createServer(app);
 
@@ -35,6 +36,13 @@ const gracefulShutdown = async (signal: string) => {
 
   console.log(`\n[Server Lifecycle] Received ${signal}. Starting graceful shutdown...`);
 
+  // Emergency force exit timer safeguard (10s limit)
+  const forceExitTimeout = setTimeout(() => {
+    console.error('[Server Lifecycle] Shutdown timeout reached (10s). Forcing process exit.');
+    process.exit(1);
+  }, 10000);
+  forceExitTimeout.unref();
+
   stopDocumentProcessingWorker();
   stopBatchGenerationWorker();
 
@@ -52,7 +60,14 @@ const gracefulShutdown = async (signal: string) => {
     console.error('[Server Lifecycle] Error closing Socket.IO:', err);
   }
 
-  // 3. Disconnect Prisma DB pool
+  // 3. Drain and cancel AI Inference Queue
+  try {
+    AIInferenceQueue.handleShutdown();
+  } catch (err) {
+    console.error('[Server Lifecycle] Error in AI queue shutdown:', err);
+  }
+
+  // 4. Disconnect Prisma DB pool
   try {
     await prisma.$disconnect();
     console.log('[Server Lifecycle] Database connection pool disconnected.');

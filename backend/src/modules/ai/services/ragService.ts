@@ -6,6 +6,7 @@ import { RAGEvaluationService, EvaluationResult, RetrievedChunk } from './ragEva
 import { LLMFactory } from './llmProvider';
 import { AuditLogger } from '../../../services/auditLogger';
 import { performance } from 'perf_hooks';
+import { VectorCache, CachedVectorChunk } from './vectorCache';
 
 export interface RAGOrchestrationResult {
   ragDecision: AIRAGDecision;
@@ -227,61 +228,72 @@ export class RAGService {
       ],
     };
 
-    // 3. Load all authorized chunks' embeddings to compute cosine similarity (efficiently limited by select)
-    const chunks = await prisma.aIDocumentChunk.findMany({
-      where: {
-        document: docWhereClause,
-      },
-      select: {
-        id: true,
-        documentId: true,
-        embedding: true,
-        content: true,
-        document: {
-          select: {
-            title: true,
+    // 3. Scope Key reflecting strict user authorization boundary
+    const scopeKey = `role:${role}:user:${userId}`;
+
+    const { chunks: candidateChunks } = await VectorCache.getChunks(scopeKey, async () => {
+      const dbRows = await prisma.aIDocumentChunk.findMany({
+        where: {
+          document: docWhereClause,
+        },
+        select: {
+          id: true,
+          documentId: true,
+          embedding: true,
+          document: {
+            select: {
+              title: true,
+            },
           },
         },
-      },
+      });
+
+      return dbRows.map((c) => ({
+        id: c.id,
+        documentId: c.documentId,
+        embedding: c.embedding,
+        title: c.document.title,
+        visibility: role,
+        uploadedById: userId,
+        status: 'READY',
+      }));
     });
 
-    if (chunks.length === 0) {
+    if (candidateChunks.length === 0) {
       return [];
     }
 
-    // 4. Calculate cosine similarity
-    const isLocal = (process.env.EMBEDDING_PROVIDER || 'local').toLowerCase() === 'local';
-
-    const scoredChunks = chunks
-      .map((c) => {
-        let score = this.cosineSimilarity(queryVector, c.embedding);
-        
-        // Add keyword overlap bonus when offline/local provider is used for robust integration testing
-        if (isLocal) {
-          const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-          const chunkLower = c.content.toLowerCase();
-          let matchCount = 0;
-          for (const word of queryWords) {
-            if (chunkLower.includes(word)) {
-              matchCount++;
-            }
-          }
-          if (matchCount > 0) {
-            score = Math.min(1.0, score + 0.5 + (matchCount * 0.05));
-          }
-        }
-
-        return {
-          chunkId: c.id,
-          documentId: c.documentId,
-          title: c.document.title,
-          content: c.content,
-          score,
-        };
-      })
-      .filter((c) => c.score >= 0.3) // Similarity threshold to filter out completely irrelevant chunks
-      .sort((a, b) => b.score - a.score)
+    // 4. Calculate cosine similarity in memory (<1ms)
+    const rankedCandidates = candidateChunks
+      .map((c: CachedVectorChunk) => ({
+        c,
+        score: this.cosineSimilarity(queryVector, c.embedding),
+      }))
+      .filter((item: { c: CachedVectorChunk; score: number }) => item.score >= 0.3)
+      .sort((a: { score: number }, b: { score: number }) => b.score - a.score)
       .slice(0, limit);
+
+    if (rankedCandidates.length === 0) {
+      return [];
+    }
+
+    // Fetch content ONLY for matched top chunk IDs
+    const matchedIds = rankedCandidates.map((r: { c: CachedVectorChunk }) => r.c.id);
+    const contentRows = await prisma.aIDocumentChunk.findMany({
+      where: { id: { in: matchedIds } },
+      select: { id: true, content: true },
+    });
+
+    const contentMap = new Map<string, string>();
+    contentRows.forEach((r: { id: string; content: string }) => contentMap.set(r.id, r.content));
+
+    const scoredChunks = rankedCandidates.map((r: { c: CachedVectorChunk; score: number }) => ({
+      chunkId: r.c.id,
+      documentId: r.c.documentId,
+      title: r.c.title,
+      content: contentMap.get(r.c.id) || '',
+      score: r.score,
+    }));
 
     // 5. Audit Log document search event
     await AuditLogger.log({
@@ -303,16 +315,17 @@ export class RAGService {
     userId: string;
     role: Role;
     limit?: number;
+    existingChunks?: Array<{ chunkId: string; documentId: string; title: string; content: string; score: number }>;
   }): Promise<RAGResult> {
-    const { query, userId, role, limit = 5 } = params;
+    const { query, userId, role, limit = 5, existingChunks } = params;
 
-    // 1. Vector Search under strict role authorization filters
-    const matchedChunks = await this.searchChunks({
+    // 1. Vector Search under strict role authorization filters (or use pre-fetched chunks)
+    const matchedChunks = existingChunks || (await this.searchChunks({
       query,
       userId,
       role,
       limit,
-    });
+    }));
 
     // 2. Hallucination Control: If insufficient context matches, fail early without guessing
     if (matchedChunks.length === 0) {

@@ -119,6 +119,13 @@ export class DocumentStructureService {
       for (let i = 0; i < batches.length; i++) {
         const batch = batches[i];
 
+        // Deletion check guard
+        const stillExists = await prisma.aIDocument.findUnique({ where: { id: documentId }, select: { id: true } });
+        if (!stillExists) {
+          console.warn(`[DocumentStructureService] Document ${documentId} was deleted mid-processing. Aborting worker pipeline.`);
+          return;
+        }
+
         // Proactive spacing between requests, not just reactive retry-after-failure — firing
         // many vision calls back-to-back for a large document has been observed to trip the
         // provider's own per-minute rate limit well before any single call's retry logic kicks in.

@@ -70,13 +70,15 @@ export class AIResilience {
 
         const isTimeout = err.name === 'AbortError' || (err.message && err.message.includes('aborted'));
         const normalizedErr = isTimeout
-          ? new AIResilienceError(`AI provider operation timed out after ${timeoutMs}ms`, 'AI_PROVIDER_TIMEOUT', 504)
+          ? new AIResilienceError(`AI_PROVIDER_TIMEOUT: Operation timed out after ${timeoutMs}ms`, 'AI_PROVIDER_TIMEOUT', 504)
           : err;
 
+        if (isTimeout) {
+          console.error(`[AI ERROR] Stage: ${opName}, Error type: timeout, Configured timeout: ${timeoutMs}ms, Elapsed: ${timeoutMs}ms`);
+          throw normalizedErr;
+        }
+
         if (attempt >= maxRetries || !this.isRetryableError(normalizedErr)) {
-          if (isTimeout) {
-            throw new AIResilienceError('AI_PROVIDER_TIMEOUT: The AI provider did not respond within timeout limit.', 'AI_PROVIDER_TIMEOUT', 504);
-          }
           throw normalizedErr;
         }
 

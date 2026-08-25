@@ -42,6 +42,7 @@ router.use('/governance', adminLimiter);
 
 // 1. Existing Chat & Conversations Routes
 router.post('/chat', AIChatController.postChatMessage);
+router.post('/chat/stream', AIChatController.postChatMessageStream);
 router.get('/conversations', AIChatController.getConversations);
 router.get('/conversations/:conversationId', AIChatController.getConversationById);
 router.delete('/conversations/:conversationId', AIChatController.deleteConversation);

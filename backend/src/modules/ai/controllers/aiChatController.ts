@@ -39,6 +39,99 @@ export class AIChatController {
   }
 
   /**
+   * POST /api/ai/chat/stream
+   * Real-time Server-Sent Events (SSE) AI streaming response endpoint
+   */
+  public static async postChatMessageStream(req: AuthRequest, res: Response) {
+    const userId = req.user!.id;
+    const role = req.user!.role;
+    const { message, conversationId, requestId } = req.body || {};
+    const reqId = requestId || `req-${Date.now()}`;
+
+    // 1. Input Validation before sending headers
+    if (!message || typeof message !== 'string' || message.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Message content must be a non-empty string.',
+      });
+    }
+
+    if (message.length > 4000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Message content exceeds maximum allowed length of 4000 characters.',
+      });
+    }
+
+    // 2. Set SSE Headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof (res as any).flushHeaders === 'function') {
+      (res as any).flushHeaders();
+    }
+
+    console.log(`[STREAM] request started requestId=${reqId} userId=${userId}`);
+
+    const abortController = new AbortController();
+    let isCompleted = false;
+
+    const onClose = () => {
+      if (!isCompleted && !res.writableEnded) {
+        console.log(`[STREAM] client disconnected requestId=${reqId}`);
+        console.log(`[STREAM] aborting Ollama request requestId=${reqId}`);
+        abortController.abort();
+      }
+    };
+
+    req.on('close', onClose);
+
+    const sendSSE = (event: string, data: any) => {
+      if (!res.writableEnded) {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      }
+    };
+
+    try {
+      await AIChatService.processChatMessageStream({
+        userId,
+        role,
+        message: message.trim(),
+        conversationId,
+        requestId: reqId,
+        signal: abortController.signal,
+        sendSSE,
+      });
+
+      isCompleted = true;
+      req.off('close', onClose);
+
+      if (!res.writableEnded) {
+        console.log(`[STREAM] stream completed normally requestId=${reqId}`);
+        res.end();
+      }
+    } catch (error: any) {
+      isCompleted = true;
+      req.off('close', onClose);
+
+      if (error.name === 'AbortError' || abortController.signal.aborted) {
+        console.log(`[STREAM] Ollama stream terminated requestId=${reqId}`);
+      } else {
+        console.error(`[STREAM Error] requestId=${reqId}:`, error.message);
+        sendSSE('error', {
+          code: error.code || 'AI_STREAM_ERROR',
+          message: 'An error occurred while streaming the AI response. Please try again later.',
+        });
+      }
+
+      if (!res.writableEnded) {
+        res.end();
+      }
+    }
+  }
+
+  /**
    * GET /api/ai/conversations
    */
   public static async getConversations(req: AuthRequest, res: Response) {

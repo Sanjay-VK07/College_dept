@@ -1,9 +1,59 @@
 import path from 'path';
+import crypto from 'crypto';
+import fs from 'fs';
+import { ENV } from '../../../config/env';
 
-// Configurable size limit from environment (default: 10MB)
-export const MAX_DOCUMENT_UPLOAD_SIZE = process.env.MAX_DOCUMENT_UPLOAD_SIZE
-  ? parseInt(process.env.MAX_DOCUMENT_UPLOAD_SIZE, 10)
-  : 10 * 1024 * 1024; // 10MB
+// Configurable size limit from environment (default: 30MB + 50KB form boundary margin)
+export const MAX_DOCUMENT_UPLOAD_SIZE = ENV.MAX_DOCUMENT_UPLOAD_SIZE || (30 * 1024 * 1024 + 50 * 1024); // 30MB + 50KB
+
+/**
+ * Computes a SHA-256 hash checksum of the uploaded document bytes (Buffer version).
+ */
+export function computeFileChecksum(buffer: Buffer): string {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+/**
+ * Computes a SHA-256 hash checksum from a disk file stream (0 MB RAM overhead).
+ */
+export function computeFileChecksumFromPath(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', (err) => reject(err));
+  });
+}
+
+/**
+ * Safely deletes a file from disk, preventing path traversal and ignoring ENOENT errors.
+ */
+export async function safeDeleteFile(filePath: string, documentId?: string): Promise<boolean> {
+  if (!filePath) return false;
+
+  try {
+    const uploadsBase = path.resolve(process.cwd(), 'uploads');
+    const absolutePath = path.resolve(filePath);
+
+    // Security guard: ensure file is inside the configured uploads directory
+    if (!absolutePath.startsWith(uploadsBase)) {
+      console.warn(`[DocumentCleanup] Path traversal blocked: ${filePath} outside ${uploadsBase}`);
+      return false;
+    }
+
+    await fs.promises.unlink(absolutePath);
+    console.log(`[DocumentCleanup] Deleted temp file ${documentId ? `documentId=${documentId} ` : ''}path=${path.basename(absolutePath)}`);
+    return true;
+  } catch (err: any) {
+    if (err.code === 'ENOENT') {
+      console.log(`[DocumentCleanup] File already removed ${documentId ? `documentId=${documentId} ` : ''}path=${path.basename(filePath)}`);
+      return true;
+    }
+    console.error(`[DocumentCleanup] Cleanup failed ${documentId ? `documentId=${documentId} ` : ''}path=${path.basename(filePath)}:`, err.message);
+    return false;
+  }
+}
 
 // Supported types mapping extension to MIME types
 export const SUPPORTED_DOCUMENT_TYPES: Record<string, string[]> = {
@@ -60,7 +110,73 @@ export function sanitizeFileName(fileName: string): string {
 }
 
 /**
- * Performs layered validation on file upload metadata and contents.
+ * Performs layered validation on disk-based file upload metadata and header contents.
+ */
+export function validateUploadDiskFile(
+  filePath: string,
+  fileSize: number,
+  originalName: string,
+  mimeType: string
+): { valid: boolean; error?: string; status?: number } {
+  if (!filePath || fileSize === 0) {
+    return { valid: false, error: 'File is empty or missing content.', status: 400 };
+  }
+
+  // Size validation
+  if (fileSize > MAX_DOCUMENT_UPLOAD_SIZE) {
+    return {
+      valid: false,
+      error: `File size exceeds limit of ${(MAX_DOCUMENT_UPLOAD_SIZE / (1024 * 1024)).toFixed(0)}MB.`,
+      status: 413,
+    };
+  }
+
+  // Extension validation
+  const ext = path.extname(originalName).toLowerCase();
+  const allowedMimeTypes = SUPPORTED_DOCUMENT_TYPES[ext];
+
+  if (!allowedMimeTypes) {
+    return {
+      valid: false,
+      error: `Unsupported file extension '${ext}'. Allowed types: PDF, DOCX, TXT, MD.`,
+      status: 400,
+    };
+  }
+
+  // MIME type validation
+  const cleanMime = mimeType.trim().toLowerCase();
+  if (!allowedMimeTypes.includes(cleanMime)) {
+    return {
+      valid: false,
+      error: `MIME type mismatch for extension '${ext}'. Expected one of: ${allowedMimeTypes.join(', ')}`,
+      status: 400,
+    };
+  }
+
+  // Read tiny 512-byte header for magic byte signature validation
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const headerBuf = Buffer.alloc(512);
+    const bytesRead = fs.readSync(fd, headerBuf, 0, 512, 0);
+    fs.closeSync(fd);
+
+    const sampleBuf = headerBuf.subarray(0, bytesRead);
+    if (!validateFileSignature(sampleBuf, ext)) {
+      return {
+        valid: false,
+        error: `File signature validation failed. The file content does not match the extension '${ext}'.`,
+        status: 400,
+      };
+    }
+  } catch (e: any) {
+    return { valid: false, error: `Failed to read file headers: ${e.message}`, status: 400 };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Performs layered validation on file upload metadata and contents (Buffer version).
  */
 export function validateUploadFile(
   buffer: Buffer,

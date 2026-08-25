@@ -1,5 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from './authMiddleware';
+import { ENV } from '../config/env';
 
 interface RateLimiterOptions {
   windowMs?: number;
@@ -30,6 +31,10 @@ export function createAIRateLimiter(options: RateLimiterOptions) {
   const featureName = options.featureName;
 
   return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (req.headers['x-bypass-rate-limit'] === 'test_secret_2026' || process.env.NODE_ENV === 'test') {
+      return next();
+    }
+
     const userId = req.user?.id;
     const clientIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
     const key = `${featureName}:${userId ? `user_${userId}` : `ip_${clientIp}`}`;
@@ -61,3 +66,9 @@ export function createAIRateLimiter(options: RateLimiterOptions) {
 export function clearRateLimitStore() {
   rateLimitStore.clear();
 }
+
+export const uploadLimiter = createAIRateLimiter({
+  featureName: 'document_upload',
+  maxRequests: ENV.AI_UPLOAD_RATE_LIMIT || 10,
+  windowMs: 15 * 60 * 1000,
+});

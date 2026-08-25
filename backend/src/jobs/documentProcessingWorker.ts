@@ -1,4 +1,5 @@
 import { prisma } from '../config/prisma';
+import { ENV } from '../config/env';
 import { DocumentStructureService } from '../modules/ai/services/documentStructureService';
 
 declare global {
@@ -42,9 +43,13 @@ export async function tickDocumentProcessingWorker() {
       console.warn(`[documentProcessingWorker] Reclaimed ${staleResult.count} stale document processing jobs.`);
     }
 
+    const maxConcurrent = ENV.MAX_CONCURRENT_DOCUMENT_UPLOADS || 3;
+    const availableSlots = maxConcurrent - inFlight.size;
+    if (availableSlots <= 0) return;
+
     const queued = await prisma.documentProcessingJob.findMany({
       where: { status: 'QUEUED' },
-      take: 3,
+      take: availableSlots,
       orderBy: { createdAt: 'asc' },
       select: { id: true, documentId: true },
     });
@@ -92,4 +97,18 @@ export function stopDocumentProcessingWorker() {
     timer = null;
     globalThis.__docWorkerStarted = false;
   }
+}
+
+export async function getDocumentProcessingWorkerStats() {
+  const queuedCount = await prisma?.documentProcessingJob?.count({
+    where: { status: 'QUEUED' },
+  }).catch(() => 0) || 0;
+
+  return {
+    status: 'healthy',
+    active: inFlight.size,
+    queued: queuedCount,
+    maxConcurrency: ENV.MAX_CONCURRENT_DOCUMENT_UPLOADS || 3,
+    maxQueueSize: 20,
+  };
 }

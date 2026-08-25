@@ -15,6 +15,10 @@ import { ChatResponseData } from '../types/ai.types';
 import { performance } from 'perf_hooks';
 import { AIStatsService } from './aiStatsService';
 
+import { LLMFactory } from './llmProvider';
+import { OllamaProvider } from './ollamaProvider';
+import { AIInferenceQueue, AIQueueError } from './aiInferenceQueue';
+
 export class AIChatService {
   /**
    * Enterprise State-Machine Driven AI Chat Orchestration Flow with RAG Observability & Provenance:
@@ -326,12 +330,17 @@ Your task:
 
     // C. RAG document search and Q&A routing
     try {
+      console.log(`[AI] Request started: userId=${userId}, role=${role}`);
+      console.log(`[AI] RAG retrieval started for query: "${trimmedMsg.substring(0, 80)}"`);
+      const ragSearchStart = performance.now();
       const matchedChunks = await RAGService.searchChunks({
         query: trimmedMsg,
         userId,
         role,
         limit: 3,
       });
+      const searchDurationMs = Math.round(performance.now() - ragSearchStart);
+      console.log(`[AI] RAG search completed in ${searchDurationMs}ms. Found ${matchedChunks.length} chunks.`);
 
       if (matchedChunks.length > 0) {
         const ragResult = await RAGService.answerQuestion({
@@ -339,6 +348,7 @@ Your task:
           userId,
           role,
           limit: 3,
+          existingChunks: matchedChunks,
         });
 
         let finalContent = ragResult.answer;
@@ -355,6 +365,7 @@ Your task:
           finalContent
         );
 
+        console.log(`[AI] Total request completed in ${Math.round(performance.now() - requestStartTime)}ms`);
         return {
           success: true,
           type: 'SUCCESS',
@@ -437,11 +448,17 @@ Your task:
       systemPrompt = buildStudentPrompt(verifiedContext);
     }
 
-    // 10. Invoke AI Provider with timing measurement
+    // 10. Invoke AI Provider via AIInferenceQueue with timing measurement
     const providerStartTime = performance.now();
     let providerResult;
     try {
-      providerResult = await AIProviderService.generateResponse(systemPrompt, recentHistory, trimmedMsg);
+      providerResult = await AIInferenceQueue.enqueue({
+        requestId: requestId || 'req-' + Date.now(),
+        userId,
+        conversationId: conversation.id,
+        role,
+        execute: () => AIProviderService.generateResponse(systemPrompt, recentHistory, trimmedMsg),
+      });
     } catch (err: any) {
       const providerDurationMs = Math.round(performance.now() - providerStartTime);
       const totalDurationMs = Math.round(performance.now() - requestStartTime);
@@ -451,8 +468,8 @@ Your task:
         await RAGObservabilityService.markTraceFailed(
           traceId,
           requestId,
-          'AI_PROVIDER_UNAVAILABLE',
-          'Provider call threw exception',
+          err.code || 'AI_PROVIDER_UNAVAILABLE',
+          err.message || 'Provider call threw exception',
           totalDurationMs
         );
       }
@@ -541,5 +558,183 @@ Your task:
       },
       sources: ragResult.ragUsed ? ragResult.sources : undefined,
     } as any;
+  }
+
+  /**
+   * Real-Time SSE Response Streaming Orchestration with Stage-Level Tracing:
+   * 1. Request validation
+   * 2. Conversation & User Message creation
+   * 3. Send START Event immediately
+   * 4. RAG Retrieval / Context Verification
+   * 5. Stream Ollama tokens to client via SSE with Time-To-First-Token (TTFT) tracing
+   * 6. Save Assistant response on stream completion
+   * 7. Send DONE Event
+   */
+  public static async processChatMessageStream(params: {
+    userId: string;
+    role: Role;
+    message: string;
+    conversationId?: string;
+    requestId?: string;
+    signal?: AbortSignal;
+    sendSSE: (event: string, data: any) => void;
+  }): Promise<void> {
+    const { userId, role, message, conversationId, requestId, signal, sendSSE } = params;
+    const reqId = requestId || `req-${Date.now()}`;
+    const t0 = performance.now();
+
+    // 1. Validation
+    if (!message || message.trim().length === 0) {
+      const err: any = new Error('Message content cannot be empty.');
+      err.status = 400;
+      throw err;
+    }
+    const trimmedMsg = message.trim();
+
+    // 2. Conversation & User Message Initialization
+    const conversation = await ConversationService.getOrCreateConversation(userId, conversationId, trimmedMsg);
+    const userMsg = await ConversationService.saveUserMessage(conversation.id, trimmedMsg, reqId);
+
+    // 3. Send START Event immediately
+    sendSSE('start', {
+      requestId: reqId,
+      conversationId: conversation.id,
+      userMessageId: userMsg.id,
+    });
+
+    const tRagStart = performance.now();
+    // 4. RAG Vector Search
+    const matchedChunks = await RAGService.searchChunks({
+      query: trimmedMsg,
+      userId,
+      role,
+      limit: 3,
+    });
+    const ragDurMs = Math.round(performance.now() - tRagStart);
+
+    let systemPrompt = '';
+    let sources: any[] = [];
+
+    if (matchedChunks.length > 0) {
+      const contextText = matchedChunks
+        .map((chunk, index) => `[DOCUMENT #${index + 1}]: ${chunk.title}\n[CONTENT]:\n${chunk.content}`)
+        .join('\n\n');
+
+      sources = matchedChunks.map((c) => ({ documentId: c.documentId, documentTitle: c.title }));
+
+      systemPrompt = `SYSTEM INSTRUCTIONS:
+You are the GATE Smart Management and Assessment System (GSMAS) AI Examination Assistant.
+Answer the user's question based ONLY on the verified university documents provided in the context below.
+
+CONCISE RESPONSE DIRECTIVES:
+- Answer directly and authoritatively without unnecessary fluff.
+- Prefer clear bullet points and structured markdown.
+- Stop immediately once the question is completely answered.
+
+CONTEXT DOCUMENTS:
+==================================
+${contextText}
+==================================`;
+    } else {
+      const intent = IntentService.classifyIntent(trimmedMsg);
+      const verifiedContext = await ContextService.getAuthorizedContext({ userId, role, intent });
+      if (role === Role.STUDENT) systemPrompt = buildStudentPrompt(verifiedContext);
+      else if (role === Role.FACULTY) systemPrompt = buildFacultyPrompt(verifiedContext);
+      else systemPrompt = buildAdminPrompt(verifiedContext);
+    }
+
+    // 5. Enqueue & Invoke Ollama Streaming Provider
+    const provider = LLMFactory.getProvider() as OllamaProvider;
+    let fullStreamText = '';
+    let tFirstTokenMs = 0;
+    const queueStartMs = performance.now();
+
+    try {
+      const streamResult = await AIInferenceQueue.enqueue({
+        requestId: reqId,
+        userId,
+        conversationId: conversation.id,
+        role,
+        signal,
+        onQueued: (queuedData) => {
+          sendSSE('queued', {
+            requestId: reqId,
+            position: queuedData.position,
+            queueSize: queuedData.queueSize,
+          });
+        },
+        execute: () =>
+          provider.generateStream(
+            systemPrompt,
+            [],
+            trimmedMsg,
+            (token: string) => {
+              if (!tFirstTokenMs) {
+                tFirstTokenMs = Math.round(performance.now() - t0);
+                console.log(`[TRACE] requestId=${reqId} | Time-To-First-Token (TTFT): ${tFirstTokenMs}ms`);
+              }
+              fullStreamText += token;
+              sendSSE('token', { text: token });
+            },
+            { signal }
+          ),
+      });
+
+      const queueWaitMs = Math.round(performance.now() - queueStartMs);
+      let finalContent = fullStreamText;
+      if (sources.length > 0) {
+        const sourceList = Array.from(new Set(sources.map((s) => s.documentTitle)))
+          .map((title) => `- ${title}`)
+          .join('\n');
+        finalContent += `\n\n**Sources:**\n${sourceList}`;
+      }
+
+      // 6. Asynchronous Persistence of Assistant Response with DB Failure Protection
+      let assistantMessageId = userMsg.id;
+      try {
+        const assistantMsg = await ConversationService.saveAssistantMessage(
+          conversation.id,
+          userMsg.id,
+          finalContent
+        );
+        assistantMessageId = assistantMsg.id;
+      } catch (dbErr: any) {
+        console.error(`[STREAM Persistence Warning] DB save failed requestId=${reqId}:`, dbErr.message);
+      }
+
+      const totalDurMs = Math.round(performance.now() - t0);
+      const generationDurationMs = Math.max(0, totalDurMs - queueWaitMs - ragDurMs);
+      console.log(`[TRACE] requestId=${reqId} | TOTAL_STREAM_TIME: ${totalDurMs}ms | queueWaitMs: ${queueWaitMs}ms | TTFT: ${tFirstTokenMs}ms`);
+
+      // 7. Send DONE Event
+      sendSSE('done', {
+        requestId: reqId,
+        conversationId: conversation.id,
+        messageId: assistantMessageId,
+        queueWaitMs,
+        generationDurationMs,
+        totalDurationMs: totalDurMs,
+        evalCount: streamResult.evalCount,
+        sources,
+      });
+    } catch (err: any) {
+      if (err.name === 'AbortError' || signal?.aborted) {
+        console.log(`[TRACE] requestId=${reqId} | Client disconnected / Stream aborted.`);
+        return;
+      }
+      if (err instanceof AIQueueError) {
+        console.warn(`[AI_QUEUE Reject] requestId=${reqId} code=${err.code}: ${err.message}`);
+        sendSSE('error', {
+          code: err.code,
+          message: err.message,
+        });
+        return;
+      }
+      console.error(`[AIChatService.processChatMessageStream Error]:`, err);
+      sendSSE('error', {
+        code: 'AI_STREAM_ERROR',
+        message: err.message || 'Error occurred during stream generation',
+      });
+    }
   }
 }

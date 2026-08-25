@@ -27,13 +27,21 @@ export const ENV = {
   EMBEDDING_DIMENSION: parseInt(process.env.EMBEDDING_DIMENSION || '384', 10),
 
   // Ollama Config
-  OLLAMA_BASE_URL: (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, ''),
+  OLLAMA_BASE_URL: (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, ''),
   OLLAMA_CHAT_MODEL: process.env.OLLAMA_CHAT_MODEL || 'llama3.2',
   OLLAMA_EMBEDDING_MODEL: process.env.OLLAMA_EMBEDDING_MODEL || 'all-minilm',
-  OLLAMA_REQUEST_TIMEOUT_MS: parseInt(process.env.OLLAMA_REQUEST_TIMEOUT_MS || process.env.AI_PROVIDER_TIMEOUT_MS || '30000', 10),
-  OLLAMA_MAX_RETRIES: parseInt(process.env.OLLAMA_MAX_RETRIES || process.env.AI_MAX_RETRIES || '3', 10),
+  OLLAMA_REQUEST_TIMEOUT_MS: parseInt(process.env.OLLAMA_REQUEST_TIMEOUT_MS || process.env.AI_PROVIDER_TIMEOUT_MS || '120000', 10),
+  OLLAMA_MAX_TOKENS: parseInt(process.env.OLLAMA_MAX_TOKENS || '384', 10),
+  OLLAMA_MAX_RETRIES: parseInt(process.env.OLLAMA_MAX_RETRIES || process.env.AI_MAX_RETRIES || '1', 10),
   OLLAMA_INITIAL_RETRY_DELAY_MS: parseInt(process.env.OLLAMA_INITIAL_RETRY_DELAY_MS || process.env.AI_INITIAL_RETRY_DELAY_MS || '500', 10),
   OLLAMA_MAX_RETRY_DELAY_MS: parseInt(process.env.OLLAMA_MAX_RETRY_DELAY_MS || process.env.AI_MAX_RETRY_DELAY_MS || '3000', 10),
+
+  // AI Inference Queue Concurrency & Fairness Limits
+  AI_MAX_CONCURRENT_INFERENCE: parseInt(process.env.AI_MAX_CONCURRENT_INFERENCE || '1', 10),
+  AI_MAX_QUEUE_SIZE: parseInt(process.env.AI_MAX_QUEUE_SIZE || '10', 10),
+  AI_MAX_QUEUE_WAIT_MS: parseInt(process.env.AI_MAX_QUEUE_WAIT_MS || '120000', 10),
+  AI_MAX_ACTIVE_PER_USER: parseInt(process.env.AI_MAX_ACTIVE_PER_USER || '1', 10),
+  AI_MAX_QUEUED_PER_USER: parseInt(process.env.AI_MAX_QUEUED_PER_USER || '2', 10),
 
   // RAG Thresholds
   RAG_HIGH_CONFIDENCE_THRESHOLD: parseFloat(process.env.RAG_HIGH_CONFIDENCE_THRESHOLD || '0.75'),
@@ -42,7 +50,7 @@ export const ENV = {
   RAG_MIN_RELEVANT_CHUNKS: parseInt(process.env.RAG_MIN_RELEVANT_CHUNKS || '1', 10),
 
   // Phase 8 Reliability & Resilience Settings
-  AI_PROVIDER_TIMEOUT_MS: parseInt(process.env.AI_PROVIDER_TIMEOUT_MS || '30000', 10),
+  AI_PROVIDER_TIMEOUT_MS: parseInt(process.env.AI_PROVIDER_TIMEOUT_MS || '120000', 10),
   AI_MAX_RETRIES: parseInt(process.env.AI_MAX_RETRIES || '3', 10),
   AI_INITIAL_RETRY_DELAY_MS: parseInt(process.env.AI_INITIAL_RETRY_DELAY_MS || '500', 10),
   AI_MAX_RETRY_DELAY_MS: parseInt(process.env.AI_MAX_RETRY_DELAY_MS || '3000', 10),
@@ -54,6 +62,9 @@ export const ENV = {
   AI_ADMIN_RATE_LIMIT: parseInt(process.env.AI_ADMIN_RATE_LIMIT || '60', 10),
 
   // Document Processing Safety Limits
+  MAX_DOCUMENT_UPLOAD_SIZE: parseInt(process.env.MAX_DOCUMENT_UPLOAD_SIZE || `${30 * 1024 * 1024 + 50 * 1024}`, 10),
+  MAX_CONCURRENT_DOCUMENT_UPLOADS: parseInt(process.env.MAX_CONCURRENT_DOCUMENT_UPLOADS || '3', 10),
+  AI_UPLOAD_RATE_LIMIT: parseInt(process.env.AI_UPLOAD_RATE_LIMIT || '10', 10),
   MAX_EXTRACTED_TEXT: parseInt(process.env.MAX_EXTRACTED_TEXT || '500000', 10),
   MAX_CHUNKS_PER_DOCUMENT: parseInt(process.env.MAX_CHUNKS_PER_DOCUMENT || '1000', 10),
   MAX_EMBEDDING_BATCH_SIZE: parseInt(process.env.MAX_EMBEDDING_BATCH_SIZE || '50', 10),

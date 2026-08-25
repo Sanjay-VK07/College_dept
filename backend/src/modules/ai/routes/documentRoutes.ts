@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { DocumentController } from '../controllers/documentController';
 import { documentUploadMiddleware } from '../middleware/documentUploadMiddleware';
+import { uploadLimiter } from '../../../middlewares/rateLimiter';
 
 const router = Router();
 
-// Route for uploading documents (with file size limit validations)
+// Route for uploading documents (with rate limiting and file size limit validations)
 router.post(
   '/upload',
+  uploadLimiter,
   documentUploadMiddleware,
   DocumentController.handleMulterError,
   DocumentController.uploadDocument
