@@ -2327,7 +2327,7 @@ export default function AdminDashboard() {
               <div className="space-y-3 text-xs">
                 <div>
                   <label className="block font-semibold text-slate-700 uppercase mb-1">Restricted Email Domain</label>
-                  <input type="text" value="cit.edu.in" readOnly className="erp-input font-mono bg-slate-100" />
+                  <input type="text" value="citchennai.net" readOnly className="erp-input font-mono bg-slate-100" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-700 uppercase mb-1">Security Infraction Rule</label>
@@ -2518,7 +2518,7 @@ export default function AdminDashboard() {
                   value={newStudent.email}
                   onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
                   required
-                  placeholder="ganesh@cit.edu.in"
+                  placeholder="ganesh@citchennai.net"
                   className="erp-input"
                 />
               </div>
@@ -2558,7 +2558,7 @@ export default function AdminDashboard() {
                   value={newFaculty.email}
                   onChange={(e) => setNewFaculty({ ...newFaculty, email: e.target.value })}
                   required
-                  placeholder="sabitha@cit.edu.in"
+                  placeholder="sabitha@citchennai.net"
                   className="erp-input"
                 />
               </div>

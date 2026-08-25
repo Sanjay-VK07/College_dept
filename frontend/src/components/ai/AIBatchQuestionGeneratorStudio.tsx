@@ -98,6 +98,13 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Resource bulk delete — separate from selectedDocIds (which picks resources to generate
+  // FROM and is deliberately restricted to ready ones). Delete selection has no such
+  // restriction: failed/in-progress resources must be deletable too.
+  const [selectedDeleteIds, setSelectedDeleteIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
   // Step 2 — Configuration
   const [totalQuestions, setTotalQuestions] = useState(50);
   const [easyPercent, setEasyPercent] = useState(20);
@@ -190,6 +197,16 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
     return () => clearInterval(t);
   }, [documents, loadDocuments]);
 
+  // Keep the delete-selection in sync with whatever's actually still in the list (e.g. a
+  // background refresh picking up a deletion made elsewhere).
+  useEffect(() => {
+    setSelectedDeleteIds((prev) => {
+      const liveIds = new Set(documents.map((d) => d.id));
+      const next = new Set(Array.from(prev).filter((id) => liveIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [documents]);
+
   useEffect(() => () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current); }, []);
 
   // ---------------------------------------------------------------- derived values
@@ -244,10 +261,63 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
     try {
       await aiService.deleteDocument(docId);
       setSelectedDocIds((prev) => prev.filter((id) => id !== docId));
+      setSelectedDeleteIds((prev) => {
+        if (!prev.has(docId)) return prev;
+        const next = new Set(prev);
+        next.delete(docId);
+        return next;
+      });
       showToast('Resource removed.');
       loadDocuments();
     } catch (e: any) {
       showToast(e.response?.data?.message || 'Failed to remove resource.');
+    }
+  };
+
+  const handleToggleSelectDelete = (docId: string) => {
+    setSelectedDeleteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(docId)) next.delete(docId);
+      else next.add(docId);
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllDelete = () => {
+    setSelectedDeleteIds((prev) =>
+      prev.size === documents.length ? new Set() : new Set(documents.map((d) => d.id))
+    );
+  };
+
+  const handleClearDeleteSelection = () => setSelectedDeleteIds(new Set());
+
+  const handleBulkDeleteDocuments = async () => {
+    const ids = Array.from(selectedDeleteIds);
+    if (ids.length === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      const outcomes = await Promise.allSettled(ids.map((id) => aiService.deleteDocument(id)));
+      const succeededIds = ids.filter((_, i) => outcomes[i].status === 'fulfilled');
+      const failed = outcomes
+        .map((o, i) => ({ o, id: ids[i] }))
+        .filter(({ o }) => o.status === 'rejected') as { o: PromiseRejectedResult; id: string }[];
+
+      setDocuments((prev) => prev.filter((d) => !succeededIds.includes(d.id)));
+      setSelectedDocIds((prev) => prev.filter((id) => !succeededIds.includes(id)));
+      setSelectedDeleteIds(new Set());
+      setIsBulkDeleteConfirmOpen(false);
+
+      if (failed.length === 0) {
+        showToast(`${succeededIds.length} resource(s) deleted.`);
+      } else {
+        const firstReason = failed[0].o.reason?.response?.data?.message || failed[0].o.reason?.message || 'Unknown error';
+        showToast(
+          `${succeededIds.length} deleted, ${failed.length} failed (e.g. "${firstReason}"). Failed resources were left in place.`
+        );
+      }
+      loadDocuments();
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -608,6 +678,23 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                 </button>
               </header>
 
+              {selectedDeleteIds.size > 0 && (
+                <div className="px-5 py-2 border-b border-slate-200 bg-blue-50/60 flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-800">{selectedDeleteIds.size} selected</span>
+                  <div className="flex items-center gap-2">
+                    <button onClick={handleClearDeleteSelection} className="text-xs text-slate-600 hover:underline">
+                      Clear Selection
+                    </button>
+                    <button
+                      onClick={() => setIsBulkDeleteConfirmOpen(true)}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-red-700 text-white text-xs font-semibold hover:bg-red-800"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Delete Selected
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {documents.length === 0 ? (
                 <div className="px-5 py-6 text-center">
                   <p className="text-xs font-semibold text-slate-700">No resources uploaded yet.</p>
@@ -618,7 +705,19 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr className="text-left text-slate-600">
-                        <th className="px-3 py-2 font-semibold w-8"></th>
+                        <th className="px-3 py-2 font-semibold w-8">
+                          <input
+                            type="checkbox"
+                            className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                            checked={documents.length > 0 && selectedDeleteIds.size === documents.length}
+                            ref={(el) => {
+                              if (el) el.indeterminate = selectedDeleteIds.size > 0 && selectedDeleteIds.size < documents.length;
+                            }}
+                            title="Select all for deletion"
+                            onChange={handleToggleSelectAllDelete}
+                          />
+                        </th>
+                        <th className="px-3 py-2 font-semibold w-8" title="Use this resource for generation"></th>
                         <th className="px-3 py-2 font-semibold">Resource Name</th>
                         <th className="px-3 py-2 font-semibold">Type</th>
                         <th className="px-3 py-2 font-semibold">Pages</th>
@@ -636,7 +735,16 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                         const isFailed = job?.status === 'FAILED' || doc.status === 'FAILED';
                         const inProgress = job && !['COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED'].includes(job.status);
                         return (
-                          <tr key={doc.id} className={selectedDocIds.includes(doc.id) ? 'bg-blue-50/40' : ''}>
+                          <tr key={doc.id} className={selectedDeleteIds.has(doc.id) ? 'bg-red-50/40' : selectedDocIds.includes(doc.id) ? 'bg-blue-50/40' : ''}>
+                            <td className="px-3 py-2.5">
+                              <input
+                                type="checkbox"
+                                className="rounded text-red-600 focus:ring-red-500 cursor-pointer"
+                                checked={selectedDeleteIds.has(doc.id)}
+                                title="Select for deletion"
+                                onChange={() => handleToggleSelectDelete(doc.id)}
+                              />
+                            </td>
                             <td className="px-3 py-2.5">
                               <input
                                 type="checkbox"
@@ -1386,6 +1494,40 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                 className={`px-4 py-2 rounded text-white text-xs font-semibold disabled:opacity-50 ${bulkConfirm === 'approve' ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-red-700 hover:bg-red-800'}`}
               >
                 {isBulkActing ? 'Working...' : bulkConfirm === 'approve' ? 'Approve Questions' : 'Reject Questions'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk resource-delete confirmation */}
+      {isBulkDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded max-w-md w-full">
+            <header className="px-5 py-3 border-b border-slate-200">
+              <h3 className="text-sm font-bold text-slate-900">
+                Delete {selectedDeleteIds.size} selected resource{selectedDeleteIds.size === 1 ? '' : 's'}?
+              </h3>
+            </header>
+            <div className="p-5">
+              <p className="text-xs text-slate-600">
+                This permanently removes the uploaded file and all extracted pages/questions/answers derived from it. This cannot be undone.
+              </p>
+            </div>
+            <footer className="px-5 py-3 border-t border-slate-200 flex justify-end gap-2">
+              <button
+                onClick={() => setIsBulkDeleteConfirmOpen(false)}
+                disabled={isBulkDeleting}
+                className="px-4 py-2 rounded border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDeleteDocuments}
+                disabled={isBulkDeleting}
+                className="px-4 py-2 rounded text-white text-xs font-semibold disabled:opacity-50 bg-red-700 hover:bg-red-800"
+              >
+                {isBulkDeleting ? 'Deleting...' : 'Delete Resources'}
               </button>
             </footer>
           </div>

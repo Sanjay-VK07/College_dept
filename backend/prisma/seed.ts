@@ -7,10 +7,10 @@ async function main() {
   // 1. System Settings
   await prisma.systemSetting.upsert({
     where: { key: 'ALLOWED_EMAIL_DOMAINS' },
-    update: { value: 'cit.edu.in,college.edu.in' },
+    update: { value: 'citchennai.net' },
     create: {
       key: 'ALLOWED_EMAIL_DOMAINS',
-      value: 'cit.edu.in,college.edu.in',
+      value: 'citchennai.net',
       description: 'Comma separated list of allowed college domains for OAuth',
     },
   });
@@ -38,23 +38,23 @@ async function main() {
   });
 
   const faculty = await prisma.user.upsert({
-    where: { email: 'faculty@cit.edu.in' },
+    where: { email: 'faculty@citchennai.net' },
     update: {},
     create: {
       name: 'Dr. A. R. Sharma',
-      email: 'faculty@cit.edu.in',
+      email: 'faculty@citchennai.net',
       role: Role.FACULTY,
       department: 'CSE',
     },
   });
 
   const student1 = await prisma.user.upsert({
-    where: { email: 'ganesh@cit.edu.in' },
+    where: { email: 'ganesh@citchennai.net' },
     update: {},
     create: {
       registerNo: '71762105001',
       name: 'Ganesh Kumar',
-      email: 'ganesh@cit.edu.in',
+      email: 'ganesh@citchennai.net',
       role: Role.STUDENT,
       department: 'CSE',
       year: 3,
@@ -64,12 +64,12 @@ async function main() {
   });
 
   const student2 = await prisma.user.upsert({
-    where: { email: 'student2@cit.edu.in' },
+    where: { email: 'student2@citchennai.net' },
     update: {},
     create: {
       registerNo: '71762105002',
       name: 'Ananya Ramesh',
-      email: 'student2@cit.edu.in',
+      email: 'student2@citchennai.net',
       role: Role.STUDENT,
       department: 'CSE',
       year: 3,

@@ -34,7 +34,7 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://postgres:postgrespassword@postgres:5432/gsmas_db?schema=public
       JWT_SECRET: gsmas_super_secret_jwt_key_2026_production
-      ALLOWED_DOMAINS: cit.edu.in,college.edu.in
+      ALLOWED_DOMAINS: citchennai.net
     ports:
       - '5000:5000'
     depends_on:
