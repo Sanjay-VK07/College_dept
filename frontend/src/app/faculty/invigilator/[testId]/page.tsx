@@ -6,18 +6,13 @@ import {
   GraduationCap,
   Radio,
   AlertTriangle,
-  CheckCircle2,
   Download,
   LogOut,
   Plus,
-  Search,
-  Filter,
   Users,
-  BookOpen,
   Clock,
   Award,
   FileSpreadsheet,
-  Trash2,
   RotateCcw,
   CheckCircle,
   AlertCircle,
@@ -39,8 +34,22 @@ export default function InvigilatorDashboard() {
   const [testTitle, setTestTitle] = useState('CS8601 Database Management Systems - Mid-Semester CBT Assessment');
   const [socketConnected, setSocketConnected] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    'OVERVIEW' | 'LIVE' | 'CREATE_EXAM' | 'QUESTION_BANK' | 'STUDENT_ROSTER' | 'ATTENDANCE' | 'RESULTS' | 'REPORTS' | 'AI_ASSISTANT'
+    'OVERVIEW' | 'LIVE' | 'CREATE_EXAM' | 'STUDENT_ROSTER' | 'RESULTS' | 'REPORTS' | 'AI_ASSISTANT'
   >('OVERVIEW');
+
+  // Exam creation is Admin-only by default; a Faculty account only gets it if an Admin has
+  // explicitly granted canCreateExams. Fail closed (hidden) if the flag isn't present at all —
+  // e.g. an existing session's cached user predates this permission being added.
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('gsmas_user');
+      if (saved) setCurrentUser(JSON.parse(saved));
+    } catch {
+      /* ignore — canCreateExam stays false */
+    }
+  }, []);
+  const canCreateExam = currentUser?.role === 'ADMIN' || currentUser?.canCreateExams === true;
 
   const socketRef = useRef<any>(null);
 
@@ -57,42 +66,6 @@ export default function InvigilatorDashboard() {
   const [createError, setCreateError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Question Bank Mock List & Filter
-  const [questionSearch, setQuestionSearch] = useState('');
-  const [questionTypeFilter, setQuestionTypeFilter] = useState('ALL');
-  const [questionsList, setQuestionsList] = useState([
-    {
-      id: 'q1',
-      code: 'CS8601-01',
-      type: 'MCQ',
-      text: 'Which normal form eliminates transitive functional dependency in relational database design?',
-      marks: 2,
-      difficulty: 'MEDIUM',
-      subject: 'Database Management Systems',
-    },
-    {
-      id: 'q2',
-      code: 'CS8601-02',
-      text: 'Calculate the total number of block transfers required for B+ tree search with node capacity 100.',
-      type: 'NAT',
-      marks: 2,
-      difficulty: 'HARD',
-      subject: 'Database Management Systems',
-    },
-    {
-      id: 'q3',
-      code: 'CS8601-03',
-      text: 'Select all ACID properties guaranteed by transaction processing systems.',
-      type: 'MSQ',
-      marks: 2,
-      difficulty: 'EASY',
-      subject: 'Database Management Systems',
-    },
-  ]);
-
-  // Attendance Register Dataset (strictly scoped to testId)
-  const [attendanceList, setAttendanceList] = useState<any[]>([]);
-  const [examMeta, setExamMeta] = useState<any>(null);
   const [examNotFound, setExamNotFound] = useState(false);
 
   useEffect(() => {
@@ -175,52 +148,69 @@ export default function InvigilatorDashboard() {
   const [examsList, setExamsList] = useState<any[]>([]);
   const [statsLoading, setStatsLoading] = useState(true);
 
-  useEffect(() => {
-    fetchFacultyData();
-    fetchAttendanceData();
-  }, [testId]);
+  // Roster filters
+  const [rosterSearch, setRosterSearch] = useState('');
+  const [rosterDepartment, setRosterDepartment] = useState('ALL');
+  const [rosterYear, setRosterYear] = useState('ALL');
+  const [rosterSection, setRosterSection] = useState('ALL');
+  const [rosterDepartmentOptions, setRosterDepartmentOptions] = useState<string[]>([]);
+  const [rosterSectionOptions, setRosterSectionOptions] = useState<string[]>([]);
 
-  const fetchAttendanceData = async () => {
-    if (!testId) return;
-    setExamNotFound(false);
+  const fetchStudents = async (filters: { search?: string; department?: string; year?: string; section?: string } = {}) => {
     try {
-      const res = await api.get(`/admin/attendance/${testId}`);
-      if (res.data?.success && res.data?.data) {
-        setAttendanceList(res.data.data.attendance || []);
-        if (res.data.data.exam) {
-          setExamMeta(res.data.data.exam);
-          if (res.data.data.exam.title) {
-            setTestTitle(res.data.data.exam.title);
-          }
+      const res = await api.get('/admin/students', { params: filters });
+      if (res.data?.success) {
+        setDbStudents(res.data.data);
+        // Keep the filter dropdowns populated from the broadest load seen so far, not just
+        // whatever the current filter happens to include.
+        if (!filters.department && !filters.section) {
+          const depts = Array.from(new Set(res.data.data.map((s: any) => s.department).filter(Boolean))) as string[];
+          const sections = Array.from(new Set(res.data.data.map((s: any) => s.section).filter(Boolean))) as string[];
+          setRosterDepartmentOptions(depts.sort());
+          setRosterSectionOptions(sections.sort());
         }
-      } else {
-        setAttendanceList([]);
-        setExamNotFound(true);
       }
-    } catch (err: any) {
-      console.error('Error loading attendance for exam:', testId, err);
-      setAttendanceList([]);
-      if (err.response?.status === 404) {
-        setExamNotFound(true);
-      }
+    } catch (e) {
+      console.error('Error loading students:', e);
     }
   };
+
+  useEffect(() => {
+    fetchFacultyData();
+  }, [testId]);
+
+  // Re-fetch the roster whenever a filter changes (debounced for the free-text search box).
+  // fetchFacultyData already does the initial unfiltered load, so skip firing again on mount.
+  const isFirstRosterFilterRun = useRef(true);
+  useEffect(() => {
+    if (isFirstRosterFilterRun.current) {
+      isFirstRosterFilterRun.current = false;
+      return;
+    }
+    const t = setTimeout(() => {
+      fetchStudents({
+        search: rosterSearch || undefined,
+        department: rosterDepartment !== 'ALL' ? rosterDepartment : undefined,
+        year: rosterYear !== 'ALL' ? rosterYear : undefined,
+        section: rosterSection !== 'ALL' ? rosterSection : undefined,
+      });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [rosterSearch, rosterDepartment, rosterYear, rosterSection]);
 
   const fetchFacultyData = async () => {
     setStatsLoading(true);
     try {
-      const [qRes, sRes, rRes, overviewRes, examsRes] = await Promise.all([
-        api.get('/admin/questions'),
-        api.get('/admin/students'),
+      const [rRes, overviewRes, examsRes] = await Promise.all([
         api.get('/admin/results-ledger'),
         api.get('/admin/overview'),
         api.get('/admin/exams'),
       ]);
-      if (qRes.data?.success) setQuestionsList(qRes.data.data);
-      if (sRes.data?.success) setDbStudents(sRes.data.data);
       if (rRes.data?.success) setDbResults(rRes.data.data);
       if (overviewRes.data?.success) setDashboardStats(overviewRes.data.data);
       if (examsRes.data?.success) setExamsList(examsRes.data.data);
+      // Students are loaded separately by fetchStudents (filter-driven).
+      await fetchStudents();
     } catch (e) {
       console.error('Error loading faculty datasets:', e);
     } finally {
@@ -228,14 +218,24 @@ export default function InvigilatorDashboard() {
     }
   };
 
+  // Real exam title / "not found" banner, derived from the same /admin/exams list fetchFacultyData
+  // already loads — no separate attendance-specific endpoint needed just to know the exam exists.
+  useEffect(() => {
+    if (!testId || examsList.length === 0) return;
+    const match = examsList.find((e: any) => e.id === testId);
+    if (match) {
+      setTestTitle(match.title);
+      setExamNotFound(false);
+    } else {
+      setExamNotFound(true);
+    }
+  }, [testId, examsList]);
+
   const handleStatusTransition = async (examId: string, newStatus: string) => {
     try {
       const res = await api.put(`/admin/exams/${examId}/status`, { status: newStatus });
       if (res.data?.success) {
         await fetchFacultyData();
-        if (examId === testId) {
-          await fetchAttendanceData();
-        }
       }
     } catch (err: any) {
       alert(err.response?.data?.message || 'Failed to update exam status.');
@@ -281,20 +281,6 @@ export default function InvigilatorDashboard() {
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const toggleAttendanceStatus = (registerNo: string) => {
-    setAttendanceList((prev) =>
-      prev.map((item) =>
-        item.registerNo === registerNo
-          ? {
-              ...item,
-              status: item.status === 'PRESENT' ? 'ABSENT' : 'PRESENT',
-              checkInTime: item.status === 'PRESENT' ? '-' : '09:30 AM',
-            }
-          : item
-      )
-    );
   };
 
   return (
@@ -356,10 +342,8 @@ export default function InvigilatorDashboard() {
           {[
             { id: 'OVERVIEW', label: 'Dashboard Overview', icon: LayoutGrid },
             { id: 'LIVE', label: 'Live Invigilation Monitor', icon: Radio, badge: students.length },
-            { id: 'CREATE_EXAM', label: 'Create Examination', icon: Plus },
-            { id: 'QUESTION_BANK', label: 'Question Bank', icon: BookOpen, badge: questionsList.length },
+            ...(canCreateExam ? [{ id: 'CREATE_EXAM', label: 'Create Examination', icon: Plus }] : []),
             { id: 'STUDENT_ROSTER', label: 'Candidate Roster', icon: Users },
-            { id: 'ATTENDANCE', label: 'Attendance Register', icon: CheckCircle2 },
             { id: 'RESULTS', label: 'Results & Evaluation', icon: Award },
             { id: 'REPORTS', label: 'Reports & Analytics', icon: FileText },
           ].map((tab) => {
@@ -574,7 +558,7 @@ export default function InvigilatorDashboard() {
         )}
 
         {/* TAB 2: CREATE EXAMINATION */}
-        {activeTab === 'CREATE_EXAM' && (
+        {activeTab === 'CREATE_EXAM' && canCreateExam && (
           <div className="max-w-2xl mx-auto erp-card space-y-6">
             <div className="border-b border-slate-200 pb-3">
               <h3 className="text-base font-bold text-slate-900">Schedule & Create Examination Paper</h3>
@@ -680,111 +664,50 @@ export default function InvigilatorDashboard() {
           </div>
         )}
 
-        {/* TAB 3: QUESTION BANK */}
-        {activeTab === 'QUESTION_BANK' && (
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-              <div className="flex items-center space-x-2">
-                <div className="relative w-64">
-                  <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                  <input
-                    type="text"
-                    value={questionSearch}
-                    onChange={(e) => setQuestionSearch(e.target.value)}
-                    placeholder="Search questions..."
-                    className="erp-input pl-9 text-xs py-1.5"
-                  />
-                </div>
-                <select
-                  value={questionTypeFilter}
-                  onChange={(e) => setQuestionTypeFilter(e.target.value)}
-                  className="erp-select text-xs py-1.5"
-                >
-                  <option value="ALL">All Types (MCQ / MSQ / NAT)</option>
-                  <option value="MCQ">MCQ Only</option>
-                  <option value="MSQ">MSQ Only</option>
-                  <option value="NAT">NAT Only</option>
-                </select>
-              </div>
-
-              <button className="erp-btn-primary text-xs py-1.5">
-                <Plus className="w-4 h-4" />
-                <span>Add Question to Bank</span>
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              {questionsList
-                .filter((q) => questionTypeFilter === 'ALL' || q.type === questionTypeFilter)
-                .filter((q) => q.text.toLowerCase().includes(questionSearch.toLowerCase()))
-                .map((q) => (
-                  <div key={q.id} className="erp-card space-y-2">
-                    <div className="flex justify-between items-center pb-2 border-b border-slate-200">
-                      <div className="flex items-center space-x-2">
-                        <span className="erp-badge-blue">{q.code || 'GATE'}</span>
-                        <span className="erp-badge-gray">{q.type}</span>
-                        <span className="erp-badge-gray">Difficulty: {q.difficulty}</span>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-xs font-mono font-bold text-emerald-700">+{q.marks} Marks</span>
-                        <button
-                          onClick={async () => {
-                            if (confirm('Are you sure you want to delete this question from the database?')) {
-                              try {
-                                await api.delete(`/admin/questions/${q.id}`);
-                                fetchFacultyData();
-                              } catch (e: any) {
-                                alert(e.response?.data?.message || 'Failed to delete question.');
-                              }
-                            }
-                          }}
-                          className="text-red-500 hover:text-red-700 transition-colors p-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-slate-800 leading-relaxed font-medium">
-                      {(() => {
-                        const text = q.text;
-                        const imgRegex = /!\[.*?\]\((.*?)\)/;
-                        const match = text.match(imgRegex);
-                        if (match) {
-                          const imageUrl = match[1];
-                          const cleanText = text.replace(imgRegex, '').trim();
-                          return (
-                            <div className="space-y-3">
-                              <div>{cleanText}</div>
-                              <div className="flex justify-center p-3 bg-slate-50 border border-slate-200 rounded-md">
-                                <img src={imageUrl} alt="Question Diagram" className="max-h-48 object-contain" />
-                              </div>
-                            </div>
-                          );
-                        }
-                        return (
-                          <div className="space-y-3">
-                            <div>{text}</div>
-                            {(q as any).imageUrl && (
-                              <div className="flex justify-center p-3 bg-slate-50 border border-slate-200 rounded-md">
-                                <img src={(q as any).imageUrl} alt="Question Diagram" className="max-h-48 object-contain" />
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-        )}
-
         {/* TAB 4: CANDIDATE ROSTER */}
         {activeTab === 'STUDENT_ROSTER' && (
           <div className="space-y-4">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-              Enrolled Candidates Roster ({dbStudents.length} Students)
-            </h3>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                Enrolled Candidates Roster ({dbStudents.length} Students)
+              </h3>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  type="text"
+                  value={rosterSearch}
+                  onChange={(e) => setRosterSearch(e.target.value)}
+                  placeholder="Search name, email, register no..."
+                  className="erp-input text-xs py-1.5 w-56"
+                />
+                <select value={rosterDepartment} onChange={(e) => setRosterDepartment(e.target.value)} className="erp-select text-xs py-1.5">
+                  <option value="ALL">All Departments</option>
+                  {rosterDepartmentOptions.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+                <select value={rosterYear} onChange={(e) => setRosterYear(e.target.value)} className="erp-select text-xs py-1.5">
+                  <option value="ALL">All Years</option>
+                  {[1, 2, 3, 4].map((y) => (
+                    <option key={y} value={y}>Year {y}</option>
+                  ))}
+                </select>
+                <select value={rosterSection} onChange={(e) => setRosterSection(e.target.value)} className="erp-select text-xs py-1.5">
+                  <option value="ALL">All Sections</option>
+                  {rosterSectionOptions.map((s) => (
+                    <option key={s} value={s}>Section {s}</option>
+                  ))}
+                </select>
+                {(rosterSearch || rosterDepartment !== 'ALL' || rosterYear !== 'ALL' || rosterSection !== 'ALL') && (
+                  <button
+                    onClick={() => { setRosterSearch(''); setRosterDepartment('ALL'); setRosterYear('ALL'); setRosterSection('ALL'); }}
+                    className="text-xs text-blue-700 hover:underline"
+                  >
+                    Clear Filters
+                  </button>
+                )}
+              </div>
+            </div>
 
             <div className="erp-table-container">
               <table className="erp-table">
@@ -793,6 +716,7 @@ export default function InvigilatorDashboard() {
                     <th>Register Number</th>
                     <th>Candidate Name</th>
                     <th>Department & Semester</th>
+                    <th>Section</th>
                     <th>Official Email</th>
                     <th>Actions</th>
                   </tr>
@@ -800,16 +724,17 @@ export default function InvigilatorDashboard() {
                 <tbody>
                   {dbStudents.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-slate-500">
-                        No enrolled candidates found in database.
+                      <td colSpan={6} className="py-8 text-center text-slate-500">
+                        No candidates match the current filters.
                       </td>
                     </tr>
                   ) : (
                     dbStudents.map((s, idx) => (
                       <tr key={s.id || idx}>
-                        <td className="font-mono font-bold text-[#1E40AF]">{s.registerNo || '71762105042'}</td>
+                        <td className="font-mono font-bold text-[#1E40AF]">{s.registerNo || '—'}</td>
                         <td className="font-semibold text-slate-900">{s.name}</td>
-                        <td className="font-mono text-xs">{s.department} (Sem {s.semester || 6})</td>
+                        <td className="font-mono text-xs">{s.department}{s.semester ? ` (Sem ${s.semester})` : ''}</td>
+                        <td className="font-mono text-xs">{s.section || '—'}</td>
                         <td className="text-slate-600">{s.email}</td>
                         <td>
                           <button
@@ -825,80 +750,6 @@ export default function InvigilatorDashboard() {
                             className="erp-btn-secondary py-1 text-xs"
                           >
                             <RotateCcw className="w-3 h-3 mr-1" /> Reset Attempt
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 5: ATTENDANCE REGISTER */}
-        {activeTab === 'ATTENDANCE' && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
-                Examination Hall Attendance Register
-              </h3>
-              <span className="text-xs text-slate-500">
-                {examMeta?.examHall || 'Hall B-302'} • Exam Date: {examMeta?.examDate || 'N/A'}
-              </span>
-            </div>
-
-            <div className="erp-table-container">
-              <table className="erp-table">
-                <thead>
-                  <tr>
-                    <th>Register No</th>
-                    <th>Candidate Name</th>
-                    <th>Department</th>
-                    <th>Check-in Time</th>
-                    <th>Attendance Status</th>
-                    <th>Action Toggle</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {examNotFound ? (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500">
-                        <div className="flex flex-col items-center justify-center space-y-1">
-                          <AlertCircle className="w-6 h-6 text-amber-500" />
-                          <p className="font-semibold text-slate-800">Examination Not Found</p>
-                          <p className="text-xs text-slate-500">
-                            No attendance records exist for invalid examination ID "{testId}".
-                          </p>
-                        </div>
-                      </td>
-                    </tr>
-                  ) : attendanceList.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500">
-                        No candidate attendance records found for examination "{testId}".
-                      </td>
-                    </tr>
-                  ) : (
-                    attendanceList.map((att, idx) => (
-                      <tr key={att.registerNo || idx}>
-                        <td className="font-mono font-bold text-[#1E40AF]">{att.registerNo}</td>
-                        <td className="font-semibold text-slate-900">{att.name}</td>
-                        <td className="font-mono text-xs">{att.department}</td>
-                        <td className="font-mono text-xs">{att.checkInTime}</td>
-                        <td>
-                          {att.status === 'PRESENT' ? (
-                            <span className="erp-badge-green">PRESENT</span>
-                          ) : (
-                            <span className="erp-badge-red">ABSENT</span>
-                          )}
-                        </td>
-                        <td>
-                          <button
-                            onClick={() => toggleAttendanceStatus(att.registerNo)}
-                            className="erp-btn-secondary py-1 text-xs"
-                          >
-                            Toggle Status
                           </button>
                         </td>
                       </tr>

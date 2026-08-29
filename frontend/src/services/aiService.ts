@@ -573,13 +573,19 @@ export const aiService = {
     return res.data;
   },
 
-  async importJSONL(fileContent: string | File) {
+  async importJSONL(
+    fileContent: string | File,
+    target: { subjectId?: string; subjectName?: string; subjectCode?: string; department?: string; moduleName?: string }
+  ) {
     if (typeof fileContent === 'string') {
-      const res = await api.post('/ai/question-bank/import-jsonl', { fileContent });
+      const res = await api.post('/ai/question-bank/import-jsonl', { fileContent, ...target });
       return res.data;
     }
     const formData = new FormData();
     formData.append('file', fileContent);
+    Object.entries(target).forEach(([k, v]) => {
+      if (v) formData.append(k, v);
+    });
     const res = await api.post('/ai/question-bank/import-jsonl', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });

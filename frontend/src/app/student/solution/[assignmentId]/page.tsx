@@ -160,6 +160,10 @@ export default function SolutionReviewPage({ params }: { params?: { assignmentId
                       <span className="erp-badge-green">
                         <CheckCircle className="w-3.5 h-3.5 mr-1" /> Correct (+{q.marksObtained})
                       </span>
+                    ) : q.chosenAnswer === null || q.chosenAnswer === undefined ? (
+                      <span className="erp-badge-gray">
+                        <XCircle className="w-3.5 h-3.5 mr-1" /> Not Attempted
+                      </span>
                     ) : (
                       <span className="erp-badge-red">
                         <XCircle className="w-3.5 h-3.5 mr-1" /> Incorrect ({q.marksObtained})

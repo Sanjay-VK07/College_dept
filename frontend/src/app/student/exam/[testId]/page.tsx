@@ -25,6 +25,12 @@ export default function ExamPage() {
   const [isCalcOpen, setIsCalcOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [terminationNotice, setTerminationNotice] = useState<string | null>(null);
+  const [invigilatorWarning, setInvigilatorWarning] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+
   const socketRef = useRef<any>(null);
 
   useEffect(() => {
@@ -49,7 +55,8 @@ export default function ExamPage() {
     const interval = setInterval(() => {
       setRemainingSec((prev) => {
         if (prev <= 1) {
-          handleFinalSubmit();
+          // Time's up — this is involuntary, never ask "are you sure".
+          submitExamNow();
           return 0;
         }
         return prev - 1;
@@ -106,16 +113,20 @@ export default function ExamPage() {
         });
 
         socket.on('force_auto_submit', (payload: any) => {
-          alert(`Automated Termination: ${payload.reason}`);
-          handleFinalSubmit();
+          // The backend has already completed the submission transactionally at this point
+          // (violation-limit or invigilator termination) — this is a notice, not a request for
+          // permission. Never re-run the submit flow or ask "are you sure" for something that's
+          // already final.
+          if (socketRef.current) socketRef.current.disconnect();
+          setTerminationNotice(payload.reason || 'Your examination was automatically terminated and submitted.');
         });
 
         socket.on('faculty_warning_received', (payload: any) => {
-          alert(`⚠️ INVIGILATOR OFFICIAL NOTICE:\n\n${payload.message}`);
+          setInvigilatorWarning(payload.message);
         });
       }
     } catch (err: any) {
-      alert('Error initializing exam session');
+      setPageError(err.response?.data?.message || 'Error initializing exam session. Please refresh and try again.');
     } finally {
       setLoading(false);
     }
@@ -218,10 +229,12 @@ export default function ExamPage() {
     );
   };
 
-  const handleFinalSubmit = async () => {
-    if (!confirm('Are you sure you want to submit your examination paper? This action is final.')) {
-      return;
-    }
+  // The actual submission — used by every path (manual confirm, timer expiry). Forced-termination
+  // paths (violation limit, invigilator kill) never call this: the backend already completes
+  // those submissions itself before it tells the client, so re-submitting here would be redundant
+  // at best and a confusing "are you sure" prompt for an already-decided outcome at worst.
+  const submitExamNow = async () => {
+    setIsSubmitting(true);
     try {
       const res = await api.post('/exam/submit', {
         assignmentId: examData.assignmentId,
@@ -230,17 +243,36 @@ export default function ExamPage() {
       if (res.data?.success) {
         if (socketRef.current) socketRef.current.disconnect();
         router.push(`/student/solution/${examData.assignmentId}`);
+        return;
       }
-    } catch (err) {
-      alert('Error submitting exam');
+      setPageError(res.data?.message || 'Failed to submit exam.');
+    } catch (err: any) {
+      setPageError(err.response?.data?.message || 'Error submitting exam. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+      setIsSubmitConfirmOpen(false);
     }
   };
 
+  const handleManualSubmitClick = () => setIsSubmitConfirmOpen(true);
+
   if (loading || !examData) {
     return (
-      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center text-slate-600 space-y-3 font-sans">
-        <div className="w-8 h-8 border-3 border-[#1E40AF] border-t-transparent rounded-full animate-spin" />
-        <div className="text-sm font-medium">Securing CBT Examination Environment...</div>
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center text-slate-600 space-y-3 font-sans p-6 text-center">
+        {pageError ? (
+          <>
+            <AlertCircle className="w-8 h-8 text-red-600" />
+            <div className="text-sm font-semibold text-red-800 max-w-sm">{pageError}</div>
+            <button onClick={() => router.push('/student/dashboard')} className="erp-btn-secondary py-2 text-xs mt-2">
+              Back to Dashboard
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="w-8 h-8 border-3 border-[#1E40AF] border-t-transparent rounded-full animate-spin" />
+            <div className="text-sm font-medium">Securing CBT Examination Environment...</div>
+          </>
+        )}
       </div>
     );
   }
@@ -263,6 +295,84 @@ export default function ExamPage() {
 
       {/* Scientific Calculator Modal */}
       <GateScientificCalculator isOpen={isCalcOpen} onClose={() => setIsCalcOpen(false)} />
+
+      {/* Forced Termination Notice — the backend has already completed this submission; this is
+          purely informational, with a single way forward (view the result). */}
+      {terminationNotice && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/95 flex items-center justify-center p-6 text-center">
+          <div className="erp-card max-w-md w-full p-8 space-y-4">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-red-100 text-red-600 border border-red-200">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900">Examination Terminated</h2>
+            <p className="text-xs text-slate-600 leading-relaxed">{terminationNotice}</p>
+            <button
+              onClick={() => router.push(`/student/solution/${examData.assignmentId}`)}
+              className="erp-btn-primary w-full py-2.5 text-xs font-semibold"
+            >
+              View Result
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Invigilator Warning */}
+      {invigilatorWarning && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-amber-50 border border-amber-300 text-amber-900 px-5 py-2.5 rounded-md text-xs font-semibold flex items-center space-x-3 shadow-lg max-w-lg">
+          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>Invigilator notice: {invigilatorWarning}</span>
+          <button
+            onClick={() => setInvigilatorWarning(null)}
+            className="ml-3 text-[11px] bg-amber-200 hover:bg-amber-300 px-2 py-0.5 rounded text-amber-900 shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Non-fatal submission error (autosave/init issues never block the exam — this does) */}
+      {pageError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-50 border border-red-300 text-red-900 px-5 py-2.5 rounded-md text-xs font-semibold flex items-center space-x-3 shadow-lg max-w-lg">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+          <span>{pageError}</span>
+          <button
+            onClick={() => setPageError(null)}
+            className="ml-3 text-[11px] bg-red-200 hover:bg-red-300 px-2 py-0.5 rounded text-red-900 shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Manual Submit Confirmation */}
+      {isSubmitConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded max-w-md w-full">
+            <header className="px-5 py-3 border-b border-slate-200">
+              <h3 className="text-sm font-bold text-slate-900">Submit examination paper?</h3>
+            </header>
+            <div className="p-5">
+              <p className="text-xs text-slate-600">This action is final — you will not be able to change any answers after submitting.</p>
+            </div>
+            <footer className="px-5 py-3 border-t border-slate-200 flex justify-end gap-2">
+              <button
+                onClick={() => setIsSubmitConfirmOpen(false)}
+                disabled={isSubmitting}
+                className="px-4 py-2 rounded border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitExamNow}
+                disabled={isSubmitting}
+                className="px-4 py-2 rounded text-white text-xs font-semibold disabled:opacity-50 bg-[#1E40AF] hover:bg-blue-800"
+              >
+                {isSubmitting ? 'Submitting...' : 'Submit Paper'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
 
       {/* CBT Examination Navbar */}
       <header className="bg-[#1E40AF] text-white border-b border-blue-900 px-6 py-2.5 flex items-center justify-between z-20 shadow-sm">
@@ -431,7 +541,7 @@ export default function ExamPage() {
           questions={questions}
           currentIndex={currentIndex}
           onSelectQuestion={(idx) => setCurrentIndex(idx)}
-          onSubmitExam={handleFinalSubmit}
+          onSubmitExam={handleManualSubmitClick}
         />
       </div>
     </div>

@@ -460,6 +460,18 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleToggleExamPermission = async (id: string, next: boolean) => {
+    // Optimistic update, reverted on failure — this toggle is hit often and shouldn't feel laggy.
+    setFaculty((prev) => prev.map((f) => (f.id === id ? { ...f, canCreateExams: next } : f)));
+    try {
+      await api.put(`/admin/faculty/${id}`, { canCreateExams: next });
+      showToast(next ? 'Exam-creation permission granted.' : 'Exam-creation permission revoked.');
+    } catch (err: any) {
+      setFaculty((prev) => prev.map((f) => (f.id === id ? { ...f, canCreateExams: !next } : f)));
+      showToast(err.response?.data?.message || 'Failed to update permission.');
+    }
+  };
+
   // Handlers: Examination Management
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1877,8 +1889,8 @@ export default function AdminDashboard() {
                     />
                   </div>
                   <label className="erp-btn-secondary py-1 text-xs cursor-pointer">
-                    <span>Import File (Excel/CSV/PDF)</span>
-                    <input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={handleQuestionFileUpload} className="hidden" />
+                    <span>Import File (Excel/CSV/JSON/PDF)</span>
+                    <input type="file" accept=".xlsx,.xls,.csv,.json,.pdf" onChange={handleQuestionFileUpload} className="hidden" />
                   </label>
                   <button onClick={() => setIsAddQuestionOpen(true)} className="erp-btn-primary py-1 text-xs">
                     <Plus className="w-3.5 h-3.5" />
@@ -2249,13 +2261,14 @@ export default function AdminDashboard() {
                       <th>Institutional Email</th>
                       <th>Department</th>
                       <th>Created Tests</th>
+                      <th>Can Create Exams</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {faculty.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-8 text-center text-slate-500">
+                        <td colSpan={6} className="py-8 text-center text-slate-500">
                           No faculty records found in database.
                         </td>
                       </tr>
@@ -2266,6 +2279,21 @@ export default function AdminDashboard() {
                           <td className="text-slate-600">{f.email}</td>
                           <td className="font-mono text-xs text-slate-700">{f.department}</td>
                           <td className="font-bold text-[#1E40AF] font-mono">{f._count?.createdTests || 0}</td>
+                          <td>
+                            <button
+                              onClick={() => handleToggleExamPermission(f.id, !f.canCreateExams)}
+                              title={f.canCreateExams ? 'Click to revoke exam-creation permission' : 'Click to grant exam-creation permission'}
+                              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                f.canCreateExams ? 'bg-emerald-600' : 'bg-slate-300'
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                  f.canCreateExams ? 'translate-x-4' : 'translate-x-1'
+                                }`}
+                              />
+                            </button>
+                          </td>
                           <td>
                             <button onClick={() => handleDeleteFaculty(f.id)} className="erp-btn-danger py-1 text-xs">
                               Remove

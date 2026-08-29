@@ -70,8 +70,72 @@ function apportion(total: number, parts: Record<string, number>): Record<string,
   return floored;
 }
 
+// Draft persistence — the paper-building wizard is real user work (topic selection, question
+// picks, exam settings) that previously lived only in React state and vanished the moment the
+// component unmounted (switching to another sidebar section, tab, or a page refresh). This
+// autosaves to localStorage and restores on mount so that work survives navigation.
+const PAPER_DRAFT_STORAGE_KEY = 'gsmas_question_paper_draft_v1';
+
+interface QuestionPaperDraft {
+  activeStep: StepId;
+  selectedSubjectId: string;
+  selectedTopicIds: string[];
+  paperMode: 'TOTAL_COUNT' | 'TOPIC_BLUEPRINT';
+  totalQuestions: number;
+  topicBlueprint: Record<string, number>;
+  generationMode: 'EXISTING_ONLY' | 'GENERATE_MISSING';
+  easyPercent: number;
+  medPercent: number;
+  hardPercent: number;
+  mcqPercent: number;
+  msqPercent: number;
+  natPercent: number;
+  negativeMarking: boolean;
+  solutionVisibility: string;
+  sourceReferences: boolean;
+  previewData: any | null;
+  paperQuestions: any[];
+  selectedQuestionIds: string[];
+  examSettings: {
+    title: string;
+    description: string;
+    targetDepartment: string;
+    durationMinutes: number;
+    totalMarks: number;
+    instructions: string;
+  };
+}
+
+function loadPaperDraft(): Partial<QuestionPaperDraft> | null {
+  try {
+    const raw = localStorage.getItem(PAPER_DRAFT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePaperDraft(draft: QuestionPaperDraft) {
+  try {
+    localStorage.setItem(PAPER_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+  } catch {
+    /* localStorage unavailable (private browsing, quota) — draft simply won't persist */
+  }
+}
+
+function clearPaperDraft() {
+  try {
+    localStorage.removeItem(PAPER_DRAFT_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorStudioProps> = ({ role = 'FACULTY' }) => {
-  const [activeStep, setActiveStep] = useState<StepId>('resources');
+  const [savedDraft] = useState(loadPaperDraft);
+  const [hasRestoredDraft] = useState(() => savedDraft !== null);
+
+  const [activeStep, setActiveStep] = useState<StepId>(savedDraft?.activeStep || 'resources');
 
   // Governance & Bounds
   const [minCount] = useState(1);
@@ -91,36 +155,41 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
   const [jsonlImportResult, setJsonlImportResult] = useState<any | null>(null);
   const [isParsingJSONL, setIsParsingJSONL] = useState(false);
   const [isImportingJSONL, setIsImportingJSONL] = useState(false);
+  // Target subject for the JSONL import — required, never inferred from file content (a prior
+  // version silently hardcoded every JSONL import into one fixed subject regardless of what was
+  // actually in the file, mixing unrelated question sets together).
+  const [jsonlTargetSubjectId, setJsonlTargetSubjectId] = useState<string>('');
+  const [jsonlNewSubjectName, setJsonlNewSubjectName] = useState<string>('');
 
   // Step 2 — Subject & Topics Availability Matrix (Real DB counts)
   const [subjects, setSubjects] = useState<any[]>([]);
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string>('');
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(savedDraft?.selectedSubjectId || '');
   const [topicAvailability, setTopicAvailability] = useState<any[]>([]);
   const [loadingTopics, setLoadingTopics] = useState(false);
-  const [selectedTopicIds, setSelectedTopicIds] = useState<string[]>([]);
+  const [selectedTopicIds, setSelectedTopicIds] = useState<string[]>(savedDraft?.selectedTopicIds || []);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
   // Step 3 — Paper Configuration (Mode A: Total Count vs Mode B: Topic Blueprint)
-  const [paperMode, setPaperMode] = useState<'TOTAL_COUNT' | 'TOPIC_BLUEPRINT'>('TOTAL_COUNT');
-  const [totalQuestions, setTotalQuestions] = useState<number>(50);
-  const [topicBlueprint, setTopicBlueprint] = useState<Record<string, number>>({});
-  const [generationMode, setGenerationMode] = useState<'EXISTING_ONLY' | 'GENERATE_MISSING'>('GENERATE_MISSING');
+  const [paperMode, setPaperMode] = useState<'TOTAL_COUNT' | 'TOPIC_BLUEPRINT'>(savedDraft?.paperMode || 'TOTAL_COUNT');
+  const [totalQuestions, setTotalQuestions] = useState<number>(savedDraft?.totalQuestions ?? 50);
+  const [topicBlueprint, setTopicBlueprint] = useState<Record<string, number>>(savedDraft?.topicBlueprint || {});
+  const [generationMode, setGenerationMode] = useState<'EXISTING_ONLY' | 'GENERATE_MISSING'>(savedDraft?.generationMode || 'GENERATE_MISSING');
 
   // Distribution
-  const [easyPercent, setEasyPercent] = useState(20);
-  const [medPercent, setMedPercent] = useState(50);
-  const [hardPercent, setHardPercent] = useState(30);
-  const [mcqPercent, setMcqPercent] = useState(60);
-  const [msqPercent, setMsqPercent] = useState(10);
-  const [natPercent, setNatPercent] = useState(30);
+  const [easyPercent, setEasyPercent] = useState(savedDraft?.easyPercent ?? 20);
+  const [medPercent, setMedPercent] = useState(savedDraft?.medPercent ?? 50);
+  const [hardPercent, setHardPercent] = useState(savedDraft?.hardPercent ?? 30);
+  const [mcqPercent, setMcqPercent] = useState(savedDraft?.mcqPercent ?? 60);
+  const [msqPercent, setMsqPercent] = useState(savedDraft?.msqPercent ?? 10);
+  const [natPercent, setNatPercent] = useState(savedDraft?.natPercent ?? 30);
 
-  const [negativeMarking, setNegativeMarking] = useState(true);
-  const [solutionVisibility, setSolutionVisibility] = useState('SHOW_AFTER_RESULT');
-  const [sourceReferences, setSourceReferences] = useState(true);
+  const [negativeMarking, setNegativeMarking] = useState(savedDraft?.negativeMarking ?? true);
+  const [solutionVisibility, setSolutionVisibility] = useState(savedDraft?.solutionVisibility || 'SHOW_AFTER_RESULT');
+  const [sourceReferences, setSourceReferences] = useState(savedDraft?.sourceReferences ?? true);
 
   // Step 4 — Preview & Async Shortfall Job State
-  const [previewData, setPreviewData] = useState<any | null>(null);
+  const [previewData, setPreviewData] = useState<any | null>(savedDraft?.previewData ?? null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isGeneratingShortfall, setIsGeneratingShortfall] = useState(false);
   const [shortfallJobId, setShortfallJobId] = useState<string | null>(null);
@@ -129,21 +198,24 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Step 5 — Review Table & Final Exam Draft
-  const [paperQuestions, setPaperQuestions] = useState<any[]>([]);
-  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
+  const [paperQuestions, setPaperQuestions] = useState<any[]>(savedDraft?.paperQuestions || []);
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set(savedDraft?.selectedQuestionIds || []));
 
   // Finalized Exam Draft State
   const [finalizedExam, setFinalizedExam] = useState<any | null>(null);
+  const [showFinalizedQuestions, setShowFinalizedQuestions] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [examSettings, setExamSettings] = useState({
-    title: '',
-    description: '',
-    targetDepartment: '',
-    durationMinutes: 180,
-    totalMarks: 100,
-    instructions: 'Read all questions carefully. Negative marking applies to incorrect MCQ answers.',
-  });
+  const [examSettings, setExamSettings] = useState(
+    savedDraft?.examSettings || {
+      title: '',
+      description: '',
+      targetDepartment: '',
+      durationMinutes: 180,
+      totalMarks: 100,
+      instructions: 'Read all questions carefully. Negative marking applies to incorrect MCQ answers.',
+    }
+  );
 
   const [toast, setToast] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -152,6 +224,98 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
     setToast(msg);
     setTimeout(() => setToast(''), 5000);
   };
+
+  const handleStartNewPaper = () => {
+    clearPaperDraft();
+    setActiveStep('resources');
+    setSelectedTopicIds([]);
+    setPaperMode('TOTAL_COUNT');
+    setTotalQuestions(50);
+    setTopicBlueprint({});
+    setGenerationMode('GENERATE_MISSING');
+    setEasyPercent(20);
+    setMedPercent(50);
+    setHardPercent(30);
+    setMcqPercent(60);
+    setMsqPercent(10);
+    setNatPercent(30);
+    setNegativeMarking(true);
+    setSolutionVisibility('SHOW_AFTER_RESULT');
+    setSourceReferences(true);
+    setPreviewData(null);
+    setPaperQuestions([]);
+    setSelectedQuestionIds(new Set());
+    setFinalizedExam(null);
+    setExamSettings({
+      title: '',
+      description: '',
+      targetDepartment: '',
+      durationMinutes: 180,
+      totalMarks: 100,
+      instructions: 'Read all questions carefully. Negative marking applies to incorrect MCQ answers.',
+    });
+    showToast('Started a new paper — previous draft discarded.');
+  };
+
+  // Let the user know their previous in-progress paper was restored, once, on mount.
+  useEffect(() => {
+    if (hasRestoredDraft) {
+      showToast('Restored your in-progress question paper draft.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Autosave the wizard's real user work (selections, generated preview, assembled paper) so
+  // switching sections/tabs — which unmounts this component — doesn't discard it. Debounced
+  // since several of these fields (percent inputs, question counts) can change in quick bursts.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      savePaperDraft({
+        activeStep,
+        selectedSubjectId,
+        selectedTopicIds,
+        paperMode,
+        totalQuestions,
+        topicBlueprint,
+        generationMode,
+        easyPercent,
+        medPercent,
+        hardPercent,
+        mcqPercent,
+        msqPercent,
+        natPercent,
+        negativeMarking,
+        solutionVisibility,
+        sourceReferences,
+        previewData,
+        paperQuestions,
+        selectedQuestionIds: Array.from(selectedQuestionIds),
+        examSettings,
+      });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [
+    activeStep,
+    selectedSubjectId,
+    selectedTopicIds,
+    paperMode,
+    totalQuestions,
+    topicBlueprint,
+    generationMode,
+    easyPercent,
+    medPercent,
+    hardPercent,
+    mcqPercent,
+    msqPercent,
+    natPercent,
+    negativeMarking,
+    solutionVisibility,
+    sourceReferences,
+    previewData,
+    paperQuestions,
+    selectedQuestionIds,
+    examSettings,
+  ]);
 
   // Load Resources & Subjects on Mount
   const loadDocuments = useCallback(async () => {
@@ -242,6 +406,8 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
     setIsParsingJSONL(true);
     setJsonlPreview(null);
     setJsonlImportResult(null);
+    setJsonlTargetSubjectId('');
+    setJsonlNewSubjectName('');
 
     try {
       const res = await aiService.previewJSONLImport(file);
@@ -259,11 +425,18 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
 
   const handleExecuteJSONLImport = async () => {
     if (!jsonlFile && !jsonlPreview) return;
+    if (!jsonlTargetSubjectId && !jsonlNewSubjectName.trim()) {
+      setErrorMsg('Select a target subject (or name a new one) before importing — the questions in this file need a real home, not a guessed one.');
+      return;
+    }
     setErrorMsg(null);
     setIsImportingJSONL(true);
 
     try {
-      const res = await aiService.importJSONL(jsonlFile!);
+      const target = jsonlTargetSubjectId
+        ? { subjectId: jsonlTargetSubjectId }
+        : { subjectName: jsonlNewSubjectName.trim() };
+      const res = await aiService.importJSONL(jsonlFile!, target);
       if (res?.success) {
         setJsonlImportResult(res.data);
         showToast('JSONL Question Bank import complete!');
@@ -432,6 +605,10 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
 
       if (res?.success) {
         setFinalizedExam(res.mockTest);
+        // The paper is now safely persisted server-side as a MockTest — the local wizard draft
+        // has served its purpose and would otherwise linger and get "restored" into a new,
+        // unrelated paper next time this screen is opened.
+        clearPaperDraft();
         showToast('Question paper finalized! MockTest draft created in database.');
       }
     } catch (e: any) {
@@ -588,6 +765,16 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
               </React.Fragment>
             );
           })}
+          {(activeStep !== 'resources' || selectedTopicIds.length > 0 || paperQuestions.length > 0) && (
+            <button
+              type="button"
+              onClick={handleStartNewPaper}
+              title="Discard this in-progress paper and start over"
+              className="ml-auto text-xs text-slate-500 hover:text-red-700 hover:underline whitespace-nowrap"
+            >
+              Start New Paper
+            </button>
+          )}
         </div>
       </div>
 
@@ -607,12 +794,43 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
           <section className="bg-white border-2 border-emerald-600 rounded p-6 space-y-5 shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div>
-                <h2 className="text-sm font-bold uppercase text-slate-900">Chapter 1 Question Bank Import Preview</h2>
+                <h2 className="text-sm font-bold uppercase text-slate-900">Question Bank Import Preview</h2>
                 <p className="text-xs text-slate-500 mt-0.5">File: <span className="font-mono font-bold text-slate-800">{jsonlPreview.fileName}</span></p>
               </div>
               <button onClick={() => setJsonlPreview(null)} className="text-slate-400 hover:text-slate-700">
                 <X className="w-5 h-5" />
               </button>
+            </div>
+
+            {/* Target Subject — required. Never guessed from file content. */}
+            <div className="bg-amber-50 border border-amber-200 rounded p-3 space-y-2">
+              <label className="block text-xs font-bold text-amber-900 uppercase tracking-wider">
+                Import Into Subject <span className="text-red-600">*</span>
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <select
+                  value={jsonlTargetSubjectId}
+                  onChange={(e) => { setJsonlTargetSubjectId(e.target.value); if (e.target.value) setJsonlNewSubjectName(''); }}
+                  className="flex-1 p-2 border border-slate-300 rounded text-xs bg-white"
+                >
+                  <option value="">— Create a new subject —</option>
+                  {subjects.map((s: any) => (
+                    <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
+                  ))}
+                </select>
+                {!jsonlTargetSubjectId && (
+                  <input
+                    type="text"
+                    value={jsonlNewSubjectName}
+                    onChange={(e) => setJsonlNewSubjectName(e.target.value)}
+                    placeholder="New subject name, e.g. Data Structures"
+                    className="flex-1 p-2 border border-slate-300 rounded text-xs"
+                  />
+                )}
+              </div>
+              <p className="text-[11px] text-amber-800">
+                These {jsonlPreview.totalRecords} records will be organized under this subject as one module ("Chapter 1") with a topic per {jsonlPreview.topicsCount} distinct topic heading in the file.
+              </p>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 text-xs font-mono text-center">
@@ -682,7 +900,8 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
               </button>
               <button
                 onClick={handleExecuteJSONLImport}
-                disabled={isImportingJSONL}
+                disabled={isImportingJSONL || (!jsonlTargetSubjectId && !jsonlNewSubjectName.trim())}
+                title={!jsonlTargetSubjectId && !jsonlNewSubjectName.trim() ? 'Choose or name a target subject first' : undefined}
                 className="px-6 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded flex items-center gap-1.5 disabled:opacity-50"
               >
                 {isImportingJSONL ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
@@ -1313,6 +1532,13 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                   </div>
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => setShowFinalizedQuestions((v) => !v)}
+                      className="px-4 py-2 border border-emerald-300 text-emerald-800 text-xs font-bold rounded hover:bg-emerald-100 flex items-center gap-1"
+                    >
+                      <Eye className="w-4 h-4" />
+                      {showFinalizedQuestions ? 'Hide Question Paper' : `View Question Paper (${paperQuestions.length})`}
+                    </button>
+                    <button
                       onClick={handlePublishExamination}
                       disabled={isPublishing}
                       className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded flex items-center gap-1 disabled:opacity-50"
@@ -1353,6 +1579,57 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
                     />
                   </div>
                 </div>
+
+                {/* Read-only Question Paper Content */}
+                {showFinalizedQuestions && (
+                  <div className="border border-slate-200 rounded">
+                    <header className="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
+                      <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                        Question Paper Content ({paperQuestions.length} Questions)
+                      </h3>
+                    </header>
+                    {paperQuestions.length === 0 ? (
+                      <p className="text-xs text-slate-500 p-4">
+                        This paper's question list isn't available in this browser session (e.g. after a page reload).
+                        View the full assembled paper from the <b>Examinations</b> tab instead.
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-left sticky top-0">
+                            <tr>
+                              <th className="px-3 py-2 font-semibold">Question ID / Stem</th>
+                              <th className="px-3 py-2 font-semibold">Topic</th>
+                              <th className="px-3 py-2 font-semibold">Type</th>
+                              <th className="px-3 py-2 font-semibold">Difficulty</th>
+                              <th className="px-3 py-2 font-semibold">Answer</th>
+                              <th className="px-3 py-2 font-semibold">Source Ref</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {paperQuestions.map((q) => (
+                              <tr key={q.id}>
+                                <td className="px-3 py-2.5 font-medium text-slate-900 max-w-xs truncate" title={q.text}>
+                                  {q.customId && <span className="font-mono text-blue-700 font-bold mr-1">[{q.customId}]</span>}
+                                  {q.text}
+                                </td>
+                                <td className="px-3 py-2.5 text-slate-600">{q.subtopic?.topic?.name || q.sourceHeading || '—'}</td>
+                                <td className="px-3 py-2.5 font-mono text-slate-700">{q.type}</td>
+                                <td className="px-3 py-2.5 font-mono text-slate-700">{q.difficulty}</td>
+                                <td className="px-3 py-2.5 font-mono font-bold text-emerald-700">
+                                  {q.rawAnswer || JSON.stringify(q.correctAnswer)}
+                                </td>
+                                <td className="px-3 py-2.5 text-slate-500 font-mono">
+                                  {q.sourceDocument?.title || (q.sourceHeading ? `Heading: ${q.sourceHeading}` : '—')}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               /* Review Table & Finalize Action */
