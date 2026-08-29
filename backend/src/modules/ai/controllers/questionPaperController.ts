@@ -205,8 +205,7 @@ export class QuestionPaperController {
       let fileName = 'Ch1_questions.jsonl';
 
       if (req.file) {
-        const fs = require('fs');
-        fileContent = fs.readFileSync(req.file.path);
+        fileContent = req.file.buffer;
         fileName = req.file.originalname;
       } else if (req.body.fileContent) {
         fileContent = req.body.fileContent;
@@ -232,8 +231,7 @@ export class QuestionPaperController {
       let fileName = 'Ch1_questions.jsonl';
 
       if (req.file) {
-        const fs = require('fs');
-        fileContent = fs.readFileSync(req.file.path);
+        fileContent = req.file.buffer;
         fileName = req.file.originalname;
       } else if (req.body.fileContent) {
         fileContent = req.body.fileContent;
@@ -242,7 +240,13 @@ export class QuestionPaperController {
       }
 
       const { JSONLImportService } = require('../services/jsonlImportService');
-      const result = await JSONLImportService.importJSONLToDatabase(fileContent, req.user.id, fileName);
+      const result = await JSONLImportService.importJSONLToDatabase(fileContent, req.user.id, fileName, {
+        subjectId: req.body.subjectId || undefined,
+        subjectName: req.body.subjectName || undefined,
+        subjectCode: req.body.subjectCode || undefined,
+        department: req.body.department || undefined,
+        moduleName: req.body.moduleName || undefined,
+      });
       return res.status(200).json({ success: true, data: result });
     } catch (error: any) {
       return res.status(400).json({ success: false, message: error.message });

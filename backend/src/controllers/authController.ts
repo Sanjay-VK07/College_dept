@@ -103,6 +103,7 @@ export class AuthController {
         semester: user.semester,
         section: user.section,
         avatar: user.avatar,
+        canCreateExams: user.canCreateExams,
       };
 
       return res.status(200).json({
@@ -144,6 +145,7 @@ export class AuthController {
           section: true,
           avatar: true,
           createdAt: true,
+          canCreateExams: true,
         },
       });
 

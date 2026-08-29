@@ -150,33 +150,55 @@ export class JSONLImportService {
 
   /**
    * Imports validated JSONL records transactionally into PostgreSQL.
+   *
+   * The target subject/module is caller-supplied, not inferred from the file content — a JSONL
+   * file has no reliable subject field, and earlier this always hardcoded "Computer Organization
+   * & Architecture" / "Chapter 1" regardless of what was actually in the file, silently dumping
+   * unrelated content (e.g. a Data Structures question set) into the wrong subject.
    */
-  public static async importJSONLToDatabase(fileContent: string | Buffer, userId: string, fileName: string = 'Ch1_questions.jsonl') {
+  public static async importJSONLToDatabase(
+    fileContent: string | Buffer,
+    userId: string,
+    fileName: string = 'Ch1_questions.jsonl',
+    target: { subjectId?: string; subjectName?: string; subjectCode?: string; department?: string; moduleName?: string } = {}
+  ) {
     const preview = this.parseAndValidateJSONL(fileContent, fileName);
 
     if (preview.validRecords.length === 0) {
       throw new Error('No valid records found in JSONL file.');
     }
 
-    // 1. Resolve or create Subject "Computer Organization & Architecture"
-    let subject = await prisma.subject.findFirst({
-      where: {
-        OR: [
-          { name: { equals: 'Computer Organization & Architecture', mode: 'insensitive' } },
-          { code: { equals: 'CS_COA', mode: 'insensitive' } },
-        ],
-      },
-    });
+    if (!target.subjectId && !target.subjectName) {
+      throw new Error('A target subject is required for JSONL import (subjectId of an existing subject, or subjectName to create/reuse one).');
+    }
+
+    // 1. Resolve the caller-specified subject — by id if given, else find-or-create by name/code.
+    let subject = target.subjectId
+      ? await prisma.subject.findUnique({ where: { id: target.subjectId } })
+      : await prisma.subject.findFirst({
+          where: {
+            OR: [
+              { name: { equals: target.subjectName!, mode: 'insensitive' } },
+              ...(target.subjectCode ? [{ code: { equals: target.subjectCode, mode: 'insensitive' as const } }] : []),
+            ],
+          },
+        });
+
+    if (target.subjectId && !subject) {
+      throw new Error(`Subject with id "${target.subjectId}" not found.`);
+    }
 
     if (!subject) {
       subject = await prisma.subject.create({
         data: {
-          name: 'Computer Organization & Architecture',
-          code: 'CS_COA',
-          department: 'CSE',
+          name: target.subjectName!,
+          code: target.subjectCode || `GEN-${target.subjectName!.replace(/[^A-Za-z0-9]/g, '').slice(0, 12).toUpperCase()}-${Date.now() % 1000}`,
+          department: target.department || 'CSE',
         },
       });
     }
+
+    const moduleName = target.moduleName || 'Chapter 1';
 
     // 2. Pre-create or map Module & Topic & Subtopic taxonomy entities
     const topicHeadingToSubtopicMap = new Map<string, string>();
@@ -185,12 +207,12 @@ export class JSONLImportService {
       const topicName = item.topicHeading;
 
       let module = await prisma.module.findFirst({
-        where: { subjectId: subject.id, name: 'Chapter 1' },
+        where: { subjectId: subject.id, name: moduleName },
       });
       if (!module) {
         module = await prisma.module.create({
           data: {
-            name: 'Chapter 1',
+            name: moduleName,
             subjectId: subject.id,
           },
         });
@@ -272,6 +294,8 @@ export class JSONLImportService {
         reason: rec.reason || null,
       };
 
+      const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer } = this.normalizeOptionsAndAnswer(rec, qType);
+
       questionsToCreate.push({
         customId: rec.questionId,
         text: rec.question,
@@ -279,8 +303,8 @@ export class JSONLImportService {
         difficulty: Difficulty.MEDIUM,
         marks: qType === QuestionType.NAT ? 2.0 : 1.0,
         negativeMarks: qType === QuestionType.MCQ ? 0.33 : 0.0,
-        options: rec.options || {},
-        correctAnswer: rec.correctAnswer || [],
+        options: normalizedOptions,
+        correctAnswer: normalizedCorrectAnswer,
         rawAnswer: rec.rawAnswer || null,
         explanation: rec.reason || null,
         subtopicId,
@@ -327,5 +351,63 @@ export class JSONLImportService {
       rejectedCount: preview.rejectedCount,
       topicBreakdown: preview.topicBreakdown,
     };
+  }
+
+  /**
+   * JSONL source files store options as a letter-keyed object ({"A": "...", "B": "..."}) and
+   * correctAnswer as the matching letter(s) (["C"]) — a human/source-readable format, but not
+   * what the rest of the app understands. Every other write path (exam-taking UI, GateScoringService,
+   * excelImportService) uses an options ARRAY of {text} with correctAnswer as 0-based INDICES into
+   * that array. Importing the raw JSONL shape verbatim would silently corrupt both rendering
+   * (currentQ.options.map crashes on a plain object) and scoring (comparing a letter to a numeric
+   * index never matches) — this converts once, at import time, so every downstream consumer sees
+   * the one real shape.
+   */
+  private static normalizeOptionsAndAnswer(
+    rec: JSONLRecord,
+    qType: QuestionType
+  ): { options: any; correctAnswer: any } {
+    if (qType === QuestionType.MCQ || qType === QuestionType.MSQ) {
+      if (rec.options && !Array.isArray(rec.options) && typeof rec.options === 'object') {
+        const letters = Object.keys(rec.options).sort();
+        const optionsArray = letters.map((l) => ({ text: (rec.options as Record<string, string>)[l] }));
+        const letterToIndex = new Map(letters.map((l, i) => [l.toUpperCase(), i]));
+
+        const rawCorrect = Array.isArray(rec.correctAnswer)
+          ? rec.correctAnswer
+          : rec.correctAnswer !== undefined && rec.correctAnswer !== null
+          ? [rec.correctAnswer]
+          : [];
+
+        const correctIndices = rawCorrect
+          .map((v: any) => {
+            if (typeof v === 'string' && letterToIndex.has(v.toUpperCase())) return letterToIndex.get(v.toUpperCase());
+            const n = Number(v);
+            return Number.isFinite(n) ? n : null;
+          })
+          .filter((v: any): v is number => v !== null);
+
+        return { options: optionsArray, correctAnswer: correctIndices };
+      }
+
+      if (Array.isArray(rec.options)) {
+        const optionsArray = rec.options.map((o: any) => (typeof o === 'string' ? { text: o } : o));
+        const correctAnswer = Array.isArray(rec.correctAnswer)
+          ? rec.correctAnswer.map(Number).filter((n: number) => Number.isFinite(n))
+          : [];
+        return { options: optionsArray, correctAnswer };
+      }
+
+      return { options: [], correctAnswer: [] };
+    }
+
+    if (qType === QuestionType.NAT) {
+      const raw = Array.isArray(rec.correctAnswer) ? rec.correctAnswer[0] : rec.correctAnswer;
+      const num = Number(raw ?? rec.rawAnswer);
+      return { options: [], correctAnswer: Number.isFinite(num) ? { value: num } : {} };
+    }
+
+    // FREE_RESPONSE / UNKNOWN have no auto-gradable structured answer.
+    return { options: [], correctAnswer: [] };
   }
 }

@@ -13,6 +13,7 @@ export interface AuthRequest extends Request {
     role: Role;
     department: string;
     sessionId?: string | null;
+    canCreateExams: boolean;
   };
 }
 
@@ -39,6 +40,7 @@ export const authenticateJWT = async (req: AuthRequest, res: Response, next: Nex
         department: true,
         registerNo: true,
         sessionId: true,
+        canCreateExams: true,
       },
     });
 
@@ -61,6 +63,7 @@ export const authenticateJWT = async (req: AuthRequest, res: Response, next: Nex
       role: user.role,
       department: user.department,
       sessionId: user.sessionId,
+      canCreateExams: user.canCreateExams,
     };
 
     next();
@@ -79,6 +82,27 @@ export const requireRoles = (...roles: Role[]) => {
     }
     next();
   };
+};
+
+/**
+ * Admin always has full exam-creation access. Faculty must be explicitly granted
+ * canCreateExams by an Admin — off by default, so a new faculty account cannot create/finalize
+ * examination papers until an Admin turns this on for them.
+ */
+export const requireExamCreatePermission = (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Unauthenticated' });
+  }
+  if (req.user.role === Role.ADMIN) {
+    return next();
+  }
+  if (req.user.role === Role.FACULTY && req.user.canCreateExams) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: 'Forbidden: You do not have permission to create examinations. Ask an Administrator to grant this permission.',
+  });
 };
 
 /**

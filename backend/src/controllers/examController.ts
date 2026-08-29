@@ -279,6 +279,23 @@ export class ExamController {
         return res.status(404).json({ success: false, message: 'Assignment not found' });
       }
 
+      // Submission must be a one-time transition. Without this guard, a retried/duplicated
+      // request re-scores and overwrites an already-final result (confirmed live: a second call
+      // silently recomputed timeTakenSec and returned 200 again with no error).
+      if (assignment.status === 'COMPLETED' || assignment.status === 'AUTO_SUBMITTED') {
+        return res.status(200).json({
+          success: true,
+          message: 'Exam was already submitted.',
+          data: {
+            assignmentId,
+            score: assignment.score,
+            totalMarks: assignment.totalMarks,
+            accuracy: assignment.accuracy,
+            timeTakenSec: assignment.timeTakenSec,
+          },
+        });
+      }
+
       let totalScore = 0;
       let totalAttempted = 0;
       let totalCorrect = 0;
@@ -429,6 +446,17 @@ export class ExamController {
       const responseMap = new Map();
       assignment.responses.forEach(r => responseMap.set(r.questionId, r));
 
+      // Solutions/answer keys are gated by the exam's configured solutionVisibility — this
+      // endpoint previously ignored that setting entirely and always exposed the correct answer
+      // and explanation to any student who'd completed the exam, even when faculty had
+      // explicitly set HIDE_SOLUTIONS. Admin/Faculty callers (not this student-only route) are
+      // unaffected — they have their own authorization path.
+      const visibility = assignment.test.solutionVisibility;
+      const canSeeAnswerKey =
+        visibility === 'SHOW_ALWAYS' ||
+        visibility === 'SHOW_AFTER_RESULT' ||
+        (visibility === 'SHOW_AFTER_EXAM_ENDS' && new Date() >= new Date(assignment.test.endTime));
+
       const solutions = assignment.test.testQuestions.map(tq => {
         const q = tq.question;
         // Review must agree with what was actually scored — read from the same frozen snapshot
@@ -445,12 +473,12 @@ export class ExamController {
           marks: graded.marks,
           negativeMarks: graded.negativeMarks,
           options: graded.options,
-          correctAnswer: graded.correctAnswer,
+          correctAnswer: canSeeAnswerKey ? graded.correctAnswer : undefined,
           chosenAnswer: resp ? resp.chosenAnswer : null,
           isCorrect: resp ? resp.isCorrect : false,
           marksObtained: resp ? resp.marksObtained : 0,
           timeSpentSec: resp ? resp.timeSpentSec : 0,
-          explanation: graded.explanation,
+          explanation: canSeeAnswerKey ? graded.explanation : undefined,
           reference: q.reference,
           previousYear: q.previousYear,
           subject: q.subtopic.topic.module.subject.name,

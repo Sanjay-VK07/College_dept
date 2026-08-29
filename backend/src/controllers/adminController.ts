@@ -507,6 +507,7 @@ export class AdminController {
           email: true,
           department: true,
           createdAt: true,
+          canCreateExams: true,
           _count: { select: { createdTests: true, questions: true } },
         },
       });
@@ -563,12 +564,27 @@ export class AdminController {
   public static async updateFaculty(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const { name, email, department } = req.body;
+      const { name, email, department, canCreateExams } = req.body;
+
+      const data: any = { name, email, department };
+      if (typeof canCreateExams === 'boolean') {
+        data.canCreateExams = canCreateExams;
+      }
 
       const faculty = await prisma.user.update({
         where: { id },
-        data: { name, email, department },
+        data,
       });
+
+      if (typeof canCreateExams === 'boolean') {
+        await AuditLogger.log({
+          userId: req.user?.id,
+          action: canCreateExams ? 'GRANT_EXAM_CREATE_PERMISSION' : 'REVOKE_EXAM_CREATE_PERMISSION',
+          resource: 'User',
+          details: `${canCreateExams ? 'Granted' : 'Revoked'} exam-creation permission for faculty ${faculty.name} (${faculty.email})`,
+          ipAddress: req.ip,
+        });
+      }
 
       return res.status(200).json({ success: true, message: 'Faculty profile updated', data: faculty });
     } catch (error: any) {
@@ -1472,25 +1488,24 @@ export class AdminController {
         else if (pct >= 50) grade = 'B (Above Average)';
         else if (pct >= 35) grade = 'C (Pass)';
 
+        // "Completed" is an attempt-progress state, not an academic outcome — a 1/100 score
+        // completed the exam same as a 90/100 one. PASS/FAIL must reflect the actual score
+        // against the same 35% cutoff the grade scale above already uses as its pass line.
+        const attemptFinished = a.status === 'COMPLETED' || a.status === 'AUTO_SUBMITTED';
+        const status = attemptFinished ? (pct >= 35 ? 'PASS' : 'FAIL') : a.status;
+
         return {
           id: a.id,
-          registerNo: a.student?.registerNo || '71762105042',
+          registerNo: a.student?.registerNo || '—',
           studentName: a.student?.name || 'Student',
           courseTitle: a.test?.title || 'Examination',
           score,
           totalMarks: total,
           grade,
-          status: a.status === 'COMPLETED' ? 'PASS' : a.status,
+          status,
           submittedAt: a.submittedAt,
         };
       });
-
-      await NotificationController.createSystemNotification(
-        'Semester End Results Published',
-        'End-semester assessment results ledger published by Controller of Examinations',
-        'info',
-        'Student'
-      );
 
       return res.status(200).json({ success: true, data: ledger });
     } catch (error: any) {

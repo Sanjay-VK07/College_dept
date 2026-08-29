@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticateJWT, requireRoles } from '../../../middlewares/authMiddleware';
+import multer from 'multer';
+import { authenticateJWT, requireRoles, requireExamCreatePermission } from '../../../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 import { AIChatController } from '../controllers/aiChatController';
 import { RAGAdminController } from '../controllers/ragAdminController';
@@ -15,6 +16,7 @@ import { createAIRateLimiter } from '../../../middlewares/rateLimiter';
 import { ENV } from '../../../config/env';
 
 const router = Router();
+const jsonlUpload = multer({ storage: multer.memoryStorage() });
 
 // Configure Feature-Specific Rate Limiters
 const chatLimiter = createAIRateLimiter({ maxRequests: ENV.AI_CHAT_RATE_LIMIT, featureName: 'AI Chat' });
@@ -94,8 +96,8 @@ router.get('/question-bank/subjects', requireRoles(Role.FACULTY, Role.ADMIN), Qu
 router.get('/question-bank/topics', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.getTopics);
 router.get('/question-bank/availability', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.getAvailability);
 router.get('/question-bank/search', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.searchQuestionBank);
-router.post('/question-bank/preview-jsonl', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.previewJSONLImport);
-router.post('/question-bank/import-jsonl', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.executeJSONLImport);
+router.post('/question-bank/preview-jsonl', requireRoles(Role.FACULTY, Role.ADMIN), jsonlUpload.single('file'), QuestionPaperController.previewJSONLImport);
+router.post('/question-bank/import-jsonl', requireRoles(Role.FACULTY, Role.ADMIN), jsonlUpload.single('file'), QuestionPaperController.executeJSONLImport);
 router.delete('/question-bank/questions/:id', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.deleteQuestion);
 router.post('/question-bank/questions/bulk-delete', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.bulkDeleteQuestions);
 
@@ -103,7 +105,7 @@ router.post('/question-paper/preview', requireRoles(Role.FACULTY, Role.ADMIN), Q
 router.post('/question-paper/generate', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.startShortfallGeneration);
 router.get('/question-paper/generation/:jobId', statusPollLimiter, requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.getGenerationJobStatus);
 router.post('/question-paper/regenerate-selection', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.regenerateSelection);
-router.post('/question-paper/finalize', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.finalizePaper);
+router.post('/question-paper/finalize', requireRoles(Role.FACULTY, Role.ADMIN), requireExamCreatePermission, QuestionPaperController.finalizePaper);
 router.post('/question-paper/exams/:id/publish', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.publishExamination);
 
 // RAG Knowledge Base Document Management Sub-router (Authenticated Users, RBAC inside sub-router)

@@ -390,6 +390,11 @@ export function broadcastNotification(notif: any) {
 }
 
 async function forceSubmitAssignment(assignmentId: string, ipAddress: string, triggerUser: any) {
+  // Explicit timeout: this scores every attempted question sequentially inside the transaction,
+  // and each write to this remote DB has consistently taken 1-1.3s this session — the default
+  // 5000ms interactive-transaction timeout was being blown past for any exam with more than a
+  // handful of answered questions, silently failing the whole force-submit (violation-limit
+  // auto-submit / invigilator termination) with no submission ever completing.
   return await prisma.$transaction(async (tx) => {
     const assignment = await tx.testAssignment.findUnique({
       where: { id: assignmentId },
@@ -480,5 +485,5 @@ async function forceSubmitAssignment(assignmentId: string, ipAddress: string, tr
     });
 
     return updated;
-  });
+  }, { timeout: 60000 });
 }

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { AdminController } from '../controllers/adminController';
 import { DocumentStructureController } from '../modules/ai/controllers/documentStructureController';
-import { authenticateJWT, requireRoles } from '../middlewares/authMiddleware';
+import { authenticateJWT, requireRoles, requireExamCreatePermission } from '../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -36,7 +36,7 @@ router.get('/question-bank-documents', requireRoles(Role.FACULTY, Role.ADMIN), A
 
 // Exam Management
 router.get('/exams', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getExams);
-router.post('/exams', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.createExam);
+router.post('/exams', requireRoles(Role.FACULTY, Role.ADMIN), requireExamCreatePermission, AdminController.createExam);
 router.put('/exams/:id/publish', requireRoles(Role.ADMIN), AdminController.togglePublishExam);
 router.put('/exams/:id/status', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.updateExamStatus);
 router.delete('/exams/:id', requireRoles(Role.ADMIN), AdminController.deleteExam);
