@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Bot, User, ThumbsUp, ThumbsDown, Check } from 'lucide-react';
+import { Bot, User, ThumbsUp, ThumbsDown, Check, FileSpreadsheet, Download, Loader2, AlertCircle } from 'lucide-react';
 import { AIMessage, aiService } from '@/services/aiService';
 
 interface AIChatMessageProps {
@@ -18,6 +18,46 @@ export const AIChatMessage: React.FC<AIChatMessageProps> = ({ message }) => {
   >(undefined);
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Excel Export Action State
+  const [downloading, setDownloading] = useState(false);
+  const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const actionFromContent = React.useMemo(() => {
+    if (message.action) return message.action;
+    if (message.content && message.content.includes('<!--action:')) {
+      const match = message.content.match(/<!--action:([\s\S]*?)-->/);
+      if (match) {
+        try {
+          return JSON.parse(match[1]);
+        } catch (e) {}
+      }
+    }
+    return undefined;
+  }, [message.action, message.content]);
+
+  const activeAction = message.action || actionFromContent;
+  const isExcelAction = !isUser && activeAction?.type === 'DOWNLOAD_STUDENT_EXCEL';
+
+  const handleDownloadExcel = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      await aiService.downloadStudentDataExcel(
+        activeAction?.downloadUrl,
+        activeAction?.fileName
+      );
+      setDownloadSuccess(true);
+      setTimeout(() => setDownloadSuccess(false), 4000);
+    } catch (err: any) {
+      console.error('Download failed:', err);
+      setDownloadError(err.response?.data?.message || err.message || 'Download failed. Please check permissions and try again.');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   useEffect(() => {
     if (!isUser && message.id) {
@@ -76,7 +116,8 @@ export const AIChatMessage: React.FC<AIChatMessageProps> = ({ message }) => {
 
   // Basic renderer for bullet lists, bold text, and lines
   const renderFormattedContent = (content: string) => {
-    const lines = content.split('\n');
+    const cleanContent = content.replace(/<!--action:[\s\S]*?-->/g, '').trim();
+    const lines = cleanContent.split('\n');
     return lines.map((line, idx) => {
       if (line.startsWith('### ')) {
         return <h4 key={idx} className="font-semibold text-sm mt-2 mb-1 text-slate-900">{line.replace('### ', '')}</h4>;
@@ -121,6 +162,55 @@ export const AIChatMessage: React.FC<AIChatMessageProps> = ({ message }) => {
             }`}
           >
             {renderFormattedContent(message.content)}
+
+            {/* Structured Action: Download Student Data Excel Button */}
+            {isExcelAction && (
+              <div className="mt-3 pt-2.5 border-t border-slate-100">
+                <div className="flex flex-col space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={handleDownloadExcel}
+                    disabled={downloading}
+                    className={`inline-flex items-center justify-center space-x-2 px-4 py-2.5 rounded-lg text-xs font-semibold shadow-xs transition-all cursor-pointer ${
+                      downloadSuccess
+                        ? 'bg-emerald-700 text-white'
+                        : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white'
+                    } disabled:opacity-60 disabled:cursor-not-allowed`}
+                  >
+                    {downloading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>Preparing Excel...</span>
+                      </>
+                    ) : downloadSuccess ? (
+                      <>
+                        <Check className="w-4 h-4 text-white" />
+                        <span>Downloaded ({activeAction?.fileName || 'Excel file'})</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileSpreadsheet className="w-4 h-4 text-emerald-100" />
+                        <span>Download Excel</span>
+                        <Download className="w-3.5 h-3.5 text-emerald-200 ml-0.5" />
+                      </>
+                    )}
+                  </button>
+
+                  {activeAction?.fileName && !downloadSuccess && (
+                    <span className="text-[10px] text-slate-400 font-mono text-center">
+                      📄 {activeAction.fileName}
+                    </span>
+                  )}
+
+                  {downloadError && (
+                    <div className="flex items-center space-x-1 text-[11px] text-red-600 bg-red-50 p-1.5 rounded border border-red-200 mt-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{downloadError}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Source Citations UI */}
             {message.sources && message.sources.length > 0 && (

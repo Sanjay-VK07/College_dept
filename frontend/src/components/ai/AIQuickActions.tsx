@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { HelpCircle, Calendar, BarChart2, BookOpen, Settings } from 'lucide-react';
+import { HelpCircle, Calendar, BarChart2, BookOpen, Settings, FileSpreadsheet } from 'lucide-react';
 
 interface AIQuickActionsProps {
   role?: string;
@@ -19,6 +19,7 @@ export const AIQuickActions: React.FC<AIQuickActionsProps> = ({ role = 'STUDENT'
         ];
       case 'ADMIN':
         return [
+          { label: 'Export Student Data', prompt: 'Export students to Excel', icon: FileSpreadsheet },
           { label: 'System Overview', prompt: 'Give me an overview of system health and metrics.', icon: BarChart2 },
           { label: 'Exam Management Help', prompt: 'What administrative options are available for mock tests?', icon: Settings },
           { label: 'Portal Administration Help', prompt: 'How are domain settings and user roles managed?', icon: HelpCircle },

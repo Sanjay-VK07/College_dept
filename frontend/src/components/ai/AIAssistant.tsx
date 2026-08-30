@@ -18,9 +18,11 @@ export const AIAssistant: React.FC = () => {
   // In-flight request lock to prevent race conditions and rapid duplicate submissions
   const isSendingRef = useRef<boolean>(false);
 
-  useEffect(() => {
-    const token = localStorage.getItem('gsmas_token');
-    const storedUserStr = localStorage.getItem('gsmas_user');
+  // Check auth and user role from localStorage, reacting to route transitions and storage events
+  const syncAuthState = () => {
+    if (typeof window === 'undefined') return;
+    const token = localStorage.getItem('gsmas_token') || localStorage.getItem('token');
+    const storedUserStr = localStorage.getItem('gsmas_user') || localStorage.getItem('user');
 
     if (token) {
       setIsAuthenticated(true);
@@ -30,12 +32,48 @@ export const AIAssistant: React.FC = () => {
           if (userObj?.role) {
             setUserRole(userObj.role);
           }
-        } catch (e) {
-          // fallback default
-        }
+        } catch (e) {}
       }
+    } else {
+      setIsAuthenticated(false);
     }
-  }, []);
+  };
+
+  useEffect(() => {
+    syncAuthState();
+
+    const handleStorageChange = () => syncAuthState();
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('auth-change', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('auth-change', handleStorageChange);
+    };
+  }, [pathname]);
+
+  // Optionally hydrate previous conversation when the chat window opens
+  useEffect(() => {
+    if (isOpen && messages.length === 0 && isAuthenticated) {
+      aiService
+        .getConversations()
+        .then((convs) => {
+          if (convs && convs.length > 0) {
+            const latestConv = convs[0];
+            aiService
+              .getConversation(latestConv.id)
+              .then((convData) => {
+                if (convData && convData.messages && convData.messages.length > 0) {
+                  setConversationId(convData.id);
+                  setMessages(convData.messages);
+                }
+              })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isOpen, isAuthenticated]);
 
   const handleToggle = () => {
     setIsOpen((prev) => !prev);
@@ -74,7 +112,11 @@ export const AIAssistant: React.FC = () => {
         if (response.conversationId) {
           setConversationId(response.conversationId);
         }
-        setMessages((prev) => [...prev, response.message!]);
+        const incomingMsg: AIMessage = {
+          ...response.message,
+          action: response.message.action || response.action,
+        };
+        setMessages((prev) => [...prev, incomingMsg]);
       } else {
         // Provider failure / in-progress clean system message
         const sysErrMsg: AIMessage = {
@@ -99,7 +141,14 @@ export const AIAssistant: React.FC = () => {
     }
   };
 
-  if (!isAuthenticated || userRole !== 'ADMIN' || !pathname || !pathname.startsWith('/admin')) {
+  // Hide the floating chatbot on the unauthenticated login page or during an active student exam session
+  if (
+    !isAuthenticated ||
+    !pathname ||
+    pathname === '/' ||
+    pathname === '/login' ||
+    pathname.startsWith('/student/exam')
+  ) {
     return null;
   }
 

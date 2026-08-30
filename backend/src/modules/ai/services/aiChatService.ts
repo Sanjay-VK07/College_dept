@@ -162,6 +162,97 @@ export class AIChatService {
 
     // --- Phase 2D Intent Routing ---
     
+    // 0. Export Student Data to Excel Routing (Admin only)
+    const detectedIntent = IntentService.classifyIntent(trimmedMsg);
+    if (detectedIntent === 'EXPORT_STUDENT_DATA') {
+      // Level 1 Authorization Guard: Must be ADMIN
+      if (role !== Role.ADMIN) {
+        const unauthorizedMsg = 'Access Denied: Only administrators have permission to export student data records.';
+        const assistantMsg = await ConversationService.saveAssistantMessage(
+          conversation.id,
+          userMsg.id,
+          unauthorizedMsg
+        );
+        return {
+          success: true,
+          type: 'UNAUTHORIZED_ACTION',
+          conversationId: conversation.id,
+          title: conversation.title || 'AI Consultation',
+          message: {
+            id: assistantMsg.id,
+            role: assistantMsg.role,
+            content: assistantMsg.content,
+            createdAt: assistantMsg.createdAt,
+          },
+          answer: assistantMsg.content,
+          messageId: assistantMsg.id,
+        };
+      }
+
+      // Check if student records exist in the database
+      const studentCount = await prisma.user.count({
+        where: { role: Role.STUDENT },
+      });
+
+      if (studentCount === 0) {
+        const noDataMsg = 'There are currently no student records in the database to export.';
+        const assistantMsg = await ConversationService.saveAssistantMessage(
+          conversation.id,
+          userMsg.id,
+          noDataMsg
+        );
+        return {
+          success: true,
+          type: 'NO_DATA',
+          conversationId: conversation.id,
+          title: conversation.title || 'AI Consultation',
+          message: {
+            id: assistantMsg.id,
+            role: assistantMsg.role,
+            content: assistantMsg.content,
+            createdAt: assistantMsg.createdAt,
+          },
+          answer: assistantMsg.content,
+          messageId: assistantMsg.id,
+        };
+      }
+
+      const dateStr = new Date().toISOString().split('T')[0];
+      const fileName = `student_data_${dateStr}.xlsx`;
+      const downloadUrl = '/api/admin/export-students';
+      const actionPayload = {
+        type: 'DOWNLOAD_STUDENT_EXCEL',
+        downloadUrl,
+        fileName,
+      };
+
+      const displayText = 'Student data export is ready. Click the button below to download the Excel file.';
+      const rawContent = `${displayText}\n<!--action:${JSON.stringify(actionPayload)}-->`;
+
+      const assistantMsg = await ConversationService.saveAssistantMessage(
+        conversation.id,
+        userMsg.id,
+        rawContent
+      );
+
+      return {
+        success: true,
+        type: 'EXPORT_READY',
+        conversationId: conversation.id,
+        title: conversation.title || 'AI Consultation',
+        message: {
+          id: assistantMsg.id,
+          role: assistantMsg.role,
+          content: displayText,
+          createdAt: assistantMsg.createdAt,
+          action: actionPayload,
+        } as any,
+        action: actionPayload,
+        answer: displayText,
+        messageId: assistantMsg.id,
+      };
+    }
+
     // A. Predefined Database Query statistics routing
     const isStatsQuery = (role === Role.ADMIN || role === Role.FACULTY) &&
       (trimmedMsg.toLowerCase().includes('how many') ||
@@ -601,6 +692,77 @@ Your task:
       conversationId: conversation.id,
       userMessageId: userMsg.id,
     });
+
+    // 3.1 Check Export Student Data Intent
+    const streamIntent = IntentService.classifyIntent(trimmedMsg);
+    if (streamIntent === 'EXPORT_STUDENT_DATA') {
+      if (role !== Role.ADMIN) {
+        const text = 'Access Denied: Only administrators have permission to export student data records.';
+        sendSSE('token', { text });
+        const assistantMsg = await ConversationService.saveAssistantMessage(
+          conversation.id,
+          userMsg.id,
+          text
+        );
+        sendSSE('done', {
+          requestId: reqId,
+          conversationId: conversation.id,
+          messageId: assistantMsg.id,
+          totalDurationMs: Math.round(performance.now() - t0),
+        });
+        return;
+      }
+
+      const studentCount = await prisma.user.count({
+        where: { role: Role.STUDENT },
+      });
+
+      if (studentCount === 0) {
+        const text = 'There are currently no student records in the database to export.';
+        sendSSE('token', { text });
+        const assistantMsg = await ConversationService.saveAssistantMessage(
+          conversation.id,
+          userMsg.id,
+          text
+        );
+        sendSSE('done', {
+          requestId: reqId,
+          conversationId: conversation.id,
+          messageId: assistantMsg.id,
+          totalDurationMs: Math.round(performance.now() - t0),
+        });
+        return;
+      }
+
+      const dateStr = new Date().toISOString().split('T')[0];
+      const fileName = `student_data_${dateStr}.xlsx`;
+      const downloadUrl = '/api/admin/export-students';
+      const actionPayload = {
+        type: 'DOWNLOAD_STUDENT_EXCEL',
+        downloadUrl,
+        fileName,
+      };
+
+      const displayText = 'Student data export is ready. Click the button below to download the Excel file.';
+      const rawStoredContent = `${displayText}\n<!--action:${JSON.stringify(actionPayload)}-->`;
+
+      sendSSE('token', { text: displayText });
+
+      const assistantMsg = await ConversationService.saveAssistantMessage(
+        conversation.id,
+        userMsg.id,
+        rawStoredContent
+      );
+
+      sendSSE('done', {
+        requestId: reqId,
+        conversationId: conversation.id,
+        messageId: assistantMsg.id,
+        totalDurationMs: Math.round(performance.now() - t0),
+        action: actionPayload,
+      });
+      return;
+    }
 
     const tRagStart = performance.now();
     // 4. RAG Vector Search

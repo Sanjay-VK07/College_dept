@@ -125,13 +125,19 @@ export class ConversationService {
       },
     });
 
-    return list.map((c) => ({
-      id: c.id,
-      title: c.title,
-      createdAt: c.createdAt,
-      updatedAt: c.updatedAt,
-      lastMessage: c.messages[0]?.content || '',
-    }));
+    return list.map((c) => {
+      let lastMsg = c.messages[0]?.content || '';
+      if (lastMsg.includes('<!--action:')) {
+        lastMsg = lastMsg.replace(/<!--action:[\s\S]*?-->/, '').trim();
+      }
+      return {
+        id: c.id,
+        title: c.title,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+        lastMessage: lastMsg,
+      };
+    });
   }
 
   /**
@@ -151,6 +157,21 @@ export class ConversationService {
       const error: any = new Error('Conversation not found or access forbidden');
       error.status = 404;
       throw error;
+    }
+
+    if (conversation.messages) {
+      conversation.messages = conversation.messages.map((m: any) => {
+        const actionMatch = m.content?.match(/<!--action:([\s\S]*?)-->/);
+        if (actionMatch) {
+          try {
+            m.action = JSON.parse(actionMatch[1]);
+            m.content = m.content.replace(/<!--action:[\s\S]*?-->/, '').trim();
+          } catch (e) {
+            // Ignore parse error
+          }
+        }
+        return m;
+      });
     }
 
     return conversation;

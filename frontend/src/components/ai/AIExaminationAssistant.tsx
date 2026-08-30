@@ -23,6 +23,8 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
+  FileSpreadsheet,
+  Download,
 } from 'lucide-react';
 
 interface AIExaminationAssistantProps {
@@ -42,6 +44,33 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
   const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
   const [editingConvId, setEditingConvId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+
+  // Excel Export Action State
+  const [downloadingExcelMsgId, setDownloadingExcelMsgId] = useState<string | null>(null);
+  const [downloadSuccessMsgId, setDownloadSuccessMsgId] = useState<string | null>(null);
+  const [downloadExcelError, setDownloadExcelError] = useState<{ msgId: string; error: string } | null>(null);
+
+  const handleDownloadExcelAction = async (msg: AIMessage) => {
+    if (downloadingExcelMsgId) return;
+    setDownloadingExcelMsgId(msg.id);
+    setDownloadExcelError(null);
+    try {
+      await aiService.downloadStudentDataExcel(
+        msg.action?.downloadUrl,
+        msg.action?.fileName
+      );
+      setDownloadSuccessMsgId(msg.id);
+      setTimeout(() => setDownloadSuccessMsgId(null), 4000);
+    } catch (err: any) {
+      console.error('Download failed:', err);
+      setDownloadExcelError({
+        msgId: msg.id,
+        error: err.response?.data?.message || err.message || 'Download failed. Please check permissions and try again.',
+      });
+    } finally {
+      setDownloadingExcelMsgId(null);
+    }
+  };
 
   // RAG references for current message or conversation
   const [citations, setCitations] = useState<any[]>([]);
@@ -232,7 +261,11 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
           }
           if (data.messageId) {
             setMessages((prev) =>
-              prev.map((msg) => (msg.id === tempAssistantId ? { ...msg, id: data.messageId } : msg))
+              prev.map((msg) =>
+                msg.id === tempAssistantId
+                  ? { ...msg, id: data.messageId, action: data.action }
+                  : msg
+              )
             );
           }
           setIsLoadingChat(false);
@@ -498,6 +531,52 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
                         }`}
                       >
                         <div className="whitespace-pre-line leading-relaxed">{msg.content}</div>
+
+                        {/* Structured Action: Download Student Data Excel Button */}
+                        {msg.action?.type === 'DOWNLOAD_STUDENT_EXCEL' && (
+                          <div className="mt-3 pt-2.5 border-t border-slate-750">
+                            <div className="flex flex-col space-y-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadExcelAction(msg)}
+                                disabled={downloadingExcelMsgId === msg.id}
+                                className="inline-flex items-center justify-center space-x-2 px-4 py-2.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-xs transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                              >
+                                {downloadingExcelMsgId === msg.id ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                                    <span>Preparing Excel...</span>
+                                  </>
+                                ) : downloadSuccessMsgId === msg.id ? (
+                                  <>
+                                    <Check className="w-4 h-4 text-white" />
+                                    <span>Downloaded ({msg.action?.fileName || 'Excel file'})</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <FileSpreadsheet className="w-4 h-4 text-emerald-100" />
+                                    <span>Download Excel</span>
+                                    <Download className="w-3.5 h-3.5 text-emerald-200 ml-0.5" />
+                                  </>
+                                )}
+                              </button>
+
+                              {msg.action?.fileName && downloadSuccessMsgId !== msg.id && (
+                                <span className="text-[10px] text-slate-400 font-mono text-center">
+                                  📄 {msg.action.fileName}
+                                </span>
+                              )}
+
+                              {downloadExcelError && downloadExcelError.msgId === msg.id && (
+                                <div className="flex items-center space-x-1 text-[11px] text-red-400 bg-red-950/40 p-1.5 rounded border border-red-800/50 mt-1">
+                                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{downloadExcelError.error}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
                         <div className="text-[9px] text-slate-500 mt-1.5 text-right">
                           {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </div>

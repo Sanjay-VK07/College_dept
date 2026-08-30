@@ -3,6 +3,7 @@ import { AuthRequest } from '../middlewares/authMiddleware';
 import { prisma } from '../config/prisma';
 import { ExcelImportService } from '../services/excelImportService';
 import { ReportExportService } from '../services/reportExportService';
+import { StudentDataExportService } from '../services/studentDataExportService';
 import { AuditLogger } from '../services/auditLogger';
 import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus } from '@prisma/client';
 import { ENV } from '../config/env';
@@ -1403,6 +1404,25 @@ export class AdminController {
       }
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Generates and streams dynamic Excel export of all student records for authorized Admins
+   */
+  public static async exportStudentsExcel(req: AuthRequest, res: Response) {
+    try {
+      const buffer = await StudentDataExportService.generateExcel();
+      const dateStr = new Date().toISOString().split('T')[0];
+      const filename = `student_data_${dateStr}.xlsx`;
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Cache-Control', 'no-cache');
+      return res.send(buffer);
+    } catch (error: any) {
+      console.error('[AdminController.exportStudentsExcel Error]:', error);
+      return res.status(500).json({ success: false, message: error.message || 'Failed to export student data' });
     }
   }
 

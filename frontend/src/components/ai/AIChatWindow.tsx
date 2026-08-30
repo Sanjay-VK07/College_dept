@@ -32,7 +32,7 @@ export const AIChatWindow: React.FC<AIChatWindowProps> = ({
   }, [messages, isLoading]);
 
   return (
-    <div className="fixed bottom-24 right-6 z-50 w-80 sm:w-96 h-[500px] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col transition-all duration-200 animate-in fade-in slide-in-from-bottom-5">
+    <div className="fixed bottom-24 right-6 z-[999] w-80 sm:w-96 h-[500px] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col transition-all duration-200 animate-in fade-in slide-in-from-bottom-5">
       {/* Header */}
       <AIChatHeader onClose={onClose} onNewChat={onNewChat} />
 

@@ -1,4 +1,5 @@
 export type AIIntent =
+  | 'EXPORT_STUDENT_DATA'
   | 'GENERAL_KNOWLEDGE'
   | 'PORTAL_UPCOMING_EXAMS'
   | 'PORTAL_EXAM_RESULT'
@@ -19,6 +20,23 @@ export class IntentService {
     }
 
     const lower = userMessage.toLowerCase().trim();
+
+    // 0. Student Data Export to Excel intent
+    const isStudentExport =
+      (lower.includes('student') || lower.includes('students')) &&
+      (
+        lower.includes('export') ||
+        lower.includes('download') ||
+        lower.includes('excel') ||
+        lower.includes('xlsx') ||
+        lower.includes('sheet') ||
+        lower.includes('spreadsheet') ||
+        lower.includes('csv')
+      );
+
+    if (isStudentExport) {
+      return 'EXPORT_STUDENT_DATA';
+    }
 
     // 1. Navigation questions ("where can I find", "how do I open", "how to navigate")
     if (

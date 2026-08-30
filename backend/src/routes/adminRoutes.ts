@@ -44,6 +44,7 @@ router.delete('/exams/:id', requireRoles(Role.ADMIN), AdminController.deleteExam
 // Bulk Uploads & Reports
 router.post('/upload-questions', requireRoles(Role.FACULTY, Role.ADMIN), upload.single('file'), AdminController.uploadQuestions);
 router.post('/upload-students', requireRoles(Role.ADMIN), upload.single('file'), AdminController.uploadStudents);
+router.get('/export-students', requireRoles(Role.ADMIN), AdminController.exportStudentsExcel);
 router.get('/export-report/:testId', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.exportTestReport);
 
 // Security & System Settings

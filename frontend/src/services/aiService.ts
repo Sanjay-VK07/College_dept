@@ -1,11 +1,18 @@
 import api from '@/lib/api';
 
+export interface ChatAction {
+  type: 'DOWNLOAD_STUDENT_EXCEL' | string;
+  downloadUrl: string;
+  fileName: string;
+}
+
 export interface AIMessage {
   id: string;
   role: 'USER' | 'ASSISTANT';
   content: string;
   createdAt: string;
   sources?: Array<{ documentId: string; title: string }>;
+  action?: ChatAction;
 }
 
 export interface AIConversationSummary {
@@ -22,6 +29,7 @@ export interface ChatResponse {
   conversationId?: string;
   title?: string;
   message?: AIMessage;
+  action?: ChatAction;
   answer?: string;
   sources?: Array<{ documentId: string; title: string }> | any[];
   messageId?: string;
@@ -65,7 +73,17 @@ export const aiService = {
         error: res.data.message || 'The AI service is currently unavailable. Please try again later.',
       };
     }
-    return res.data.data;
+    const data = res.data.data;
+    if (data?.message?.content && !data.message.action) {
+      const match = data.message.content.match(/<!--action:([\s\S]*?)-->/);
+      if (match) {
+        try {
+          data.message.action = JSON.parse(match[1]);
+          data.message.content = data.message.content.replace(/<!--action:[\s\S]*?-->/, '').trim();
+        } catch (e) {}
+      }
+    }
+    return data;
   },
 
   /**
@@ -77,7 +95,7 @@ export const aiService = {
     onStart: (data: { requestId: string; conversationId: string; userMessageId: string }) => void,
     onQueued: (data: { position: number; queueSize: number }) => void,
     onToken: (token: string) => void,
-    onDone: (data: { requestId: string; conversationId: string; messageId: string; queueWaitMs?: number; totalDurationMs: number; sources?: any[] }) => void,
+    onDone: (data: { requestId: string; conversationId: string; messageId: string; queueWaitMs?: number; totalDurationMs: number; sources?: any[]; action?: ChatAction }) => void,
     onError: (error: { code: string; message: string }) => void,
     signal?: AbortSignal
   ): Promise<void> {
@@ -160,7 +178,65 @@ export const aiService = {
    */
   async getConversation(conversationId: string): Promise<{ id: string; title: string; messages: AIMessage[] }> {
     const res = await api.get(`/ai/conversations/${conversationId}`);
-    return res.data.data;
+    const data = res.data.data;
+    if (data?.messages) {
+      data.messages = data.messages.map((m: any) => {
+        if (m.content && !m.action) {
+          const match = m.content.match(/<!--action:([\s\S]*?)-->/);
+          if (match) {
+            try {
+              m.action = JSON.parse(match[1]);
+              m.content = m.content.replace(/<!--action:[\s\S]*?-->/, '').trim();
+            } catch (e) {}
+          }
+        }
+        return m;
+      });
+    }
+    return data;
+  },
+
+  /**
+   * Securely downloads the generated Student Data Excel file via an authenticated
+   * API call with Authorization: Bearer <token>, creating a Blob URL and triggering
+   * client-side download without exposing any JWT tokens in query parameters or browser history.
+   */
+  async downloadStudentDataExcel(downloadUrl: string = '/admin/export-students', defaultFileName?: string): Promise<string> {
+    let requestPath = downloadUrl || '/admin/export-students';
+
+    // Normalize URL: If it starts with '/api/', strip '/api' because Axios baseURL already includes '/api'
+    if (requestPath.startsWith('/api/')) {
+      requestPath = requestPath.substring(4);
+    }
+
+    const res = await api.get(requestPath, {
+      responseType: 'blob',
+    });
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    let filename = defaultFileName || `student_data_${dateStr}.xlsx`;
+
+    const disposition = res.headers['content-disposition'];
+    if (disposition && disposition.includes('filename=')) {
+      const match = disposition.match(/filename="?([^";]+)"?/);
+      if (match && match[1]) {
+        filename = match[1];
+      }
+    }
+
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+
+    return filename;
   },
 
   /**
