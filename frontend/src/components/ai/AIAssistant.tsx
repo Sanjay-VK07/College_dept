@@ -12,8 +12,9 @@ export const AIAssistant: React.FC = () => {
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
-  const [userRole, setUserRole] = useState<string>('STUDENT');
+  const [userRole, setUserRole] = useState<string>('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
 
   // In-flight request lock to prevent race conditions and rapid duplicate submissions
   const isSendingRef = useRef<boolean>(false);
@@ -30,16 +31,20 @@ export const AIAssistant: React.FC = () => {
         try {
           const userObj = JSON.parse(storedUserStr);
           if (userObj?.role) {
-            setUserRole(userObj.role);
+            setUserRole(String(userObj.role).toUpperCase());
+            return;
           }
         } catch (e) {}
       }
+      setUserRole('');
     } else {
       setIsAuthenticated(false);
+      setUserRole('');
     }
   };
 
   useEffect(() => {
+    setIsMounted(true);
     syncAuthState();
 
     const handleStorageChange = () => syncAuthState();
@@ -54,7 +59,9 @@ export const AIAssistant: React.FC = () => {
 
   // Optionally hydrate previous conversation when the chat window opens
   useEffect(() => {
-    if (isOpen && messages.length === 0 && isAuthenticated) {
+    const normalizedRole = userRole.trim().toUpperCase();
+    const isAuthorized = isAuthenticated && (normalizedRole === 'ADMIN' || normalizedRole === 'FACULTY');
+    if (isOpen && messages.length === 0 && isAuthorized) {
       aiService
         .getConversations()
         .then((convs) => {
@@ -73,7 +80,7 @@ export const AIAssistant: React.FC = () => {
         })
         .catch(() => {});
     }
-  }, [isOpen, isAuthenticated]);
+  }, [isOpen, isAuthenticated, userRole]);
 
   const handleToggle = () => {
     setIsOpen((prev) => !prev);
@@ -141,13 +148,21 @@ export const AIAssistant: React.FC = () => {
     }
   };
 
-  // Hide the floating chatbot on the unauthenticated login page or during an active student exam session
+  // Role-based visibility:
+  // Administrator (ADMIN) -> AI Assistant VISIBLE
+  // Faculty (FACULTY) -> AI Assistant VISIBLE
+  // Student (STUDENT) -> AI Assistant HIDDEN (completely unmounted)
+  const normalizedRole = userRole.trim().toUpperCase();
+  const isAuthorizedRole = isAuthenticated && (normalizedRole === 'ADMIN' || normalizedRole === 'FACULTY');
+  const isStudent = normalizedRole === 'STUDENT' || (pathname && pathname.startsWith('/student'));
+
   if (
+    !isMounted ||
     !isAuthenticated ||
-    !pathname ||
+    !isAuthorizedRole ||
+    isStudent ||
     pathname === '/' ||
-    pathname === '/login' ||
-    pathname.startsWith('/student/exam')
+    pathname === '/login'
   ) {
     return null;
   }
@@ -158,7 +173,7 @@ export const AIAssistant: React.FC = () => {
 
       {isOpen && (
         <AIChatWindow
-          role={userRole}
+          role={normalizedRole || 'ADMIN'}
           messages={messages}
           isLoading={isLoading}
           onSendMessage={handleSendMessage}

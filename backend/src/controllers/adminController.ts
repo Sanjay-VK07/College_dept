@@ -12,6 +12,7 @@ import { LocalStorageProvider } from '../modules/ai/services/documentStorageServ
 import { PDFQuestionImportService } from '../modules/ai/services/pdfQuestionImportService';
 import { QuestionVersionService } from '../services/questionVersionService';
 import { EmbeddingProvider } from '../modules/ai/services/embeddingProvider';
+import { DepartmentService } from '../services/departmentService';
 
 export class AdminController {
   /**
@@ -201,13 +202,15 @@ export class AdminController {
         { title: 'Active In-Progress Test Sessions', count: activeSessions, urgent: activeSessions > 0 },
       ];
 
+      const masterDepartments = await DepartmentService.getDepartments();
+
       return res.status(200).json({
         success: true,
         data: {
           metrics: {
             students: totalStudents,
             faculty: totalFaculty,
-            departments: deptCounts.length || 1,
+            departments: masterDepartments.length || 1,
             questionBank: totalQuestions,
             activeExams,
             todaysExams: todaysExamsCount,
@@ -222,9 +225,13 @@ export class AdminController {
             jwtSecretConfigured: true,
             maxViolationThreshold: 5,
           },
-          departmentBreakdown: deptCounts.map((d) => ({
-            department: d.department,
-            count: d._count.id,
+          departmentBreakdown: masterDepartments.map((d) => ({
+            id: d.id,
+            code: d.code,
+            department: d.name,
+            count: d.studentCount || 0,
+            active: d.active,
+            collegeId: d.collegeId,
           })),
           difficultyBreakdown: difficultyCounts.map((df) => ({
             difficulty: df.difficulty,
@@ -340,13 +347,22 @@ export class AdminController {
         return res.status(400).json({ success: false, message: `User with email ${email} already exists` });
       }
 
+      const rawDepartments = await DepartmentService.getRawDepartments();
+      const matchedDept = rawDepartments.find(
+        (d) =>
+          d.id === department ||
+          d.code.toLowerCase() === (department || '').toLowerCase() ||
+          d.name.toLowerCase() === (department || '').toLowerCase()
+      );
+      const canonicalDepartment = matchedDept ? matchedDept.name : (department || 'Computer Science and Engineering');
+
       const student = await prisma.user.create({
         data: {
           registerNo: registerNo || `717621050${Date.now().toString().slice(-3)}`,
           name,
           email,
           role: Role.STUDENT,
-          department: department || 'Computer Science and Engineering',
+          department: canonicalDepartment,
           year: Number(year) || 3,
           semester: Number(semester) || 6,
           section: section || 'A',
@@ -1088,7 +1104,20 @@ export class AdminController {
 
   public static async createExam(req: AuthRequest, res: Response) {
     try {
-      const { title, description, examType, durationMinutes, totalMarks, targetDepartment, maxViolations, instructions, questionCount, sourceDocumentId } = req.body;
+      const {
+        title,
+        description,
+        examType,
+        durationMinutes,
+        totalMarks,
+        targetDepartment,
+        targetSemester,
+        targetYear,
+        maxViolations,
+        instructions,
+        questionCount,
+        sourceDocumentId,
+      } = req.body;
 
       if (!title || String(title).trim().length < 5) {
         return res.status(400).json({ success: false, message: 'Exam title / course code is required and must be at least 5 characters.' });
@@ -1114,16 +1143,42 @@ export class AdminController {
         return res.status(400).json({ success: false, message: 'Number of questions must be a non-negative number.' });
       }
 
+      let resolvedYear: number | undefined = targetYear ? Number(targetYear) : undefined;
+      let finalDescription = description || 'Official Institutional CBT Examination';
+
+      if (targetSemester) {
+        const romanToNum: Record<string, number> = {
+          'VIII': 8, 'VII': 7, 'VI': 6, 'IV': 4, 'V': 5, 'III': 3, 'II': 2, 'I': 1
+        };
+        const numMatch = String(targetSemester).match(/\b([1-8])\b/);
+        let semNum: number | undefined = numMatch ? Number(numMatch[1]) : undefined;
+        if (!semNum) {
+          for (const [roman, n] of Object.entries(romanToNum)) {
+            if (String(targetSemester).toUpperCase().includes(roman)) {
+              semNum = n;
+              break;
+            }
+          }
+        }
+        if (semNum && !resolvedYear) {
+          resolvedYear = Math.ceil(semNum / 2);
+        }
+        if (!finalDescription.includes(String(targetSemester))) {
+          finalDescription = `[${targetSemester}] ${finalDescription}`;
+        }
+      }
+
       const exam = await prisma.mockTest.create({
         data: {
           title,
-          description: description || 'Official Institutional CBT Examination',
+          description: finalDescription,
           examType: examType || ExamType.SCHEDULED,
           durationMinutes: parsedDuration,
           totalMarks: parsedMarks,
           startTime: new Date(),
           endTime: new Date(Date.now() + 86400000 * 7),
           targetDepartment: targetDepartment || 'Computer Science and Engineering',
+          targetYear: resolvedYear || 3,
           maxViolations: parsedViolations,
           instructions: instructions || 'Fullscreen mode is strictly enforced.',
           isPublished: false,
@@ -1833,6 +1888,104 @@ export class AdminController {
       return res.status(200).json({ success: true, message: `Exam status successfully updated to ${status}`, data: updated });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Department & College Master Data Management
+   */
+  public static async getColleges(req: AuthRequest, res: Response) {
+    try {
+      const colleges = await DepartmentService.getColleges();
+      return res.status(200).json({ success: true, data: colleges });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  public static async getDepartments(req: AuthRequest, res: Response) {
+    try {
+      const { collegeId, activeOnly } = req.query;
+      const departments = await DepartmentService.getDepartments({
+        collegeId: collegeId ? String(collegeId) : undefined,
+        activeOnly: activeOnly === 'true',
+      });
+      return res.status(200).json({ success: true, data: departments });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  public static async createDepartment(req: AuthRequest, res: Response) {
+    try {
+      const { code, name, collegeId, active } = req.body;
+      if (!code || !name) {
+        return res.status(400).json({ success: false, message: 'Department code and name are required' });
+      }
+
+      const department = await DepartmentService.createDepartment({
+        code,
+        name,
+        collegeId,
+        active,
+      });
+
+      await AuditLogger.log({
+        userId: req.user?.id,
+        action: 'CREATE_DEPARTMENT',
+        resource: 'Department',
+        details: `Department "${name}" (${code}) created for college "${collegeId || 'citchennai'}"`,
+        ipAddress: req.ip,
+      });
+
+      return res.status(201).json({ success: true, message: 'Department created successfully', data: department });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  public static async updateDepartment(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const { code, name, collegeId, active } = req.body;
+
+      const department = await DepartmentService.updateDepartment(id, {
+        code,
+        name,
+        collegeId,
+        active,
+      });
+
+      await AuditLogger.log({
+        userId: req.user?.id,
+        action: 'UPDATE_DEPARTMENT',
+        resource: 'Department',
+        details: `Department "${id}" updated`,
+        ipAddress: req.ip,
+      });
+
+      return res.status(200).json({ success: true, message: 'Department updated successfully', data: department });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  public static async deleteDepartment(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      await DepartmentService.deleteDepartment(id);
+
+      await AuditLogger.log({
+        userId: req.user?.id,
+        action: 'DELETE_DEPARTMENT',
+        resource: 'Department',
+        details: `Department "${id}" deleted`,
+        ipAddress: req.ip,
+      });
+
+      return res.status(200).json({ success: true, message: 'Department deleted successfully' });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
     }
   }
 }

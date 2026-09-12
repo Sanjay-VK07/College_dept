@@ -20,6 +20,13 @@ router.put('/students/:id', requireRoles(Role.ADMIN), AdminController.updateStud
 router.delete('/students/:id', requireRoles(Role.ADMIN), AdminController.deleteStudent);
 router.post('/students/:id/reset-attempts', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.resetStudentAttempts);
 
+// Department Master Data Management
+router.get('/departments', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getDepartments);
+router.get('/colleges', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getColleges);
+router.post('/departments', requireRoles(Role.ADMIN), AdminController.createDepartment);
+router.put('/departments/:id', requireRoles(Role.ADMIN), AdminController.updateDepartment);
+router.delete('/departments/:id', requireRoles(Role.ADMIN), AdminController.deleteDepartment);
+
 // Faculty Management
 router.get('/faculty', requireRoles(Role.ADMIN), AdminController.getFaculty);
 router.post('/faculty', requireRoles(Role.ADMIN), AdminController.createFaculty);
