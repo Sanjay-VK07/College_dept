@@ -35,25 +35,28 @@ export const QuestionBankImportPanel: React.FC<QuestionBankImportPanelProps> = (
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <section className="erp-card space-y-3">
-        <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-          Chapter 1 Question Bank (.JSONL)
-        </h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+            Dataset Import (JSONL / ZIP)
+          </h3>
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+            Recommended
+          </span>
+        </div>
         <p className="text-xs text-slate-500">
-          Normalized bulk import — question ID, text, options, answer, type, difficulty, origin,
-          verification status, and full source traceability (document/page/chapter/section/heading)
-          all preserved.
+          Normalized question datasets with figure resolution. Upload <b>ZIP (JSONL + figures)</b> or direct <b>JSONL</b>. All fields, question types, formulas, and diagrams are preserved.
         </p>
         <JSONLImportPanel onImportComplete={onImportComplete} />
       </section>
 
       <section className="erp-card space-y-3">
         <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-          Excel / CSV / PDF
+          Spreadsheet & PDF Import (CSV / Excel / PDF)
         </h3>
         <p className="text-xs text-slate-500">
-          Structured spreadsheet import, or a real PDF extraction pipeline (page-batched, OCR/vision
-          for scanned pages, answer-key mapping) that runs as a background job.
+          Structured spreadsheet upload (<b>.xlsx, .xls, .csv</b>), or background PDF extraction pipeline with OCR/vision for legacy source documents.
         </p>
+
 
         <div className="space-y-2">
           <label className="block text-xs font-semibold text-slate-700">

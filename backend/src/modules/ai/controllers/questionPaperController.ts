@@ -200,37 +200,40 @@ export class QuestionPaperController {
   }
 
   /**
-   * Resolves the raw JSONL content for these endpoints. A .zip is transparently unpacked here:
-   * every .jsonl/.txt entry inside it is concatenated (newline-joined — safe, since JSONL is
-   * just one JSON object per line and record order/content don't depend on file boundaries)
-   * into a single combined stream, so a zip of several chapter files imports exactly like one
-   * larger JSONL file under one shared target subject.
+   * Resolves the raw JSONL content and associated figure assets for import endpoints.
+   * For ZIP packages: extracts all JSONL files and maps all figure assets.
+   * For direct JSONL uploads: returns buffer and empty figure map.
    */
-  private static resolveJSONLContent(req: AuthRequest): { fileContent: Buffer | string; fileName: string } {
+  private static resolveQuestionBankUpload(req: AuthRequest): {
+    fileContent: Buffer | string;
+    fileName: string;
+    figureEntries?: Map<string, any>;
+  } {
     if (req.file) {
-      const { isZipFile, extractZipEntries } = require('../../../services/zipExtractionService');
+      const { isZipFile, extractQuestionBankZipPackage, extractZipEntries } = require('../../../services/zipExtractionService');
       if (isZipFile(req.file.originalname, req.file.mimetype)) {
-        const entries = extractZipEntries(req.file.buffer, ['.jsonl', '.txt']);
-        if (entries.length === 0) {
-          throw new Error('No .jsonl or .txt files found inside the uploaded zip.');
-        }
-        const combined = entries.map((e: { buffer: Buffer }) => e.buffer.toString('utf-8')).join('\n');
-        return { fileContent: combined, fileName: `${req.file.originalname} (${entries.length} files combined)` };
+        const pkg = extractQuestionBankZipPackage(req.file.buffer);
+        const combined = pkg.jsonlEntries.map((e: { text: string }) => e.text).join('\n');
+        return {
+          fileContent: combined,
+          fileName: req.file.originalname,
+          figureEntries: pkg.figureEntries,
+        };
       }
       return { fileContent: req.file.buffer, fileName: req.file.originalname };
     }
     if (req.body.fileContent) {
-      return { fileContent: req.body.fileContent, fileName: 'Ch1_questions.jsonl' };
+      return { fileContent: req.body.fileContent, fileName: 'Chapter_01.jsonl' };
     }
-    throw new Error('JSONL file upload or fileContent string is required.');
+    throw new Error('Question bank upload (.jsonl or .zip) or fileContent is required.');
   }
 
   public static async previewJSONLImport(req: AuthRequest, res: Response) {
     try {
-      const { fileContent, fileName } = QuestionPaperController.resolveJSONLContent(req);
+      const { fileContent, fileName, figureEntries } = QuestionPaperController.resolveQuestionBankUpload(req);
 
       const { JSONLImportService } = require('../services/jsonlImportService');
-      const preview = JSONLImportService.parseAndValidateJSONL(fileContent, fileName);
+      const preview = JSONLImportService.parseAndValidateJSONL(fileContent, fileName, figureEntries);
       return res.status(200).json({ success: true, data: preview });
     } catch (error: any) {
       return res.status(400).json({ success: false, message: error.message });
@@ -243,16 +246,22 @@ export class QuestionPaperController {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
 
-      const { fileContent, fileName } = QuestionPaperController.resolveJSONLContent(req);
+      const { fileContent, fileName, figureEntries } = QuestionPaperController.resolveQuestionBankUpload(req);
 
       const { JSONLImportService } = require('../services/jsonlImportService');
-      const result = await JSONLImportService.importJSONLToDatabase(fileContent, req.user.id, fileName, {
-        subjectId: req.body.subjectId || undefined,
-        subjectName: req.body.subjectName || undefined,
-        subjectCode: req.body.subjectCode || undefined,
-        department: req.body.department || undefined,
-        moduleName: req.body.moduleName || undefined,
-      });
+      const result = await JSONLImportService.importJSONLToDatabase(
+        fileContent,
+        req.user.id,
+        fileName,
+        {
+          subjectId: req.body.subjectId || undefined,
+          subjectName: req.body.subjectName || undefined,
+          subjectCode: req.body.subjectCode || undefined,
+          department: req.body.department || undefined,
+          moduleName: req.body.moduleName || undefined,
+        },
+        figureEntries
+      );
       return res.status(200).json({ success: true, data: result });
     } catch (error: any) {
       return res.status(400).json({ success: false, message: error.message });

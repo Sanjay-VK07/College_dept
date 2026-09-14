@@ -1,5 +1,25 @@
+import fs from 'fs';
+import path from 'path';
 import { prisma } from '../../../config/prisma';
 import { VerificationStatus, QuestionOrigin, QuestionType, Difficulty } from '@prisma/client';
+import { ExtractedFigureAsset } from '../../../services/zipExtractionService';
+
+export interface JSONLFigureRef {
+  figureId?: string;
+  type?: string;
+  importance?: string;
+  imagePath?: string;
+  path?: string;
+  url?: string;
+  sourcePage?: number;
+  sourceQuestionId?: string;
+  extractionMethod?: string;
+  description?: string;
+  cropCoordinates?: any;
+  verificationStatus?: string;
+  needsReview?: boolean;
+  reviewReason?: string;
+}
 
 export interface JSONLRecord {
   questionId: string;
@@ -15,15 +35,28 @@ export interface JSONLRecord {
   answerKeyPage?: number;
   containsFigure?: boolean;
   hasFigure?: boolean;
+  figureCount?: number;
+  figure?: string | JSONLFigureRef;
+  figures?: Array<string | JSONLFigureRef>;
+  imageUrl?: string;
+  image?: string | JSONLFigureRef;
   textExtractionUsed?: boolean;
+  textExtractionStatus?: string;
   visualExtractionUsed?: boolean;
+  visualExtractionStatus?: string;
   visualExtractionReason?: string;
   visualExtractionPage?: number;
   verificationStatus?: string;
   reason?: string;
+  reviewReason?: string;
+  needsReview?: boolean;
+  extractionNotes?: string;
   sourceChapter?: string | number;
   sourceSection?: string;
   sourceHeading?: string;
+  difficulty?: string;
+  marks?: number;
+  negativeMarks?: number;
 }
 
 export interface TopicBreakdownItem {
@@ -35,9 +68,18 @@ export interface TopicBreakdownItem {
   rejected: number;
 }
 
+export interface MissingFigureRecord {
+  questionId: string;
+  reference: string;
+}
+
 export interface ImportPreviewResult {
   fileName: string;
   totalRecords: number;
+  validCount: number;
+  questionsWithFigures: number;
+  missingFiguresCount: number;
+  missingFigures: MissingFigureRecord[];
   topicsCount: number;
   verifiedCount: number;
   unansweredInSourceCount: number;
@@ -52,9 +94,79 @@ export interface ImportPreviewResult {
 
 export class JSONLImportService {
   /**
-   * Parses and validates a JSONL file without inserting into the database.
+   * Extracts any referenced figure file paths/names from a JSONL record.
    */
-  public static parseAndValidateJSONL(fileContent: string | Buffer, fileName: string = 'Ch1_questions.jsonl'): ImportPreviewResult {
+  public static extractReferencedFigurePaths(rec: JSONLRecord): string[] {
+    const paths: string[] = [];
+
+    if (Array.isArray(rec.figures)) {
+      for (const f of rec.figures) {
+        if (typeof f === 'string' && f.trim()) {
+          paths.push(f.trim());
+        } else if (f && typeof f === 'object') {
+          const p = f.imagePath || f.path || f.url || (f as any).imageUrl || (f as any).file || (f as any).fileName;
+          if (typeof p === 'string' && p.trim()) {
+            paths.push(p.trim());
+          }
+        }
+      }
+    }
+
+    if (rec.figure) {
+      if (typeof rec.figure === 'string' && rec.figure.trim()) {
+        paths.push(rec.figure.trim());
+      } else if (typeof rec.figure === 'object') {
+        const p = (rec.figure as JSONLFigureRef).imagePath || (rec.figure as JSONLFigureRef).path || (rec.figure as JSONLFigureRef).url;
+        if (typeof p === 'string' && p.trim()) {
+          paths.push(p.trim());
+        }
+      }
+    }
+
+    if (typeof rec.imageUrl === 'string' && rec.imageUrl.trim() && !rec.imageUrl.startsWith('http') && !rec.imageUrl.startsWith('/uploads/')) {
+      paths.push(rec.imageUrl.trim());
+    }
+
+    return Array.from(new Set(paths));
+  }
+
+  /**
+   * Finds a figure asset in the provided figure entries map using exact path,
+   * lowercase path, basename, or stripped prefix.
+   */
+  public static resolveFigureAsset(refPath: string, figureEntries?: Map<string, ExtractedFigureAsset>): ExtractedFigureAsset | null {
+    if (!figureEntries || figureEntries.size === 0 || !refPath) return null;
+
+    let cleanRef = refPath.replace(/\\/g, '/').trim();
+    cleanRef = cleanRef.replace(/^\.\//, '').replace(/^\//, '');
+
+    if (cleanRef.includes('..')) return null;
+
+    const baseName = path.posix.basename(cleanRef);
+    const withoutFigures = cleanRef.startsWith('figures/') ? cleanRef.slice('figures/'.length) : cleanRef;
+
+    return (
+      figureEntries.get(cleanRef) ||
+      figureEntries.get(cleanRef.toLowerCase()) ||
+      figureEntries.get(baseName) ||
+      figureEntries.get(baseName.toLowerCase()) ||
+      figureEntries.get(`figures/${baseName}`) ||
+      figureEntries.get(`figures/${baseName}`.toLowerCase()) ||
+      figureEntries.get(withoutFigures) ||
+      figureEntries.get(withoutFigures.toLowerCase()) ||
+      null
+    );
+  }
+
+  /**
+   * Parses and validates a JSONL file without committing into the database.
+   * Cross-references figures against `availableFigures` if provided.
+   */
+  public static parseAndValidateJSONL(
+    fileContent: string | Buffer,
+    fileName: string = 'Ch1_questions.jsonl',
+    availableFigures?: Map<string, ExtractedFigureAsset>
+  ): ImportPreviewResult {
     const text = typeof fileContent === 'string' ? fileContent : fileContent.toString('utf-8');
     const lines = text.split('\n');
 
@@ -62,6 +174,9 @@ export class JSONLImportService {
     const invalidRecords: Array<{ line: number; error: string; raw: string }> = [];
     const seenIds = new Set<string>();
     let duplicateCount = 0;
+
+    const missingFigures: MissingFigureRecord[] = [];
+    let questionsWithFigures = 0;
 
     let lineIndex = 0;
     for (const rawLine of lines) {
@@ -89,6 +204,27 @@ export class JSONLImportService {
         }
 
         seenIds.add(obj.questionId);
+
+        // Check figure references
+        const refPaths = this.extractReferencedFigurePaths(obj);
+        const hasFigureFlag = Boolean(obj.containsFigure || obj.hasFigure || (obj.figureCount && obj.figureCount > 0) || refPaths.length > 0);
+
+        if (hasFigureFlag || refPaths.length > 0) {
+          questionsWithFigures++;
+        }
+
+        if (availableFigures && refPaths.length > 0) {
+          for (const ref of refPaths) {
+            const resolved = this.resolveFigureAsset(ref, availableFigures);
+            if (!resolved) {
+              missingFigures.push({
+                questionId: obj.questionId,
+                reference: ref,
+              });
+            }
+          }
+        }
+
         validRecords.push(obj);
       } catch (err: any) {
         invalidRecords.push({ line: lineIndex, error: `JSON Parse error: ${err.message}`, raw: trimmed });
@@ -135,6 +271,10 @@ export class JSONLImportService {
     return {
       fileName,
       totalRecords: validRecords.length + invalidRecords.length,
+      validCount: validRecords.length,
+      questionsWithFigures,
+      missingFiguresCount: missingFigures.length,
+      missingFigures,
       topicsCount: topicBreakdown.length,
       verifiedCount,
       unansweredInSourceCount,
@@ -149,20 +289,58 @@ export class JSONLImportService {
   }
 
   /**
+   * Persists figure buffer to disk under `public/uploads/diagrams/` and returns the stable URL.
+   */
+  public static async saveFigureAsset(asset: ExtractedFigureAsset): Promise<{ url: string; newlyCreated: boolean }> {
+    const targetDir = path.resolve(process.cwd(), 'public', 'uploads', 'diagrams');
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    // Preserve original sanitized filename (e.g. embedded_da8e61b8f9fc.png)
+    const safeBaseName = path.posix.basename(asset.fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filePath = path.join(targetDir, safeBaseName);
+    let newlyCreated = false;
+
+    // Save file if not already existing with valid content
+    if (!fs.existsSync(filePath)) {
+      await fs.promises.writeFile(filePath, asset.buffer);
+      newlyCreated = true;
+    } else {
+      const stats = await fs.promises.stat(filePath);
+      if (stats.size === 0 && asset.buffer.length > 0) {
+        await fs.promises.writeFile(filePath, asset.buffer);
+        newlyCreated = true;
+      }
+    }
+
+    // Also mirror to uploads/diagrams if separate directory exists
+    const fallbackDir = path.resolve(process.cwd(), 'uploads', 'diagrams');
+    if (fs.existsSync(path.resolve(process.cwd(), 'uploads'))) {
+      if (!fs.existsSync(fallbackDir)) {
+        fs.mkdirSync(fallbackDir, { recursive: true });
+      }
+      const fallbackPath = path.join(fallbackDir, safeBaseName);
+      if (!fs.existsSync(fallbackPath)) {
+        await fs.promises.writeFile(fallbackPath, asset.buffer).catch(() => {});
+      }
+    }
+
+    return { url: `/uploads/diagrams/${safeBaseName}`, newlyCreated };
+  }
+
+  /**
    * Imports validated JSONL records transactionally into PostgreSQL.
-   *
-   * The target subject/module is caller-supplied, not inferred from the file content — a JSONL
-   * file has no reliable subject field, and earlier this always hardcoded "Computer Organization
-   * & Architecture" / "Chapter 1" regardless of what was actually in the file, silently dumping
-   * unrelated content (e.g. a Data Structures question set) into the wrong subject.
+   * Saves and maps figure assets when present.
    */
   public static async importJSONLToDatabase(
     fileContent: string | Buffer,
     userId: string,
     fileName: string = 'Ch1_questions.jsonl',
-    target: { subjectId?: string; subjectName?: string; subjectCode?: string; department?: string; moduleName?: string } = {}
+    target: { subjectId?: string; subjectName?: string; subjectCode?: string; department?: string; moduleName?: string } = {},
+    figureEntries?: Map<string, ExtractedFigureAsset>
   ) {
-    const preview = this.parseAndValidateJSONL(fileContent, fileName);
+    const preview = this.parseAndValidateJSONL(fileContent, fileName, figureEntries);
 
     if (preview.validRecords.length === 0) {
       throw new Error('No valid records found in JSONL file.');
@@ -248,23 +426,79 @@ export class JSONLImportService {
       topicHeadingToSubtopicMap.set(topicName, subtopic.id);
     }
 
-    // 3. Pre-fetch existing customIds to detect duplicates in 1 single query
+    // 3. Pre-fetch existing questions by customId to detect duplicates and inspect figure status
     const validIds = preview.validRecords.map((r) => r.questionId);
     const existingRows = await prisma.question.findMany({
       where: { customId: { in: validIds } },
-      select: { customId: true },
+      select: { id: true, customId: true, imageUrl: true, containsFigure: true, visualMetadata: true },
     });
-    const existingSet = new Set(existingRows.map((q) => q.customId).filter(Boolean));
-    const existingDuplicateCount = existingSet.size;
+    const existingMap = new Map<string, { id: string; customId: string | null; imageUrl: string | null; containsFigure: boolean; visualMetadata: any }>();
+    for (const row of existingRows) {
+      if (row.customId) {
+        existingMap.set(row.customId, row);
+      }
+    }
+    const existingDuplicateCount = existingMap.size;
 
-    // 4. Prepare data payload in memory
+    // 4. Save figure assets and prepare question data payload
+    let figuresStoredCount = 0;
+    let figuresReusedCount = 0;
+    let figuresRepairedCount = 0;
+    const missingFiguresMap = new Map<string, MissingFigureRecord>();
     const questionsToCreate: any[] = [];
 
     for (const rec of preview.validRecords) {
-      if (existingSet.has(rec.questionId)) {
+      const existingQ = existingMap.get(rec.questionId);
+      const refPaths = this.extractReferencedFigurePaths(rec);
+      const containsFigureFlag = Boolean(rec.containsFigure || rec.hasFigure || (rec.figureCount && rec.figureCount > 0) || refPaths.length > 0);
+
+      // --- DUPLICATE QUESTION HANDLING (Idempotent for Question, Independent for Figures) ---
+      if (existingQ) {
+        if (refPaths.length > 0 && figureEntries) {
+          for (const ref of refPaths) {
+            const asset = this.resolveFigureAsset(ref, figureEntries);
+            if (asset) {
+              const { url, newlyCreated } = await this.saveFigureAsset(asset);
+              if (newlyCreated) {
+                figuresStoredCount++;
+              } else {
+                figuresReusedCount++;
+              }
+
+              // Repair existing question in DB if its imageUrl was missing or not pointing to the valid stored diagram
+              if (!existingQ.imageUrl || existingQ.imageUrl !== url) {
+                await prisma.question.update({
+                  where: { id: existingQ.id },
+                  data: {
+                    imageUrl: url,
+                    containsFigure: true,
+                  },
+                });
+                existingQ.imageUrl = url;
+                figuresRepairedCount++;
+              }
+            } else {
+              // Asset not resolved from ZIP
+              if (existingQ.imageUrl) {
+                const p1 = path.resolve(process.cwd(), 'public', existingQ.imageUrl.replace(/^\//, ''));
+                const p2 = path.resolve(process.cwd(), existingQ.imageUrl.replace(/^\//, ''));
+                if (fs.existsSync(p1) || fs.existsSync(p2)) {
+                  figuresReusedCount++;
+                } else {
+                  missingFiguresMap.set(`${rec.questionId}:${ref}`, { questionId: rec.questionId, reference: ref });
+                }
+              } else {
+                missingFiguresMap.set(`${rec.questionId}:${ref}`, { questionId: rec.questionId, reference: ref });
+              }
+            }
+          }
+        } else if (existingQ.imageUrl) {
+          figuresReusedCount++;
+        }
         continue;
       }
 
+      // --- NEW QUESTION HANDLING ---
       const subtopicId =
         topicHeadingToSubtopicMap.get(rec.sourceHeading || 'General Topic') ||
         Array.from(topicHeadingToSubtopicMap.values())[0];
@@ -286,17 +520,43 @@ export class JSONLImportService {
       else if (rawVStatus === 'EXTRACTED') vStatus = VerificationStatus.EXTRACTED;
       else if (rawVStatus === 'VALIDATING') vStatus = VerificationStatus.VALIDATING;
 
-      const visualMetadata = {
+      // Resolve and save figures for new questions
+      let imageUrl: string | null = null;
+      if (figureEntries && refPaths.length > 0) {
+        for (const ref of refPaths) {
+          const asset = this.resolveFigureAsset(ref, figureEntries);
+          if (asset) {
+            const { url, newlyCreated } = await this.saveFigureAsset(asset);
+            if (!imageUrl) {
+              imageUrl = url;
+            }
+            if (newlyCreated) {
+              figuresStoredCount++;
+            } else {
+              figuresReusedCount++;
+            }
+          } else {
+            missingFiguresMap.set(`${rec.questionId}:${ref}`, { questionId: rec.questionId, reference: ref });
+          }
+        }
+      } else if (rec.imageUrl && (rec.imageUrl.startsWith('/uploads/') || rec.imageUrl.startsWith('http'))) {
+        imageUrl = rec.imageUrl;
+      }
+
+      const visualMetadata: any = {
         visualExtractionReason: rec.visualExtractionReason || null,
         visualExtractionPage: rec.visualExtractionPage || null,
+        visualExtractionStatus: rec.visualExtractionStatus || null,
+        textExtractionStatus: rec.textExtractionStatus || null,
         answerKeyPage: rec.answerKeyPage || null,
         originalQuestionId: rec.originalQuestionId || rec.questionId,
-        reason: rec.reason || null,
+        reason: rec.reason || rec.reviewReason || null,
+        extractionNotes: rec.extractionNotes || null,
+        figures: rec.figures || (rec.figure ? [rec.figure] : []),
+        resolvedImageUrl: imageUrl,
       };
 
       const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer, needsReview } = this.normalizeOptionsAndAnswer(rec, qType);
-      // A NAT answer that couldn't be fully/unambiguously parsed must never stay tagged VERIFIED —
-      // that status is what lets a question straight into a real exam.
       const effectiveVStatus = needsReview && vStatus === VerificationStatus.VERIFIED ? VerificationStatus.NEEDS_REVIEW : vStatus;
 
       questionsToCreate.push({
@@ -309,20 +569,21 @@ export class JSONLImportService {
         options: normalizedOptions,
         correctAnswer: normalizedCorrectAnswer,
         rawAnswer: rec.rawAnswer || null,
-        explanation: rec.reason || null,
+        explanation: rec.reason || rec.reviewReason || rec.extractionNotes || null,
+        imageUrl,
         subtopicId,
         createdById: userId,
         generatedByAI: false,
         origin: QuestionOrigin.SOURCE,
         verificationStatus: effectiveVStatus,
         sourcePage: rec.sourcePage || null,
-        sourceChapter: rec.sourceChapter ? String(rec.sourceChapter) : null,
+        sourceChapter: rec.sourceChapter ? String(rec.sourceChapter) : (rec.chapter ? String(rec.chapter) : null),
         sourceSection: rec.sourceSection || null,
         sourceHeading: rec.sourceHeading || null,
-        containsFigure: Boolean(rec.containsFigure || rec.hasFigure),
+        containsFigure: containsFigureFlag,
         textExtractionUsed: rec.textExtractionUsed ?? true,
         visualExtractionUsed: rec.visualExtractionUsed ?? false,
-        visualMetadata: visualMetadata as any,
+        visualMetadata,
       });
     }
 
@@ -341,6 +602,8 @@ export class JSONLImportService {
       );
     }
 
+    const missingFiguresList = Array.from(missingFiguresMap.values());
+
     return {
       fileName,
       totalProcessed: preview.totalRecords,
@@ -348,6 +611,12 @@ export class JSONLImportService {
       skippedCount: preview.invalidCount + existingDuplicateCount,
       duplicateCount: preview.duplicateCount + existingDuplicateCount,
       invalidCount: preview.invalidCount,
+      questionsWithFiguresCount: preview.questionsWithFigures,
+      missingFiguresCount: missingFiguresList.length,
+      missingFigures: missingFiguresList,
+      figuresStoredCount,
+      figuresReusedCount,
+      figuresRepairedCount,
       verifiedCount: preview.verifiedCount,
       unansweredCount: preview.unansweredInSourceCount,
       needsReviewCount: preview.needsReviewCount,
@@ -356,29 +625,6 @@ export class JSONLImportService {
     };
   }
 
-  /**
-   * JSONL source files store options as a letter-keyed object ({"A": "...", "B": "..."}) and
-   * correctAnswer as the matching letter(s) (["C"]) — a human/source-readable format, but not
-   * what the rest of the app understands. Every other write path (exam-taking UI, GateScoringService,
-   * excelImportService) uses an options ARRAY of {text} with correctAnswer as 0-based INDICES into
-   * that array. Importing the raw JSONL shape verbatim would silently corrupt both rendering
-   * (currentQ.options.map crashes on a plain object) and scoring (comparing a letter to a numeric
-   * index never matches) — this converts once, at import time, so every downstream consumer sees
-   * the one real shape.
-   */
-  /**
-   * Parses this dataset's NAT answer-key format, which is GATE's own "min : max" tolerance-range
-   * notation, not a plain number — a plain `Number(raw)` on e.g. "17 : 17" or "1.4 : 1.5" is
-   * always NaN, which previously fell through to an empty `{}` correctAnswer for every single
-   * NAT question in this format (confirmed live: all 62 NAT questions in the Chapter 1 dataset
-   * use this notation, so every one of them silently became unscoreable — always graded wrong
-   * regardless of what the student entered). A degenerate range (min === max) is stored as an
-   * exact `{value}` rather than `{min,max}` to match how the rest of the codebase represents an
-   * exact NAT answer. The rare compound case (semicolon-separated alternative ranges, e.g.
-   * "13.3:13.3;13.5:13.5" — accept either 13.3 or 13.5) isn't expressible in the current
-   * {value}|{min,max} scoring model, so only the first alternative is kept and the question is
-   * flagged for manual review instead of silently being marked gradable when it only partially is.
-   */
   private static parseNATAnswer(raw: string): { answer: any; needsReview: boolean } {
     const trimmed = (raw || '').trim();
     const isMultiRange = trimmed.includes(';');
@@ -397,7 +643,7 @@ export class JSONLImportService {
       return { answer: { value: plain }, needsReview: isMultiRange };
     }
 
-    // Genuinely unparseable — no silent fallback to a fabricated value; flag for a human.
+    // Genuinely unparseable — flag for review
     return { answer: {}, needsReview: true };
   }
 
@@ -430,10 +676,23 @@ export class JSONLImportService {
 
       if (Array.isArray(rec.options)) {
         const optionsArray = rec.options.map((o: any) => (typeof o === 'string' ? { text: o } : o));
-        const correctAnswer = Array.isArray(rec.correctAnswer)
-          ? rec.correctAnswer.map(Number).filter((n: number) => Number.isFinite(n))
-          : [];
-        return { options: optionsArray, correctAnswer };
+        
+        let correctIndices: number[] = [];
+        if (Array.isArray(rec.correctAnswer)) {
+          correctIndices = rec.correctAnswer.map((v: any) => {
+            if (typeof v === 'string' && /^[A-Z]$/i.test(v.trim())) {
+              return v.trim().toUpperCase().charCodeAt(0) - 65;
+            }
+            const n = Number(v);
+            return Number.isFinite(n) ? n : null;
+          }).filter((n: any): n is number => n !== null);
+        } else if (typeof rec.correctAnswer === 'string' && /^[A-Z]$/i.test(rec.correctAnswer.trim())) {
+          correctIndices = [rec.correctAnswer.trim().toUpperCase().charCodeAt(0) - 65];
+        } else if (typeof rec.correctAnswer === 'number' && Number.isFinite(rec.correctAnswer)) {
+          correctIndices = [rec.correctAnswer];
+        }
+
+        return { options: optionsArray, correctAnswer: correctIndices };
       }
 
       return { options: [], correctAnswer: [] };
@@ -445,7 +704,7 @@ export class JSONLImportService {
       return { options: [], correctAnswer: parsed.answer, needsReview: parsed.needsReview };
     }
 
-    // FREE_RESPONSE / UNKNOWN have no auto-gradable structured answer.
     return { options: [], correctAnswer: [] };
   }
 }
+

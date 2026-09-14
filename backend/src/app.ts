@@ -49,6 +49,12 @@ app.use((req, res, next) => {
   next();
 });
 
+import path from 'path';
+
+// Serve uploaded diagrams, figures and assets statically
+app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
 // Health & Readiness Probes
 app.use('/api/health', healthRoutes);
 

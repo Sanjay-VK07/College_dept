@@ -2600,7 +2600,16 @@ export default function AdminDashboard() {
                             />
                           </td>
                           <td className="font-mono font-bold text-[#1E40AF]">{q.customId || q.id.slice(0, 8)}</td>
-                          <td className="font-semibold text-slate-900 max-w-xs truncate">{q.text}</td>
+                          <td className="font-semibold text-slate-900 max-w-xs truncate">
+                            <div className="flex items-center gap-1.5">
+                              {(q.imageUrl || q.containsFigure) && (
+                                <span title="Contains Figure / Diagram" className="text-xs px-1 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 shrink-0 font-sans font-normal">
+                                  FIG
+                                </span>
+                              )}
+                              <span className="truncate">{q.text}</span>
+                            </div>
+                          </td>
                           <td className="text-xs text-slate-600 max-w-[10rem] truncate">
                             {q.subtopic?.topic?.module?.subject?.name || '—'}
                             {q.subtopic?.topic?.name ? <span className="block text-[10px] text-slate-400">{q.subtopic.topic.name}</span> : null}
@@ -3590,6 +3599,16 @@ export default function AdminDashboard() {
             </div>
 
             <p className="text-sm font-semibold text-slate-900 leading-relaxed whitespace-pre-wrap">{qbDetailQuestion.text}</p>
+
+            {qbDetailQuestion.imageUrl && (
+              <div className="flex justify-center p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                <img
+                  src={qbDetailQuestion.imageUrl}
+                  alt="Question Diagram"
+                  className="max-h-64 object-contain rounded"
+                />
+              </div>
+            )}
 
             {Array.isArray(qbDetailQuestion.options) && qbDetailQuestion.options.length > 0 && (
               <div className="space-y-1.5">
