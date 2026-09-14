@@ -28,7 +28,11 @@ import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 export default function InvigilatorDashboard() {
   const router = useRouter();
   const params = useParams();
-  const testId = (params.testId as string) || 'test-demo-123';
+  // Optional catch-all route ([[...testId]]) — /faculty/invigilator with no segment is this
+  // page's normal landing/dashboard state, so testId is legitimately absent there, not a bug
+  // to be papered over with a fake ID. Only real, present segments should ever populate it.
+  const rawTestId = params.testId;
+  const testId = Array.isArray(rawTestId) ? rawTestId[0] : (rawTestId as string | undefined);
 
   const [students, setStudents] = useState<LiveStudent[]>([]);
   const [testTitle, setTestTitle] = useState('CS8601 Database Management Systems - Mid-Semester CBT Assessment');
@@ -137,6 +141,10 @@ export default function InvigilatorDashboard() {
   };
 
   const handleExportReport = (format: string) => {
+    if (!testId) {
+      alert('Select an examination first to export its report.');
+      return;
+    }
     const token = localStorage.getItem('gsmas_token');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
     window.open(`${apiUrl}/admin/export-report/${testId}?format=${format}&token=${token}`, '_blank');
@@ -658,7 +666,7 @@ export default function InvigilatorDashboard() {
                 disabled={isSubmitting}
                 className="erp-btn-primary w-full py-2.5 text-xs font-semibold mt-2"
               >
-                {isSubmitting ? 'Scheduling Examination...' : 'Schedule & Publish Examination Paper'}
+                {isSubmitting ? 'Creating Draft...' : 'Create Draft Examination'}
               </button>
             </form>
           </div>

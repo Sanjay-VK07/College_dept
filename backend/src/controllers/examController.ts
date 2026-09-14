@@ -6,6 +6,24 @@ import { AuditLogger } from '../services/auditLogger';
 
 export class ExamController {
   /**
+   * Whether a student is currently allowed to see their own result (score/accuracy/correctness)
+   * for an exam, per that exam's configured resultVisibility. This gates the student-facing
+   * surfaces only — Faculty/Admin review is never subject to this check.
+   */
+  private static canStudentSeeResult(test: { resultVisibility: string; endTime: Date | string; resultsPublished: boolean }): boolean {
+    switch (test.resultVisibility) {
+      case 'IMMEDIATE':
+        return true;
+      case 'AFTER_EXAM_ENDS':
+        return new Date() >= new Date(test.endTime);
+      case 'MANUAL_PUBLISH':
+        return test.resultsPublished;
+      default:
+        return true;
+    }
+  }
+
+  /**
    * Get student's assigned tests (Upcoming, Active, Completed)
    */
   public static async getStudentTests(req: AuthRequest, res: Response) {
@@ -74,12 +92,32 @@ export class ExamController {
         orderBy: { test: { startTime: 'desc' } },
       });
 
-      // Attach correct/wrong counts and drop the raw response rows from the payload
-      const assignmentsWithCounts = assignments.map(({ responses, ...assignment }) => ({
-        ...assignment,
-        correctCount: responses.filter((r) => r.isCorrect).length,
-        wrongCount: responses.filter((r) => !r.isCorrect).length,
-      }));
+      // Attach correct/wrong counts and drop the raw response rows from the payload. A
+      // finished attempt's outcome (score/accuracy/correct-wrong counts) is only included once
+      // that exam's resultVisibility condition is actually met — the assignment/status itself
+      // ("you submitted") is never hidden, only the mark.
+      const assignmentsWithCounts = assignments.map(({ responses, ...assignment }) => {
+        const finished = assignment.status === 'COMPLETED' || assignment.status === 'AUTO_SUBMITTED';
+        const resultVisible = !finished || ExamController.canStudentSeeResult(assignment.test);
+
+        if (finished && !resultVisible) {
+          return {
+            ...assignment,
+            score: null,
+            accuracy: null,
+            correctCount: 0,
+            wrongCount: 0,
+            resultVisible: false,
+          };
+        }
+
+        return {
+          ...assignment,
+          correctCount: responses.filter((r) => r.isCorrect).length,
+          wrongCount: responses.filter((r) => !r.isCorrect).length,
+          resultVisible: true,
+        };
+      });
 
       return res.status(200).json({ success: true, data: assignmentsWithCounts });
     } catch (error: any) {
@@ -95,36 +133,9 @@ export class ExamController {
       const { testId } = req.params;
       const studentId = req.user!.id;
 
-      let assignment = await prisma.testAssignment.findFirst({
-        where: { testId, studentId },
-      });
-
-      if (!assignment) {
-        assignment = await prisma.testAssignment.create({
-          data: {
-            testId,
-            studentId,
-            status: 'IN_PROGRESS',
-            startedAt: new Date(),
-          },
-        });
-      } else if (assignment.status === 'SCHEDULED') {
-        assignment = await prisma.testAssignment.update({
-          where: { id: assignment.id },
-          data: { status: 'IN_PROGRESS', startedAt: new Date() },
-        });
-      }
-
-      // Audit Log for Exam Start
-      await AuditLogger.log({
-        userId: studentId,
-        action: 'EXAM_STARTED',
-        resource: 'TestAssignment',
-        details: `Student started examination (Assignment ID: ${assignment.id})`,
-        ipAddress: req.ip,
-      });
-
-      // Fetch test details & question paper
+      // Fetch test details & question paper first — every eligibility check below runs before
+      // any TestAssignment row is touched, so a rejected start never leaves a stray IN_PROGRESS
+      // attempt behind.
       const test = await prisma.mockTest.findUnique({
         where: { id: testId },
         include: {
@@ -156,6 +167,75 @@ export class ExamController {
       if (!test) {
         return res.status(404).json({ success: false, message: 'Mock Test not found' });
       }
+
+      if (!test.isPublished) {
+        return res.status(403).json({ success: false, message: 'This examination has not been published yet.' });
+      }
+
+      const now = new Date();
+      if (now < new Date(test.startTime)) {
+        return res.status(403).json({
+          success: false,
+          message: `This examination has not started yet. It opens at ${new Date(test.startTime).toISOString()}.`,
+        });
+      }
+      if (now > new Date(test.endTime)) {
+        return res.status(403).json({
+          success: false,
+          message: 'This examination window has closed. It can no longer be started or continued.',
+        });
+      }
+
+      // Authorization: the same department-eligibility rule getStudentTests uses to decide which
+      // published exams a student is even shown — enforced again here so a student can't start
+      // an exam outside their eligibility just by knowing/guessing its ID.
+      const student = await prisma.user.findUnique({ where: { id: studentId }, select: { department: true } });
+      const eligibleDepartments = [
+        student?.department,
+        'ALL',
+        'Computer Science & Engineering',
+        'Computer Science and Engineering',
+        'CSE',
+      ];
+      if (!eligibleDepartments.includes(test.targetDepartment)) {
+        return res.status(403).json({ success: false, message: 'You are not eligible to take this examination.' });
+      }
+
+      let assignment = await prisma.testAssignment.findFirst({
+        where: { testId, studentId },
+      });
+
+      if (assignment && (assignment.status === 'COMPLETED' || assignment.status === 'AUTO_SUBMITTED')) {
+        return res.status(403).json({
+          success: false,
+          message: 'You have already submitted this examination. It cannot be started again.',
+        });
+      }
+
+      if (!assignment) {
+        assignment = await prisma.testAssignment.create({
+          data: {
+            testId,
+            studentId,
+            status: 'IN_PROGRESS',
+            startedAt: new Date(),
+          },
+        });
+      } else if (assignment.status === 'SCHEDULED') {
+        assignment = await prisma.testAssignment.update({
+          where: { id: assignment.id },
+          data: { status: 'IN_PROGRESS', startedAt: new Date() },
+        });
+      }
+
+      // Audit Log for Exam Start
+      await AuditLogger.log({
+        userId: studentId,
+        action: 'EXAM_STARTED',
+        resource: 'TestAssignment',
+        details: `Student started examination (Assignment ID: ${assignment.id})`,
+        ipAddress: req.ip,
+      });
 
       // Fetch existing saved responses for session recovery
       const existingResponses = await prisma.questionResponse.findMany({
@@ -283,15 +363,17 @@ export class ExamController {
       // request re-scores and overwrites an already-final result (confirmed live: a second call
       // silently recomputed timeTakenSec and returned 200 again with no error).
       if (assignment.status === 'COMPLETED' || assignment.status === 'AUTO_SUBMITTED') {
+        const alreadyVisible = ExamController.canStudentSeeResult(assignment.test);
         return res.status(200).json({
           success: true,
           message: 'Exam was already submitted.',
           data: {
             assignmentId,
-            score: assignment.score,
+            score: alreadyVisible ? assignment.score : null,
             totalMarks: assignment.totalMarks,
-            accuracy: assignment.accuracy,
+            accuracy: alreadyVisible ? assignment.accuracy : null,
             timeTakenSec: assignment.timeTakenSec,
+            resultVisible: alreadyVisible,
           },
         });
       }
@@ -364,18 +446,24 @@ export class ExamController {
         ipAddress: req.ip,
       });
 
+      // The attempt is fully recorded and evaluated above regardless of visibility — only the
+      // response returned to the student is gated. Per-question results are read through
+      // buildSolutionReview()/getSolutionReview, which applies the same gate.
+      const resultVisible = ExamController.canStudentSeeResult(assignment.test);
+
       return res.status(200).json({
         success: true,
         message: 'Exam submitted successfully',
         data: {
           assignmentId,
-          score: finalScore,
+          score: resultVisible ? finalScore : null,
           totalMarks: assignment.test.totalMarks,
-          accuracy: Number(accuracy.toFixed(1)),
+          accuracy: resultVisible ? Number(accuracy.toFixed(1)) : null,
           timeTakenSec,
-          totalCorrect,
+          totalCorrect: resultVisible ? totalCorrect : undefined,
           totalAttempted,
           resultVisibility: assignment.test.resultVisibility,
+          resultVisible,
         },
       });
     } catch (error: any) {
@@ -386,28 +474,30 @@ export class ExamController {
   /**
    * Solution Review Endpoint
    */
-  public static async getSolutionReview(req: AuthRequest, res: Response) {
-    try {
-      const { assignmentId } = req.params;
-      const studentId = req.user!.id;
-
-      const assignment = await prisma.testAssignment.findUnique({
-        where: { id: assignmentId },
-        include: {
-          test: {
-            include: {
-              testQuestions: {
-                include: {
-                  question: {
-                    include: {
-                      subtopic: {
-                        include: {
-                          topic: {
-                            include: {
-                              module: {
-                                include: {
-                                  subject: true,
-                                },
+  /**
+   * Shared core for both the student-facing solution review and the faculty/admin per-student
+   * drill-down — same frozen-snapshot join, same response mapping. `forceShowAnswerKey` bypasses
+   * the exam's student-facing solutionVisibility gate (faculty/admin should always see the real
+   * answer key; students are still gated by the exam's configured visibility).
+   */
+  private static async buildSolutionReview(assignmentId: string, forceShowAnswerKey: boolean) {
+    const assignment = await prisma.testAssignment.findUnique({
+      where: { id: assignmentId },
+      include: {
+        student: { select: { id: true, name: true, registerNo: true, email: true } },
+        test: {
+          include: {
+            testQuestions: {
+              include: {
+                question: {
+                  include: {
+                    subtopic: {
+                      include: {
+                        topic: {
+                          include: {
+                            module: {
+                              include: {
+                                subject: true,
                               },
                             },
                           },
@@ -415,16 +505,82 @@ export class ExamController {
                       },
                     },
                   },
-                  questionVersion: true,
                 },
-                orderBy: { order: 'asc' },
+                questionVersion: true,
               },
+              orderBy: { order: 'asc' },
             },
           },
-          responses: true,
         },
-      });
+        responses: true,
+      },
+    });
 
+    if (!assignment) {
+      return null;
+    }
+
+    const responseMap = new Map();
+    assignment.responses.forEach(r => responseMap.set(r.questionId, r));
+
+    // Solutions/answer keys are gated by the exam's configured solutionVisibility for students —
+    // faculty/admin always see the real answer key regardless of that setting.
+    const visibility = assignment.test.solutionVisibility;
+    const canSeeAnswerKey =
+      forceShowAnswerKey ||
+      visibility === 'SHOW_ALWAYS' ||
+      visibility === 'SHOW_AFTER_RESULT' ||
+      (visibility === 'SHOW_AFTER_EXAM_ENDS' && new Date() >= new Date(assignment.test.endTime));
+
+    const solutions = assignment.test.testQuestions.map(tq => {
+      const q = tq.question;
+      // Review must agree with what was actually scored — read from the same frozen snapshot
+      // submitExam graded against, not whatever the live Question row says today.
+      const graded = tq.questionVersion || q;
+      const resp = responseMap.get(q.id);
+
+      return {
+        id: q.id,
+        order: tq.order,
+        text: graded.text,
+        type: graded.type,
+        difficulty: graded.difficulty,
+        marks: graded.marks,
+        negativeMarks: graded.negativeMarks,
+        options: graded.options,
+        correctAnswer: canSeeAnswerKey ? graded.correctAnswer : undefined,
+        chosenAnswer: resp ? resp.chosenAnswer : null,
+        isCorrect: resp ? resp.isCorrect : false,
+        marksObtained: resp ? resp.marksObtained : 0,
+        timeSpentSec: resp ? resp.timeSpentSec : 0,
+        explanation: canSeeAnswerKey ? graded.explanation : undefined,
+        reference: q.reference,
+        previousYear: q.previousYear,
+        subject: q.subtopic.topic.module.subject.name,
+        module: q.subtopic.topic.module.name,
+        topic: q.subtopic.topic.name,
+        subtopic: q.subtopic.name,
+      };
+    });
+
+    return {
+      assignment,
+      testTitle: assignment.test.title,
+      student: assignment.student,
+      score: assignment.score,
+      totalMarks: assignment.test.totalMarks,
+      accuracy: assignment.accuracy,
+      timeTakenSec: assignment.timeTakenSec,
+      solutions,
+    };
+  }
+
+  public static async getSolutionReview(req: AuthRequest, res: Response) {
+    try {
+      const { assignmentId } = req.params;
+      const studentId = req.user!.id;
+
+      const assignment = await prisma.testAssignment.findUnique({ where: { id: assignmentId }, include: { test: true } });
       if (!assignment) {
         return res.status(404).json({ success: false, message: 'Assignment not found' });
       }
@@ -443,60 +599,82 @@ export class ExamController {
         });
       }
 
-      const responseMap = new Map();
-      assignment.responses.forEach(r => responseMap.set(r.questionId, r));
+      // resultVisibility gates the student's own review of their result. This is enforced here
+      // (the API), not just hidden in a UI — a direct call to this endpoint is blocked exactly
+      // the same as the rendered page would be. Faculty/Admin never hit this branch; they use
+      // the dedicated staff drill-down (getAssignmentSolutionForStaff), which always shows results.
+      if (req.user!.role === 'STUDENT' && !ExamController.canStudentSeeResult(assignment.test)) {
+        return res.status(403).json({
+          success: false,
+          code: 'RESULT_NOT_YET_VISIBLE',
+          message: 'Results for this examination are not yet available. Please check back once they are released.',
+        });
+      }
 
-      // Solutions/answer keys are gated by the exam's configured solutionVisibility — this
-      // endpoint previously ignored that setting entirely and always exposed the correct answer
-      // and explanation to any student who'd completed the exam, even when faculty had
-      // explicitly set HIDE_SOLUTIONS. Admin/Faculty callers (not this student-only route) are
-      // unaffected — they have their own authorization path.
-      const visibility = assignment.test.solutionVisibility;
-      const canSeeAnswerKey =
-        visibility === 'SHOW_ALWAYS' ||
-        visibility === 'SHOW_AFTER_RESULT' ||
-        (visibility === 'SHOW_AFTER_EXAM_ENDS' && new Date() >= new Date(assignment.test.endTime));
-
-      const solutions = assignment.test.testQuestions.map(tq => {
-        const q = tq.question;
-        // Review must agree with what was actually scored — read from the same frozen snapshot
-        // submitExam graded against, not whatever the live Question row says today.
-        const graded = tq.questionVersion || q;
-        const resp = responseMap.get(q.id);
-
-        return {
-          id: q.id,
-          order: tq.order,
-          text: graded.text,
-          type: graded.type,
-          difficulty: graded.difficulty,
-          marks: graded.marks,
-          negativeMarks: graded.negativeMarks,
-          options: graded.options,
-          correctAnswer: canSeeAnswerKey ? graded.correctAnswer : undefined,
-          chosenAnswer: resp ? resp.chosenAnswer : null,
-          isCorrect: resp ? resp.isCorrect : false,
-          marksObtained: resp ? resp.marksObtained : 0,
-          timeSpentSec: resp ? resp.timeSpentSec : 0,
-          explanation: canSeeAnswerKey ? graded.explanation : undefined,
-          reference: q.reference,
-          previousYear: q.previousYear,
-          subject: q.subtopic.topic.module.subject.name,
-          module: q.subtopic.topic.module.name,
-          topic: q.subtopic.topic.name,
-          subtopic: q.subtopic.name,
-        };
-      });
+      const review = await ExamController.buildSolutionReview(assignmentId, false);
+      if (!review) {
+        return res.status(404).json({ success: false, message: 'Assignment not found' });
+      }
 
       return res.status(200).json({
         success: true,
         data: {
-          testTitle: assignment.test.title,
-          score: assignment.score,
-          totalMarks: assignment.test.totalMarks,
-          accuracy: assignment.accuracy,
-          timeTakenSec: assignment.timeTakenSec,
-          solutions,
+          testTitle: review.testTitle,
+          score: review.score,
+          totalMarks: review.totalMarks,
+          accuracy: review.accuracy,
+          timeTakenSec: review.timeTakenSec,
+          solutions: review.solutions,
+        },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * GET /admin/assignments/:assignmentId/solution — faculty/admin drill-down into one student's
+   * exam attempt. Faculty may only view attempts on exams they created or invigilate; Admin is
+   * unrestricted. Always shows the real answer key regardless of the exam's student-facing
+   * solutionVisibility setting.
+   */
+  public static async getAssignmentSolutionForStaff(req: AuthRequest, res: Response) {
+    try {
+      const { assignmentId } = req.params;
+
+      const assignment = await prisma.testAssignment.findUnique({
+        where: { id: assignmentId },
+        include: { test: { include: { invigilators: { where: { facultyId: req.user!.id } } } } },
+      });
+      if (!assignment) {
+        return res.status(404).json({ success: false, message: 'Assignment not found' });
+      }
+
+      if (req.user!.role === 'FACULTY' && assignment.test.createdById !== req.user!.id && assignment.test.invigilators.length === 0) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You do not own or invigilate this examination.' });
+      }
+
+      if (assignment.status !== 'COMPLETED' && assignment.status !== 'AUTO_SUBMITTED') {
+        return res.status(400).json({ success: false, message: 'This student has not completed the examination yet.' });
+      }
+
+      const review = await ExamController.buildSolutionReview(assignmentId, true);
+      if (!review) {
+        return res.status(404).json({ success: false, message: 'Assignment not found' });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          testTitle: review.testTitle,
+          student: review.student,
+          score: review.score,
+          totalMarks: review.totalMarks,
+          accuracy: review.accuracy,
+          timeTakenSec: review.timeTakenSec,
+          startedAt: review.assignment.startedAt,
+          submittedAt: review.assignment.submittedAt,
+          solutions: review.solutions,
         },
       });
     } catch (error: any) {

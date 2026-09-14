@@ -39,7 +39,7 @@ export class NotificationController {
           isRead: false,
           OR: [
             { role: 'ALL' },
-            { role: userRole },
+            { role: { equals: userRole, mode: 'insensitive' } },
             { userId: userId || undefined },
           ],
         },
@@ -63,11 +63,17 @@ export class NotificationController {
       const userRole = req.user?.role || 'STUDENT';
       const userId = req.user?.id;
 
+      // Case-insensitive role match: every createSystemNotification call site in this codebase
+      // passes a capitalized role string ('Admin', 'Faculty', 'Student'), while req.user.role is
+      // the real Prisma enum value ('ADMIN', 'FACULTY', 'STUDENT') — an exact-string comparison
+      // here meant every role-targeted (non-'ALL') notification has never actually matched
+      // anyone, silently, since this system was built. Fixed at the comparison, not by touching
+      // every call site (lower risk, and future call sites can't reintroduce the same bug).
       const notifications = await prisma.notification.findMany({
         where: {
           OR: [
             { role: 'ALL' },
-            { role: userRole },
+            { role: { equals: userRole, mode: 'insensitive' } },
             { userId: userId || undefined },
           ],
         },
@@ -125,7 +131,7 @@ export class NotificationController {
           isRead: false,
           OR: [
             { role: 'ALL' },
-            { role: userRole },
+            { role: { equals: userRole, mode: 'insensitive' } },
             { userId: userId || undefined },
           ],
         },

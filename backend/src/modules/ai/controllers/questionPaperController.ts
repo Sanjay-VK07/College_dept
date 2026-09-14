@@ -199,19 +199,35 @@ export class QuestionPaperController {
     }
   }
 
+  /**
+   * Resolves the raw JSONL content for these endpoints. A .zip is transparently unpacked here:
+   * every .jsonl/.txt entry inside it is concatenated (newline-joined — safe, since JSONL is
+   * just one JSON object per line and record order/content don't depend on file boundaries)
+   * into a single combined stream, so a zip of several chapter files imports exactly like one
+   * larger JSONL file under one shared target subject.
+   */
+  private static resolveJSONLContent(req: AuthRequest): { fileContent: Buffer | string; fileName: string } {
+    if (req.file) {
+      const { isZipFile, extractZipEntries } = require('../../../services/zipExtractionService');
+      if (isZipFile(req.file.originalname, req.file.mimetype)) {
+        const entries = extractZipEntries(req.file.buffer, ['.jsonl', '.txt']);
+        if (entries.length === 0) {
+          throw new Error('No .jsonl or .txt files found inside the uploaded zip.');
+        }
+        const combined = entries.map((e: { buffer: Buffer }) => e.buffer.toString('utf-8')).join('\n');
+        return { fileContent: combined, fileName: `${req.file.originalname} (${entries.length} files combined)` };
+      }
+      return { fileContent: req.file.buffer, fileName: req.file.originalname };
+    }
+    if (req.body.fileContent) {
+      return { fileContent: req.body.fileContent, fileName: 'Ch1_questions.jsonl' };
+    }
+    throw new Error('JSONL file upload or fileContent string is required.');
+  }
+
   public static async previewJSONLImport(req: AuthRequest, res: Response) {
     try {
-      let fileContent: Buffer | string = '';
-      let fileName = 'Ch1_questions.jsonl';
-
-      if (req.file) {
-        fileContent = req.file.buffer;
-        fileName = req.file.originalname;
-      } else if (req.body.fileContent) {
-        fileContent = req.body.fileContent;
-      } else {
-        return res.status(400).json({ success: false, message: 'JSONL file upload or fileContent string is required.' });
-      }
+      const { fileContent, fileName } = QuestionPaperController.resolveJSONLContent(req);
 
       const { JSONLImportService } = require('../services/jsonlImportService');
       const preview = JSONLImportService.parseAndValidateJSONL(fileContent, fileName);
@@ -227,17 +243,7 @@ export class QuestionPaperController {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
 
-      let fileContent: Buffer | string = '';
-      let fileName = 'Ch1_questions.jsonl';
-
-      if (req.file) {
-        fileContent = req.file.buffer;
-        fileName = req.file.originalname;
-      } else if (req.body.fileContent) {
-        fileContent = req.body.fileContent;
-      } else {
-        return res.status(400).json({ success: false, message: 'JSONL file upload or fileContent string is required.' });
-      }
+      const { fileContent, fileName } = QuestionPaperController.resolveJSONLContent(req);
 
       const { JSONLImportService } = require('../services/jsonlImportService');
       const result = await JSONLImportService.importJSONLToDatabase(fileContent, req.user.id, fileName, {

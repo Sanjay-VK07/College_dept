@@ -1,5 +1,5 @@
 import { prisma } from '../../../config/prisma';
-import { Role, QuestionType, Difficulty, AIExamDraftStatus } from '@prisma/client';
+import { Role, QuestionType, Difficulty, AIExamDraftStatus, VerificationStatus } from '@prisma/client';
 import { AssembleExamDTO, ExamAssemblyResult } from '../types/solutionAndExamTypes';
 import { ExamValidationService } from './examValidationService';
 import { QuestionVersionService } from '../../../services/questionVersionService';
@@ -81,7 +81,10 @@ export class ExamAssemblyService {
     }
 
     // 2. Query Approved Question Bank Questions matching filters
-    const whereFilter: any = {};
+    // "Approved" per the comment above must actually mean VERIFIED — found live via UI testing
+    // that this filter never included a verificationStatus clause, so a NEEDS_REVIEW or REJECTED
+    // question could be assembled straight into a real exam draft with no gate at all.
+    const whereFilter: any = { verificationStatus: VerificationStatus.VERIFIED };
 
     if (questionTypes && questionTypes.length > 0) {
       whereFilter.type = { in: questionTypes };

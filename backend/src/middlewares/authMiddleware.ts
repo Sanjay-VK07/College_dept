@@ -48,10 +48,12 @@ export const authenticateJWT = async (req: AuthRequest, res: Response, next: Nex
       return res.status(401).json({ success: false, message: 'User account not found' });
     }
 
-    // Domain validation guard
+    // Domain validation guard — applies to every role, including ADMIN. There is no role-based
+    // exemption: an account with a non-institutional email is rejected here regardless of what
+    // role is stored on it, on every authenticated request, not just at login.
     const emailDomain = user.email.split('@')[1];
     const isDomainAllowed = ENV.ALLOWED_DOMAINS.some(domain => emailDomain === domain.trim());
-    if (!isDomainAllowed && user.role !== Role.ADMIN) {
+    if (!isDomainAllowed) {
       return res.status(403).json({ success: false, message: `Access denied. College domain @${emailDomain} is not authorized.` });
     }
 

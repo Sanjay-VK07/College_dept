@@ -91,137 +91,92 @@ export class QuestionBankService {
       orderBy: { name: 'asc' },
     });
 
-    const topicResults: TopicAvailability[] = [];
+    // Previously this ran ~13 separate count() queries PER TOPIC in a sequential loop — for a
+    // 40-topic subject that's ~520 DB round trips, which measured live (via real UI testing) at
+    // well over 30 seconds before the Smart Question Paper Builder's topic step ever finished
+    // loading. Fixed by fetching every question in the subject once and aggregating all the same
+    // breakdowns in memory — one query instead of hundreds, regardless of topic count.
+    const allSubtopics = modules.flatMap((mod) => mod.topics.flatMap((topic) => topic.subtopics.map((s) => ({ ...s, topicId: topic.id }))));
+    const subtopicIdToTopicId = new Map(allSubtopics.map((s) => [s.id, s.topicId]));
+    const allSubtopicIds = allSubtopics.map((s) => s.id);
 
+    const questions = allSubtopicIds.length
+      ? await prisma.question.findMany({
+          where: { subtopicId: { in: allSubtopicIds } },
+          select: { subtopicId: true, verificationStatus: true, origin: true, type: true, difficulty: true },
+        })
+      : [];
+
+    const topicIds = modules.flatMap((mod) => mod.topics.map((t) => t.id));
+    const [subjectLevelChunkCount, topicLevelChunks] = await Promise.all([
+      prisma.aIDocumentChunk.count({ where: { document: { subjectId } } }),
+      topicIds.length
+        ? prisma.aIDocumentChunk.groupBy({
+            by: ['documentId'],
+            where: { document: { topicId: { in: topicIds } } },
+            _count: true,
+          }).then(async (rows) => {
+            if (rows.length === 0) return new Set<string>();
+            const docs = await prisma.aIDocument.findMany({ where: { id: { in: rows.map((r) => r.documentId) } }, select: { topicId: true } });
+            return new Set(docs.map((d) => d.topicId).filter((id): id is string => !!id));
+          })
+        : Promise.resolve(new Set<string>()),
+    ]);
+    const hasSubjectLevelSource = subjectLevelChunkCount > 0;
+
+    type Bucket = {
+      total: number; verified: number; needsReview: number; rejected: number;
+      sourceQuestions: number; aiGenerated: number;
+      types: { MCQ: number; MSQ: number; NAT: number };
+      difficulty: { EASY: number; MEDIUM: number; HARD: number };
+    };
+    const emptyBucket = (): Bucket => ({
+      total: 0, verified: 0, needsReview: 0, rejected: 0, sourceQuestions: 0, aiGenerated: 0,
+      types: { MCQ: 0, MSQ: 0, NAT: 0 }, difficulty: { EASY: 0, MEDIUM: 0, HARD: 0 },
+    });
+    const byTopic = new Map<string, Bucket>();
+
+    for (const q of questions) {
+      const topicId = subtopicIdToTopicId.get(q.subtopicId);
+      if (!topicId) continue;
+      if (!byTopic.has(topicId)) byTopic.set(topicId, emptyBucket());
+      const b = byTopic.get(topicId)!;
+      b.total++;
+      if (q.verificationStatus === VerificationStatus.VERIFIED) {
+        b.verified++;
+        if (q.type === QuestionType.MCQ) b.types.MCQ++;
+        else if (q.type === QuestionType.MSQ) b.types.MSQ++;
+        else if (q.type === QuestionType.NAT) b.types.NAT++;
+        if (q.difficulty === Difficulty.EASY || q.difficulty === Difficulty.VERY_EASY) b.difficulty.EASY++;
+        else if (q.difficulty === Difficulty.MEDIUM) b.difficulty.MEDIUM++;
+        else if (q.difficulty === Difficulty.HARD || q.difficulty === Difficulty.VERY_HARD) b.difficulty.HARD++;
+      } else if (q.verificationStatus === VerificationStatus.NEEDS_REVIEW) {
+        b.needsReview++;
+      } else if (q.verificationStatus === VerificationStatus.REJECTED) {
+        b.rejected++;
+      }
+      if (q.origin === QuestionOrigin.SOURCE) b.sourceQuestions++;
+      else if (q.origin === QuestionOrigin.AI_GENERATED) b.aiGenerated++;
+    }
+
+    const topicResults: TopicAvailability[] = [];
     for (const mod of modules) {
       for (const topic of mod.topics) {
-        const subtopicIds = topic.subtopics.map((s) => s.id);
-
-        if (subtopicIds.length === 0) {
-          topicResults.push({
-            topicId: topic.id,
-            topicName: topic.name,
-            moduleId: mod.id,
-            moduleName: mod.name,
-            total: 0,
-            verified: 0,
-            needsReview: 0,
-            rejected: 0,
-            sourceQuestions: 0,
-            aiGenerated: 0,
-            types: { MCQ: 0, MSQ: 0, NAT: 0 },
-            difficulty: { EASY: 0, MEDIUM: 0, HARD: 0 },
-            hasSourceMaterial: false,
-          });
-          continue;
-        }
-
-        // Fetch real question counts from PostgreSQL for these subtopics
-        const [
-          totalCount,
-          verifiedCount,
-          needsReviewCount,
-          rejectedCount,
-          sourceCount,
-          aiCount,
-          mcqCount,
-          msqCount,
-          natCount,
-          easyCount,
-          mediumCount,
-          hardCount,
-          sourceChunksCount,
-        ] = await Promise.all([
-          prisma.question.count({ where: { subtopicId: { in: subtopicIds } } }),
-          prisma.question.count({
-            where: { subtopicId: { in: subtopicIds }, verificationStatus: VerificationStatus.VERIFIED },
-          }),
-          prisma.question.count({
-            where: { subtopicId: { in: subtopicIds }, verificationStatus: VerificationStatus.NEEDS_REVIEW },
-          }),
-          prisma.question.count({
-            where: { subtopicId: { in: subtopicIds }, verificationStatus: VerificationStatus.REJECTED },
-          }),
-          prisma.question.count({
-            where: { subtopicId: { in: subtopicIds }, origin: QuestionOrigin.SOURCE },
-          }),
-          prisma.question.count({
-            where: { subtopicId: { in: subtopicIds }, origin: QuestionOrigin.AI_GENERATED },
-          }),
-          prisma.question.count({
-            where: {
-              subtopicId: { in: subtopicIds },
-              verificationStatus: VerificationStatus.VERIFIED,
-              type: QuestionType.MCQ,
-            },
-          }),
-          prisma.question.count({
-            where: {
-              subtopicId: { in: subtopicIds },
-              verificationStatus: VerificationStatus.VERIFIED,
-              type: QuestionType.MSQ,
-            },
-          }),
-          prisma.question.count({
-            where: {
-              subtopicId: { in: subtopicIds },
-              verificationStatus: VerificationStatus.VERIFIED,
-              type: QuestionType.NAT,
-            },
-          }),
-          prisma.question.count({
-            where: {
-              subtopicId: { in: subtopicIds },
-              verificationStatus: VerificationStatus.VERIFIED,
-              difficulty: { in: [Difficulty.EASY, Difficulty.VERY_EASY] },
-            },
-          }),
-          prisma.question.count({
-            where: {
-              subtopicId: { in: subtopicIds },
-              verificationStatus: VerificationStatus.VERIFIED,
-              difficulty: Difficulty.MEDIUM,
-            },
-          }),
-          prisma.question.count({
-            where: {
-              subtopicId: { in: subtopicIds },
-              verificationStatus: VerificationStatus.VERIFIED,
-              difficulty: { in: [Difficulty.HARD, Difficulty.VERY_HARD] },
-            },
-          }),
-          // Check if indexed AIDocumentChunks exist for this topic/subject
-          prisma.aIDocumentChunk.count({
-            where: {
-              document: {
-                OR: [{ subjectId }, { topicId: topic.id }],
-              },
-            },
-          }),
-        ]);
-
+        const b = byTopic.get(topic.id) || emptyBucket();
         topicResults.push({
           topicId: topic.id,
           topicName: topic.name,
           moduleId: mod.id,
           moduleName: mod.name,
-          total: totalCount,
-          verified: verifiedCount,
-          needsReview: needsReviewCount,
-          rejected: rejectedCount,
-          sourceQuestions: sourceCount,
-          aiGenerated: aiCount,
-          types: {
-            MCQ: mcqCount,
-            MSQ: msqCount,
-            NAT: natCount,
-          },
-          difficulty: {
-            EASY: easyCount,
-            MEDIUM: mediumCount,
-            HARD: hardCount,
-          },
-          hasSourceMaterial: sourceChunksCount > 0,
+          total: b.total,
+          verified: b.verified,
+          needsReview: b.needsReview,
+          rejected: b.rejected,
+          sourceQuestions: b.sourceQuestions,
+          aiGenerated: b.aiGenerated,
+          types: b.types,
+          difficulty: b.difficulty,
+          hasSourceMaterial: hasSubjectLevelSource || topicLevelChunks.has(topic.id),
         });
       }
     }

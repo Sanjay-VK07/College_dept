@@ -28,14 +28,26 @@ export class QuestionVersionService {
   }
 
   /**
-   * Snapshots the question's CURRENT (pre-update) state as a new version and returns the next
-   * version number. Call this immediately before applying an update that touches gradable
-   * fields, and include `{ currentVersion: nextVersion }` in that same update — ideally within
-   * one transaction alongside the snapshot write (see solutionService.approveSolution for the
-   * reference pattern) so the version bump and the field change land atomically.
+   * Creates the version row for a question's NEW (post-update) state and returns its version
+   * number. `updatedFields` is whatever the caller is about to change (e.g. `correctAnswer`,
+   * `explanation`); any gradable field not included keeps its current value. Call this instead
+   * of writing the update directly, then apply the SAME `updatedFields` to the live `Question`
+   * row (together with `{ currentVersion: nextVersion }`) in the same transaction — see
+   * solutionService.approveSolution for the reference pattern.
+   *
+   * This must build the version row from the MERGED (new) state, not the pre-update state:
+   * getCurrentVersionId() looks up a QuestionVersion by `versionNumber === question.currentVersion`
+   * expecting to find the content that is *currently* live. An earlier version of this function
+   * snapshotted the OLD content under the NEW version number — every question corrected through
+   * this path (including a real, confirmed case: 26 NAT questions whose answer-key parsing was
+   * fixed) ended up with any newly-attached exam frozen to the answer from *before* the fix,
+   * silently re-introducing the exact bug the correction was meant to resolve.
    */
   public static async snapshotNewVersion(
     questionId: string,
+    updatedFields: Partial<
+      Pick<Question, 'text' | 'type' | 'difficulty' | 'marks' | 'negativeMarks' | 'options' | 'correctAnswer' | 'explanation' | 'imageUrl'>
+    >,
     createdById?: string,
     tx: Pick<typeof prisma, 'question' | 'questionVersion'> = prisma
   ): Promise<{ nextVersion: number }> {
@@ -45,20 +57,21 @@ export class QuestionVersionService {
     }
 
     const nextVersion = question.currentVersion + 1;
+    const merged = { ...question, ...updatedFields };
 
     await tx.questionVersion.create({
       data: {
         questionId: question.id,
         versionNumber: nextVersion,
-        text: question.text,
-        type: question.type,
-        difficulty: question.difficulty,
-        marks: question.marks,
-        negativeMarks: question.negativeMarks,
-        options: question.options as any,
-        correctAnswer: question.correctAnswer as any,
-        explanation: question.explanation,
-        imageUrl: question.imageUrl,
+        text: merged.text,
+        type: merged.type,
+        difficulty: merged.difficulty,
+        marks: merged.marks,
+        negativeMarks: merged.negativeMarks,
+        options: merged.options as any,
+        correctAnswer: merged.correctAnswer as any,
+        explanation: merged.explanation,
+        imageUrl: merged.imageUrl,
         createdById: createdById || null,
       },
     });

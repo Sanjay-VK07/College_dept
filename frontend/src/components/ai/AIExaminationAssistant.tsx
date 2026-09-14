@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { aiService, AIMessage, AIConversationSummary } from '@/services/aiService';
-import { AIBatchQuestionGeneratorStudio } from './AIBatchQuestionGeneratorStudio';
 import {
   Bot,
   Send,
@@ -32,8 +31,9 @@ interface AIExaminationAssistantProps {
 }
 
 export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ role = 'STUDENT' }) => {
-  // Tabs: 'chat', 'generator' (faculty/admin), 'practice' (student), 'insights' (student)
-  const [activeTab, setActiveTab] = useState<'chat' | 'generator' | 'practice' | 'insights'>('chat');
+  // Tabs: 'chat' (all roles), 'practice' (student), 'insights' (student). Exam authoring
+  // (formerly a 'generator' tab here) now lives entirely in Question Bank.
+  const [activeTab, setActiveTab] = useState<'chat' | 'practice' | 'insights'>('chat');
 
   // Conversational state
   const [conversations, setConversations] = useState<AIConversationSummary[]>([]);
@@ -345,20 +345,10 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
     }
   };
 
-  // The Question Generator is an examination-authoring workspace, not a chat panel — it needs the
-  // full width of the module. The conversation sidebar (which only serves Chat & RAG) is hidden
-  // while that tab is active, and the dark chat chrome gives way to the institutional light
-  // surface the generator is designed on.
-  const isGeneratorMode = activeTab === 'generator';
-
   return (
-    <div
-      className={`flex ${isGeneratorMode ? 'min-h-[750px]' : 'h-[750px]'} border rounded-2xl overflow-hidden shadow-2xl font-sans ${
-        isGeneratorMode ? 'bg-slate-50 border-slate-200 text-slate-900' : 'bg-slate-900 border-slate-700/60 text-slate-100'
-      }`}
-    >
-      {/* Sidebar Conversation Browser — Chat & RAG only */}
-      <div className={`${isGeneratorMode ? 'hidden' : 'hidden md:flex'} w-80 bg-slate-950 border-r border-slate-800 flex-col justify-between`}>
+    <div className="flex h-[750px] border rounded-2xl overflow-hidden shadow-2xl font-sans bg-slate-900 border-slate-700/60 text-slate-100">
+      {/* Sidebar Conversation Browser */}
+      <div className="hidden md:flex w-80 bg-slate-950 border-r border-slate-800 flex-col justify-between">
         <div>
           <div className="p-4 border-b border-slate-850 flex items-center justify-between">
             <span className="flex items-center space-x-2 text-sm font-semibold text-blue-400">
@@ -444,32 +434,19 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
       </div>
 
       {/* Main Panel Content Area */}
-      <div className={`flex-1 flex flex-col min-w-0 ${isGeneratorMode ? 'bg-slate-50' : 'bg-slate-900'}`}>
+      <div className="flex-1 flex flex-col min-w-0 bg-slate-900">
         {/* Mode Tabs */}
-        <div className={`flex px-6 py-2 border-b ${isGeneratorMode ? 'bg-white border-slate-200' : 'bg-slate-950 border-slate-800'}`}>
+        <div className="flex px-6 py-2 border-b bg-slate-950 border-slate-800">
           <button
             onClick={() => setActiveTab('chat')}
             className={`px-4 py-2 text-xs font-medium border-b-2 transition-all ${
               activeTab === 'chat'
-                ? isGeneratorMode ? 'border-[#1E40AF] text-[#1E40AF]' : 'border-blue-500 text-blue-400'
-                : isGeneratorMode ? 'border-transparent text-slate-500 hover:text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-200'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
             Chat & RAG Assistant
           </button>
-
-          {(role === 'FACULTY' || role === 'ADMIN') && (
-            <button
-              onClick={() => setActiveTab('generator')}
-              className={`px-4 py-2 text-xs font-medium border-b-2 transition-all ${
-                activeTab === 'generator'
-                  ? isGeneratorMode ? 'border-[#1E40AF] text-[#1E40AF]' : 'border-blue-500 text-blue-400'
-                  : isGeneratorMode ? 'border-transparent text-slate-500 hover:text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              AI Question Generator
-            </button>
-          )}
 
           {role === 'STUDENT' && (
             <>
@@ -497,8 +474,8 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
           )}
         </div>
 
-        {/* Tab Layouts — the generator supplies its own header/padding, so it renders flush */}
-        <div className={`flex-1 overflow-y-auto ${isGeneratorMode ? '' : 'p-6'}`}>
+        {/* Tab Layouts */}
+        <div className="flex-1 overflow-y-auto p-6">
           {/* TAB 1: Chat Assistant & RAG Q&A */}
           {activeTab === 'chat' && (
             <div className="h-full flex flex-col">
@@ -643,11 +620,6 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
                 )}
               </form>
             </div>
-          )}
-
-          {/* TAB 2: AI Question Generator (Faculty/Admin) */}
-          {activeTab === 'generator' && (
-            <AIBatchQuestionGeneratorStudio role={role} />
           )}
 
           {/* TAB 3: Practice Mode (Student only) */}

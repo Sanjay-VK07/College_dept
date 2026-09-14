@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { AdminController } from '../controllers/adminController';
+import { ExamController } from '../controllers/examController';
 import { DocumentStructureController } from '../modules/ai/controllers/documentStructureController';
 import { authenticateJWT, requireRoles, requireExamCreatePermission } from '../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
@@ -25,6 +26,7 @@ router.get('/faculty', requireRoles(Role.ADMIN), AdminController.getFaculty);
 router.post('/faculty', requireRoles(Role.ADMIN), AdminController.createFaculty);
 router.put('/faculty/:id', requireRoles(Role.ADMIN), AdminController.updateFaculty);
 router.delete('/faculty/:id', requireRoles(Role.ADMIN), AdminController.deleteFaculty);
+router.put('/users/:id/role', requireRoles(Role.ADMIN), AdminController.updateUserRole);
 
 // Question Bank Management
 router.get('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getQuestions);
@@ -39,7 +41,10 @@ router.get('/exams', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.get
 router.post('/exams', requireRoles(Role.FACULTY, Role.ADMIN), requireExamCreatePermission, AdminController.createExam);
 router.put('/exams/:id/publish', requireRoles(Role.ADMIN), AdminController.togglePublishExam);
 router.put('/exams/:id/status', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.updateExamStatus);
+router.put('/exams/:id/publish-results', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.publishExamResults);
 router.delete('/exams/:id', requireRoles(Role.ADMIN), AdminController.deleteExam);
+router.get('/exams/:id/attempts', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getExamAttempts);
+router.get('/assignments/:assignmentId/solution', requireRoles(Role.FACULTY, Role.ADMIN), ExamController.getAssignmentSolutionForStaff);
 
 // Bulk Uploads & Reports
 router.post('/upload-questions', requireRoles(Role.FACULTY, Role.ADMIN), upload.single('file'), AdminController.uploadQuestions);

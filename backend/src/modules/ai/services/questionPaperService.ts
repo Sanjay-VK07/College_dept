@@ -8,6 +8,7 @@ import { QuestionSimilarityService } from './questionSimilarityService';
 import { AnswerVerificationService } from './answerVerificationService';
 import { EmbeddingProvider } from './embeddingProvider';
 import { QuestionGenerationPrompt } from '../prompts/questionGenerationPrompt';
+import { NotificationController } from '../../../controllers/notificationController';
 
 export interface PreviewPaperPayload {
   subjectId: string;
@@ -129,7 +130,13 @@ export class QuestionPaperService {
       }
     }
 
-    // 4. Calculate target type & difficulty counts via largest-remainder algorithm
+    // 4. Calculate target type & difficulty counts via largest-remainder algorithm.
+    // Selection order: type distribution is applied first, then difficulty distribution is
+    // apportioned *within* each type's quota — not computed independently and only reported
+    // afterward. Selecting purely by difficulty (ignoring type) let a type with real surplus
+    // supply (e.g. 7 verified NAT questions available for a target of 5) still get under-filled
+    // by the initial pass and reported as a false "shortfall", triggering an unnecessary AI
+    // generation call for a type the verified pool could already satisfy in full.
     const diffTargets = apportion(requestedTotal, difficultyDistribution);
     const typeTargets = apportion(requestedTotal, typeDistribution);
 
@@ -147,9 +154,11 @@ export class QuestionPaperService {
     const selectedQuestions: any[] = [];
     const selectedIds = new Set<string>();
 
-    const easyPool = shuffled.filter((q) => q.difficulty === Difficulty.EASY || q.difficulty === Difficulty.VERY_EASY);
-    const medPool = shuffled.filter((q) => q.difficulty === Difficulty.MEDIUM);
-    const hardPool = shuffled.filter((q) => q.difficulty === Difficulty.HARD || q.difficulty === Difficulty.VERY_HARD);
+    const difficultyOf = (q: any) => {
+      if (q.difficulty === Difficulty.EASY || q.difficulty === Difficulty.VERY_EASY) return 'EASY';
+      if (q.difficulty === Difficulty.HARD || q.difficulty === Difficulty.VERY_HARD) return 'HARD';
+      return 'MEDIUM';
+    };
 
     const selectFromPool = (pool: any[], maxCount: number) => {
       let added = 0;
@@ -171,11 +180,38 @@ export class QuestionPaperService {
       }
     };
 
-    selectFromPool(easyPool, diffTargets.EASY || 0);
-    selectFromPool(medPool, diffTargets.MEDIUM || 0);
-    selectFromPool(hardPool, diffTargets.HARD || 0);
+    // Pass 1 — exact (type, difficulty) cells: for each type, apportion that type's quota
+    // across difficulties using the same difficulty-distribution percentages, then select from
+    // the pool matching both.
+    for (const type of ['MCQ', 'MSQ', 'NAT'] as const) {
+      const typeQuota = typeTargets[type] || 0;
+      if (typeQuota === 0) continue;
+      const cellTargets = apportion(typeQuota, difficultyDistribution);
+      const typePool = shuffled.filter((q) => q.type === QuestionType[type]);
+      for (const diff of ['EASY', 'MEDIUM', 'HARD'] as const) {
+        const cellPool = typePool.filter((q) => difficultyOf(q) === diff);
+        selectFromPool(cellPool, cellTargets[diff] || 0);
+      }
+    }
 
-    // Fill up remaining slots from general pool if specific difficulty buckets had shortages
+    // Pass 2 — same-type fallback: a type's exact cell may have been short on one difficulty
+    // while the type overall still has unused supply in another difficulty. Fill the rest of
+    // that type's quota before touching a different type.
+    if (selectedQuestions.length < requestedTotal) {
+      for (const type of ['MCQ', 'MSQ', 'NAT'] as const) {
+        const typeQuota = typeTargets[type] || 0;
+        const selectedOfType = selectedQuestions.filter((q) => q.type === QuestionType[type]).length;
+        const remaining = typeQuota - selectedOfType;
+        if (remaining <= 0) continue;
+        const typePool = shuffled.filter((q) => q.type === QuestionType[type]);
+        selectFromPool(typePool, remaining);
+      }
+    }
+
+    // Pass 3 — general fallback: if the requested total still isn't met (verified pool doesn't
+    // have enough questions overall, regardless of type/difficulty mix), fill remaining slots
+    // from anywhere compatible so the AI-shortfall count reflects a genuine total shortage, not
+    // just a mix mismatch.
     if (selectedQuestions.length < requestedTotal) {
       for (const q of shuffled) {
         if (selectedQuestions.length >= requestedTotal) break;
@@ -609,6 +645,16 @@ export class QuestionPaperService {
       throw new Error(`Examination '${mockTestId}' not found.`);
     }
 
+    // Publish is safely re-callable — calling it again on an already-published exam is a no-op,
+    // not an error, and must never fire a second "examination published" notification.
+    if (mockTest.isPublished) {
+      return {
+        success: true,
+        message: `Examination '${mockTest.title}' is already published.`,
+        mockTest,
+      };
+    }
+
     if (mockTest.testQuestions.length === 0) {
       throw new Error('Cannot publish an examination without any questions attached.');
     }
@@ -626,6 +672,13 @@ export class QuestionPaperService {
         status: ExamStatus.PUBLISHED,
       },
     });
+
+    await NotificationController.createSystemNotification(
+      'Examination Published',
+      `"${updatedMockTest.title}" is now available. Check your dashboard for details.`,
+      'info',
+      'Student'
+    );
 
     return {
       success: true,

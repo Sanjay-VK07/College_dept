@@ -1,29 +1,73 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
 import { ENV } from '../config/env';
 import { prisma } from '../config/prisma';
 import { AuditLogger } from '../services/auditLogger';
 import { Role } from '@prisma/client';
 import { NotificationController } from './notificationController';
 
+const googleClient = ENV.GOOGLE_CLIENT_ID ? new OAuth2Client(ENV.GOOGLE_CLIENT_ID) : null;
+
 export class AuthController {
   /**
-   * Google Auth Login / Mock Login endpoint
-   * Validates college domain e.g. @citchennai.net
+   * Google Auth Login endpoint
+   *
+   * SECURITY: role is NEVER accepted from the request body, in either code path below. A brand
+   * new account created through this endpoint is always provisioned as STUDENT — FACULTY and
+   * ADMIN accounts can only come from the authorized server-side provisioning endpoints
+   * (POST /admin/faculty, PUT /admin/users/:id/role), never from self-service login. An existing
+   * account's role always comes from its stored database row, never from this request.
+   *
+   * Two identity paths:
+   *  - Verified: if GOOGLE_CLIENT_ID is configured and the client sends a real Google ID token
+   *    (`googleIdToken`), it is cryptographically verified via google-auth-library and the email
+   *    is read from the verified token payload — the client-supplied email is ignored entirely.
+   *  - Institutional self-service fallback (current UI, no verified identity provider wired up
+   *    yet): the client-asserted email is trusted only insofar as it must match an allowed
+   *    college domain, checked unconditionally for every account — there is no role-based
+   *    exemption from this check.
    */
   public static async googleLogin(req: Request, res: Response) {
     try {
-      const { email, name, googleId, registerNo, role, department } = req.body;
+      const { registerNo, department, googleIdToken } = req.body;
 
-      if (!email) {
-        return res.status(400).json({ success: false, message: 'Email address is required' });
+      let email: string;
+      let name: string;
+      let googleId: string;
+      let verifiedIdentity = false;
+
+      if (googleClient && googleIdToken) {
+        let ticket;
+        try {
+          ticket = await googleClient.verifyIdToken({ idToken: googleIdToken, audience: ENV.GOOGLE_CLIENT_ID });
+        } catch (err: any) {
+          return res.status(401).json({ success: false, message: 'Invalid or expired Google sign-in token.' });
+        }
+        const payload = ticket.getPayload();
+        if (!payload?.email || !payload.email_verified) {
+          return res.status(401).json({ success: false, message: 'Google account email is not verified.' });
+        }
+        email = payload.email;
+        name = payload.name || email.split('@')[0];
+        googleId = payload.sub;
+        verifiedIdentity = true;
+      } else {
+        const bodyEmail = req.body.email;
+        if (!bodyEmail) {
+          return res.status(400).json({ success: false, message: 'Email address is required' });
+        }
+        email = bodyEmail;
+        name = req.body.name || email.split('@')[0];
+        googleId = req.body.googleId || `g_${Date.now()}`;
       }
 
-      // Check Domain Restriction
+      // Check Domain Restriction — applies unconditionally to every account, including ADMIN.
+      // There must be no role-based way to bypass this: role is not even read at this point.
       const emailDomain = email.split('@')[1];
       const isAllowed = ENV.ALLOWED_DOMAINS.some(d => d.trim().toLowerCase() === emailDomain?.toLowerCase());
 
-      if (!isAllowed && role !== Role.ADMIN) {
+      if (!isAllowed) {
         await NotificationController.createSystemNotification(
           'Login Attempt Failed',
           `Unauthorized login attempt for domain @${emailDomain} (${email})`,
@@ -37,18 +81,20 @@ export class AuthController {
         });
       }
 
-      // Find or create user
+      // Find or create user. Role is intentionally never sourced from the request body: an
+      // existing user keeps whatever role is already on their row (below), and a brand new user
+      // is always created as STUDENT — there is no field in this request that can change that.
       let user = await prisma.user.findUnique({ where: { email } });
 
       if (!user) {
         user = await prisma.user.create({
           data: {
             email,
-            name: name || email.split('@')[0],
-            googleId: googleId || `g_${Date.now()}`,
-            role: role || Role.STUDENT,
+            name,
+            googleId,
+            role: Role.STUDENT,
             department: department || 'Computer Science and Engineering',
-            registerNo: registerNo || (role === Role.STUDENT ? `717621050${Date.now().toString().slice(-3)}` : null),
+            registerNo: registerNo || `717621050${Date.now().toString().slice(-3)}`,
             year: 3,
             semester: 6,
             section: 'A',
@@ -80,7 +126,7 @@ export class AuthController {
         userId: user.id,
         action: 'USER_LOGIN',
         resource: 'User',
-        details: `${user.name} (${user.role}) signed in successfully`,
+        details: `${user.name} (${user.role}) signed in successfully${verifiedIdentity ? ' [verified Google identity]' : ' [institutional self-service login]'}`,
         ipAddress: req.ip,
       });
 

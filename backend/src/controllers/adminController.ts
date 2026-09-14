@@ -5,13 +5,14 @@ import { ExcelImportService } from '../services/excelImportService';
 import { ReportExportService } from '../services/reportExportService';
 import { StudentDataExportService } from '../services/studentDataExportService';
 import { AuditLogger } from '../services/auditLogger';
-import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus } from '@prisma/client';
+import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus, VerificationStatus } from '@prisma/client';
 import { ENV } from '../config/env';
 import { NotificationController } from './notificationController';
 import { LocalStorageProvider } from '../modules/ai/services/documentStorageService';
 import { PDFQuestionImportService } from '../modules/ai/services/pdfQuestionImportService';
 import { QuestionVersionService } from '../services/questionVersionService';
 import { EmbeddingProvider } from '../modules/ai/services/embeddingProvider';
+import { extractZipEntries, isZipFile } from '../services/zipExtractionService';
 
 export class AdminController {
   /**
@@ -593,6 +594,50 @@ export class AdminController {
     }
   }
 
+  /**
+   * PUT /admin/users/:id/role — the only server-side path that can grant or change a user's
+   * role, including promoting an account to ADMIN. Gated ADMIN-only at the route level. Self-
+   * service login (POST /auth/google) never reads or trusts a role from its request body.
+   */
+  public static async updateUserRole(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const { role } = req.body;
+
+      if (!role || !Object.values(Role).includes(role)) {
+        return res.status(400).json({ success: false, message: `role must be one of: ${Object.values(Role).join(', ')}` });
+      }
+
+      const target = await prisma.user.findUnique({ where: { id } });
+      if (!target) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      if (target.id === req.user!.id && role !== target.role) {
+        return res.status(400).json({ success: false, message: 'You cannot change your own role.' });
+      }
+
+      const previousRole = target.role;
+      const updated = await prisma.user.update({ where: { id }, data: { role } });
+
+      await AuditLogger.log({
+        userId: req.user?.id,
+        action: 'CHANGE_USER_ROLE',
+        resource: 'User',
+        details: `Changed role for ${updated.name} (${updated.email}) from ${previousRole} to ${role}`,
+        ipAddress: req.ip,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `${updated.name}'s role changed from ${previousRole} to ${role}.`,
+        data: { id: updated.id, name: updated.name, email: updated.email, role: updated.role },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   public static async deleteFaculty(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
@@ -686,6 +731,7 @@ export class AdminController {
           },
           createdBy: { select: { name: true, department: true } },
           aiSources: { select: { documentId: true } },
+          sourceDocument: { select: { id: true, title: true, fileName: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -1134,9 +1180,13 @@ export class AdminController {
 
       let attachedCount = 0;
       if (parsedQuestionCount > 0) {
-        const poolWhere: any = sourceDocumentId
-          ? { aiSources: { some: { documentId: String(sourceDocumentId) } } }
-          : {};
+        // verificationStatus is required here — found live via UI testing that this legacy
+        // random-attach path had no verification gate at all, letting a NEEDS_REVIEW or
+        // REJECTED question into a real exam.
+        const poolWhere: any = { verificationStatus: VerificationStatus.VERIFIED };
+        if (sourceDocumentId) {
+          poolWhere.aiSources = { some: { documentId: String(sourceDocumentId) } };
+        }
 
         const pool = await prisma.question.findMany({ where: poolWhere, select: { id: true } });
 
@@ -1202,9 +1252,18 @@ export class AdminController {
         return res.status(404).json({ success: false, message: 'Exam not found' });
       }
 
+      // status must move in lockstep with isPublished — found live via UI testing that this
+      // endpoint left status stuck at DRAFT after a real publish (isPublished:true, status:
+      // 'DRAFT' simultaneously). Every current UI consumer happens to read isPublished for its
+      // badge, so this wasn't visibly wrong yet, but any other status-keyed logic would disagree
+      // with what the exam actually is.
+      const nowPublished = !exam.isPublished;
       const updated = await prisma.mockTest.update({
         where: { id },
-        data: { isPublished: !exam.isPublished },
+        data: {
+          isPublished: nowPublished,
+          status: nowPublished ? ExamStatus.PUBLISHED : ExamStatus.DRAFT,
+        },
       });
 
       await AuditLogger.log({
@@ -1262,6 +1321,61 @@ export class AdminController {
   /**
    * Excel / CSV / JSON Bulk Upload for Question Bank
    */
+  private static inferMimetype(fileName: string): string {
+    const ext = fileName.toLowerCase().slice(fileName.lastIndexOf('.'));
+    if (ext === '.pdf') return 'application/pdf';
+    if (ext === '.csv') return 'text/csv';
+    if (ext === '.xls') return 'application/vnd.ms-excel';
+    return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  }
+
+  /**
+   * Runs the existing single-file import logic (PDF -> background extraction job,
+   * Excel/CSV -> synchronous import) against one {fileName, buffer} pair. Shared between
+   * a direct single-file upload and each entry pulled out of an uploaded .zip.
+   */
+  private static async processOneQuestionFile(
+    req: AuthRequest,
+    fileName: string,
+    mimetype: string,
+    buffer: Buffer,
+    subtopicId: string,
+    targetCount: number | undefined
+  ): Promise<{ type: 'pdf'; documentId: string; generationRequestId: string; status: string } | { type: 'excel'; count: number }> {
+    if (mimetype === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf')) {
+      const storageProvider = new LocalStorageProvider();
+      const storageKey = await storageProvider.upload(buffer, fileName, mimetype);
+
+      const docId = `import_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const document = await prisma.aIDocument.create({
+        data: {
+          id: docId,
+          title: fileName,
+          fileName,
+          mimeType: mimetype,
+          fileSize: buffer.length,
+          storageKey,
+          visibility: 'PRIVATE',
+          status: AIDocumentStatus.UPLOADED,
+          uploadedById: req.user!.id,
+        },
+      });
+
+      const enqueued = await PDFQuestionImportService.enqueueImport({
+        userId: req.user!.id,
+        role: req.user!.role,
+        documentId: document.id,
+        subtopicId,
+        targetCount,
+      });
+
+      return { type: 'pdf', documentId: document.id, generationRequestId: enqueued.generationRequestId, status: enqueued.status };
+    }
+
+    const questions = await ExcelImportService.importQuestions(buffer, mimetype, req.user!.id, subtopicId);
+    return { type: 'excel', count: questions.length };
+  }
+
   public static async uploadQuestions(req: AuthRequest, res: Response) {
     try {
       if (!req.file) {
@@ -1273,52 +1387,98 @@ export class AdminController {
         return res.status(400).json({ success: false, message: 'Please create a subject/subtopic in taxonomy before importing questions.' });
       }
 
-      // If PDF file is uploaded, enqueue background extraction (page-batched internally, so a
-      // large PDF never blocks this request or gets sent to the model in one shot) — poll
-      // GET /ai/questions/batch-status/:generationRequestId for progress.
-      if (req.file.mimetype === 'application/pdf' || req.file.originalname.endsWith('.pdf')) {
-        const storageProvider = new LocalStorageProvider();
-        const storageKey = await storageProvider.upload(req.file.buffer, req.file.originalname, req.file.mimetype);
+      const targetCount = req.body.targetQuestionCount ? Number(req.body.targetQuestionCount) : undefined;
 
-        const docId = `import_${Date.now()}`;
-        const document = await prisma.aIDocument.create({
-          data: {
-            id: docId,
-            title: req.file.originalname,
-            fileName: req.file.originalname,
-            mimeType: req.file.mimetype,
-            fileSize: req.file.size,
-            storageKey,
-            visibility: 'PRIVATE',
-            status: AIDocumentStatus.UPLOADED,
-            uploadedById: req.user!.id,
-          },
-        });
+      // A .zip of question files (.xlsx/.xls/.csv/.pdf, any mix): extract and run each entry
+      // through the same per-file logic below, then report a combined summary. Excel/CSV
+      // entries import synchronously; each PDF is queued as its own background extraction job.
+      if (isZipFile(req.file.originalname, req.file.mimetype)) {
+        const entries = extractZipEntries(req.file.buffer, ['.xlsx', '.xls', '.csv', '.pdf']);
+        if (entries.length === 0) {
+          return res.status(400).json({ success: false, message: 'No .xlsx, .xls, .csv, or .pdf files found inside the uploaded zip.' });
+        }
 
-        const targetCount = req.body.targetQuestionCount ? Number(req.body.targetQuestionCount) : undefined;
+        let excelImportedCount = 0;
+        const pdfJobs: Array<{ fileName: string; documentId: string; generationRequestId: string; status: string }> = [];
+        const failures: Array<{ fileName: string; message: string }> = [];
 
-        const enqueued = await PDFQuestionImportService.enqueueImport({
-          userId: req.user!.id,
-          role: req.user!.role,
-          documentId: document.id,
-          subtopicId: defaultSubtopic.id,
-          targetCount,
-        });
+        for (const entry of entries) {
+          try {
+            const result = await AdminController.processOneQuestionFile(
+              req,
+              entry.fileName,
+              AdminController.inferMimetype(entry.fileName),
+              entry.buffer,
+              defaultSubtopic.id,
+              targetCount
+            );
+            if (result.type === 'excel') {
+              excelImportedCount += result.count;
+            } else {
+              pdfJobs.push({ fileName: entry.fileName, documentId: result.documentId, generationRequestId: result.generationRequestId, status: result.status });
+            }
+          } catch (entryError: any) {
+            failures.push({ fileName: entry.fileName, message: entryError.message || 'Import failed' });
+          }
+        }
 
         await AuditLogger.log({
           userId: req.user?.id,
           action: 'BULK_UPLOAD_QUESTIONS',
           resource: 'Question',
-          details: `Queued question extraction from PDF: ${req.file.originalname}${targetCount ? ` (target count: ${targetCount})` : ''} — job ${enqueued.generationRequestId}.`,
+          details: `Uploaded zip "${req.file.originalname}" (${entries.length} files): ${excelImportedCount} questions imported directly, ${pdfJobs.length} PDF extraction job(s) queued, ${failures.length} failed.`,
+          ipAddress: req.ip,
+        });
+
+        const messageParts = [];
+        if (excelImportedCount > 0) messageParts.push(`${excelImportedCount} questions imported`);
+        if (pdfJobs.length > 0) messageParts.push(`${pdfJobs.length} PDF(s) queued for background extraction`);
+        if (failures.length > 0) messageParts.push(`${failures.length} file(s) failed`);
+
+        return res.status(pdfJobs.length > 0 ? 202 : 200).json({
+          success: true,
+          message: `Processed zip "${req.file.originalname}": ${messageParts.join(', ') || 'no supported files found'}.`,
+          excelImportedCount,
+          pdfJobs,
+          failures,
+          // The frontend's existing progress UI tracks one PDF job at a time — surface the
+          // first queued job through the same fields a single-PDF upload returns, so it can
+          // show live progress without a separate zip-specific UI. Any remaining PDF jobs
+          // still process in the background and land in the Question Bank once complete.
+          documentId: pdfJobs[0]?.documentId,
+          generationRequestId: pdfJobs[0]?.generationRequestId,
+          status: pdfJobs[0]?.status,
+        });
+      }
+
+      // If PDF file is uploaded, enqueue background extraction (page-batched internally, so a
+      // large PDF never blocks this request or gets sent to the model in one shot) — poll
+      // GET /ai/questions/batch-status/:generationRequestId for progress.
+      if (req.file.mimetype === 'application/pdf' || req.file.originalname.endsWith('.pdf')) {
+        const result = await AdminController.processOneQuestionFile(
+          req,
+          req.file.originalname,
+          req.file.mimetype,
+          req.file.buffer,
+          defaultSubtopic.id,
+          targetCount
+        );
+        const pdfResult = result as { type: 'pdf'; documentId: string; generationRequestId: string; status: string };
+
+        await AuditLogger.log({
+          userId: req.user?.id,
+          action: 'BULK_UPLOAD_QUESTIONS',
+          resource: 'Question',
+          details: `Queued question extraction from PDF: ${req.file.originalname}${targetCount ? ` (target count: ${targetCount})` : ''} — job ${pdfResult.generationRequestId}.`,
           ipAddress: req.ip,
         });
 
         return res.status(202).json({
           success: true,
           message: `"${req.file.originalname}" uploaded — extracting questions in the background${targetCount ? ` (up to ${targetCount})` : ''}. This can take a few minutes for large documents.`,
-          documentId: document.id,
-          generationRequestId: enqueued.generationRequestId,
-          status: enqueued.status,
+          documentId: pdfResult.documentId,
+          generationRequestId: pdfResult.generationRequestId,
+          status: pdfResult.status,
         });
       }
 
@@ -1528,6 +1688,65 @@ export class AdminController {
       });
 
       return res.status(200).json({ success: true, data: ledger });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * GET /admin/exams/:id/attempts — per-student attempt list for one examination, for the
+   * faculty invigilator drill-down. Faculty may only view exams they created or invigilate;
+   * Admin is unrestricted.
+   */
+  public static async getExamAttempts(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+
+      const test = await prisma.mockTest.findUnique({
+        where: { id },
+        include: {
+          invigilators: { where: { facultyId: req.user!.id } },
+          _count: { select: { testQuestions: true } },
+        },
+      });
+      if (!test) {
+        return res.status(404).json({ success: false, message: 'Examination not found' });
+      }
+      if (req.user!.role === Role.FACULTY && test.createdById !== req.user!.id && test.invigilators.length === 0) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You do not own or invigilate this examination.' });
+      }
+
+      const assignments = await prisma.testAssignment.findMany({
+        where: { testId: id },
+        include: {
+          student: { select: { id: true, name: true, registerNo: true, email: true } },
+          responses: { select: { isCorrect: true, status: true } },
+        },
+        orderBy: { student: { registerNo: 'asc' } },
+      });
+
+      const attempts = assignments.map((a) => {
+        const answered = a.responses.filter((r) => r.status === 'ANSWERED' || r.status === 'ANSWERED_AND_MARKED');
+        const correctCount = answered.filter((r) => r.isCorrect).length;
+        const wrongCount = answered.filter((r) => !r.isCorrect).length;
+        const totalQuestions = test._count.testQuestions;
+        return {
+          assignmentId: a.id,
+          student: a.student,
+          status: a.status,
+          startedAt: a.startedAt,
+          submittedAt: a.submittedAt,
+          score: a.score,
+          totalMarks: a.totalMarks || test.totalMarks,
+          accuracy: a.accuracy,
+          timeTakenSec: a.timeTakenSec,
+          correctCount,
+          wrongCount,
+          unansweredCount: Math.max(0, totalQuestions - answered.length),
+        };
+      });
+
+      return res.status(200).json({ success: true, data: attempts });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }
@@ -1749,6 +1968,51 @@ export class AdminController {
   /**
    * Transition Exam Lifecycle Status
    */
+  /**
+   * PUT /admin/exams/:id/publish-results — the only way MANUAL_PUBLISH results ever become
+   * visible to students. Faculty must own/invigilate the exam; Admin is unrestricted.
+   */
+  public static async publishExamResults(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+
+      const exam = await prisma.mockTest.findUnique({
+        where: { id },
+        include: { invigilators: { where: { facultyId: req.user!.id } } },
+      });
+      if (!exam) {
+        return res.status(404).json({ success: false, message: 'Examination not found' });
+      }
+      if (req.user!.role === Role.FACULTY && exam.createdById !== req.user!.id && exam.invigilators.length === 0) {
+        return res.status(403).json({ success: false, message: 'Unauthorized to manage this examination' });
+      }
+      if (exam.resultsPublished) {
+        return res.status(200).json({ success: true, message: `Results for "${exam.title}" are already published.` });
+      }
+
+      const updated = await prisma.mockTest.update({ where: { id }, data: { resultsPublished: true } });
+
+      await AuditLogger.log({
+        userId: req.user?.id,
+        action: 'PUBLISH_EXAM_RESULTS',
+        resource: 'MockTest',
+        details: `Published results for examination "${updated.title}"`,
+        ipAddress: req.ip,
+      });
+
+      await NotificationController.createSystemNotification(
+        'Results Published',
+        `Results for "${updated.title}" are now available. Check your dashboard for details.`,
+        'success',
+        'Student'
+      );
+
+      return res.status(200).json({ success: true, message: `Results for "${updated.title}" are now published to students.` });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   public static async updateExamStatus(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;

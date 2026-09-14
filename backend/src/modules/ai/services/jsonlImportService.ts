@@ -294,7 +294,10 @@ export class JSONLImportService {
         reason: rec.reason || null,
       };
 
-      const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer } = this.normalizeOptionsAndAnswer(rec, qType);
+      const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer, needsReview } = this.normalizeOptionsAndAnswer(rec, qType);
+      // A NAT answer that couldn't be fully/unambiguously parsed must never stay tagged VERIFIED —
+      // that status is what lets a question straight into a real exam.
+      const effectiveVStatus = needsReview && vStatus === VerificationStatus.VERIFIED ? VerificationStatus.NEEDS_REVIEW : vStatus;
 
       questionsToCreate.push({
         customId: rec.questionId,
@@ -311,7 +314,7 @@ export class JSONLImportService {
         createdById: userId,
         generatedByAI: false,
         origin: QuestionOrigin.SOURCE,
-        verificationStatus: vStatus,
+        verificationStatus: effectiveVStatus,
         sourcePage: rec.sourcePage || null,
         sourceChapter: rec.sourceChapter ? String(rec.sourceChapter) : null,
         sourceSection: rec.sourceSection || null,
@@ -363,10 +366,45 @@ export class JSONLImportService {
    * index never matches) — this converts once, at import time, so every downstream consumer sees
    * the one real shape.
    */
+  /**
+   * Parses this dataset's NAT answer-key format, which is GATE's own "min : max" tolerance-range
+   * notation, not a plain number — a plain `Number(raw)` on e.g. "17 : 17" or "1.4 : 1.5" is
+   * always NaN, which previously fell through to an empty `{}` correctAnswer for every single
+   * NAT question in this format (confirmed live: all 62 NAT questions in the Chapter 1 dataset
+   * use this notation, so every one of them silently became unscoreable — always graded wrong
+   * regardless of what the student entered). A degenerate range (min === max) is stored as an
+   * exact `{value}` rather than `{min,max}` to match how the rest of the codebase represents an
+   * exact NAT answer. The rare compound case (semicolon-separated alternative ranges, e.g.
+   * "13.3:13.3;13.5:13.5" — accept either 13.3 or 13.5) isn't expressible in the current
+   * {value}|{min,max} scoring model, so only the first alternative is kept and the question is
+   * flagged for manual review instead of silently being marked gradable when it only partially is.
+   */
+  private static parseNATAnswer(raw: string): { answer: any; needsReview: boolean } {
+    const trimmed = (raw || '').trim();
+    const isMultiRange = trimmed.includes(';');
+    const firstSegment = isMultiRange ? trimmed.split(';')[0].trim() : trimmed;
+
+    const rangeMatch = firstSegment.match(/^(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)$/);
+    if (rangeMatch) {
+      const min = Number(rangeMatch[1]);
+      const max = Number(rangeMatch[2]);
+      const answer = min === max ? { value: min } : { min, max };
+      return { answer, needsReview: isMultiRange };
+    }
+
+    const plain = Number(firstSegment);
+    if (Number.isFinite(plain)) {
+      return { answer: { value: plain }, needsReview: isMultiRange };
+    }
+
+    // Genuinely unparseable — no silent fallback to a fabricated value; flag for a human.
+    return { answer: {}, needsReview: true };
+  }
+
   private static normalizeOptionsAndAnswer(
     rec: JSONLRecord,
     qType: QuestionType
-  ): { options: any; correctAnswer: any } {
+  ): { options: any; correctAnswer: any; needsReview?: boolean } {
     if (qType === QuestionType.MCQ || qType === QuestionType.MSQ) {
       if (rec.options && !Array.isArray(rec.options) && typeof rec.options === 'object') {
         const letters = Object.keys(rec.options).sort();
@@ -403,8 +441,8 @@ export class JSONLImportService {
 
     if (qType === QuestionType.NAT) {
       const raw = Array.isArray(rec.correctAnswer) ? rec.correctAnswer[0] : rec.correctAnswer;
-      const num = Number(raw ?? rec.rawAnswer);
-      return { options: [], correctAnswer: Number.isFinite(num) ? { value: num } : {} };
+      const parsed = this.parseNATAnswer(typeof raw === 'string' ? raw : String(raw ?? rec.rawAnswer ?? ''));
+      return { options: [], correctAnswer: parsed.answer, needsReview: parsed.needsReview };
     }
 
     // FREE_RESPONSE / UNKNOWN have no auto-gradable structured answer.

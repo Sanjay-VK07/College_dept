@@ -16,6 +16,11 @@ export const ENV = {
   DATABASE_URL: requireEnv('DATABASE_URL'),
   DIRECT_URL: requireEnv('DIRECT_URL'),
   ALLOWED_DOMAINS: (process.env.ALLOWED_DOMAINS || 'citchennai.net').split(',').map((d) => d.trim()),
+  // When set, /auth/google verifies a real Google ID token (google-auth-library) instead of
+  // trusting a client-asserted email. Optional: without it, the endpoint falls back to the
+  // domain-gated self-service path (new accounts are always created as STUDENT — role is never
+  // read from the request body either way).
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
   CHUNK_SIZE: parseInt(process.env.CHUNK_SIZE || '500', 10),
   CHUNK_OVERLAP: parseInt(process.env.CHUNK_OVERLAP || '50', 10),

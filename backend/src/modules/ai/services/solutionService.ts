@@ -186,15 +186,15 @@ export class SolutionService {
     // already attached to this question (via MockTestQuestion.questionVersionId) keeps scoring
     // against what the student actually saw, not the newly-approved answer.
     const [updatedQuestion, updatedSolution] = await prisma.$transaction(async (tx) => {
-      const { nextVersion } = await QuestionVersionService.snapshotNewVersion(solution.questionId, userId, tx);
+      const updatedFields = {
+        explanation: solution.verifiedExplanation || solution.draftExplanation,
+        correctAnswer: (solution.verifiedAnswer || solution.draftAnswer) as any,
+      };
+      const { nextVersion } = await QuestionVersionService.snapshotNewVersion(solution.questionId, updatedFields, userId, tx);
 
       const question = await tx.question.update({
         where: { id: solution.questionId },
-        data: {
-          explanation: solution.verifiedExplanation || solution.draftExplanation,
-          correctAnswer: (solution.verifiedAnswer || solution.draftAnswer) as any,
-          currentVersion: nextVersion,
-        },
+        data: { ...updatedFields, currentVersion: nextVersion },
       });
 
       const updatedSol = await tx.aISolution.update({

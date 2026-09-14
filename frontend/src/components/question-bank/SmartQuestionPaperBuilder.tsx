@@ -25,12 +25,17 @@ import {
   Send,
   HelpCircle,
   Search,
-  FileSpreadsheet,
 } from 'lucide-react';
 import api from '@/lib/api';
 
-interface AIBatchQuestionGeneratorStudioProps {
+interface SmartQuestionPaperBuilderProps {
   role?: string;
+  /** Pre-populate the paper with these questions (e.g. from a Question Bank bulk selection) and
+   * jump straight to the review step. Full question objects, not just ids — reuses whatever the
+   * caller already has loaded rather than a second fetch. All must already be VERIFIED; callers
+   * are responsible for that guard, this component trusts what it's given. */
+  initialSelectedQuestions?: any[];
+  onExitToQuestionBank?: () => void;
 }
 
 type StepId = 'resources' | 'topics' | 'configure' | 'generate' | 'review';
@@ -131,35 +136,32 @@ function clearPaperDraft() {
   }
 }
 
-export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorStudioProps> = ({ role = 'FACULTY' }) => {
+export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps> = ({
+  role = 'FACULTY',
+  initialSelectedQuestions,
+  onExitToQuestionBank,
+}) => {
+  const hasInitialSelection = !!initialSelectedQuestions && initialSelectedQuestions.length > 0;
   const [savedDraft] = useState(loadPaperDraft);
-  const [hasRestoredDraft] = useState(() => savedDraft !== null);
+  // An explicit "build from these selected questions" action always wins over a stale restored
+  // draft — the user just took a deliberate new action, not resuming an old one.
+  const [hasRestoredDraft] = useState(() => !hasInitialSelection && savedDraft !== null);
 
-  const [activeStep, setActiveStep] = useState<StepId>(savedDraft?.activeStep || 'resources');
+  const [activeStep, setActiveStep] = useState<StepId>(
+    hasInitialSelection ? 'review' : savedDraft?.activeStep || 'resources'
+  );
 
   // Governance & Bounds
   const [minCount] = useState(1);
   const [maxCount] = useState(500);
 
-  // Step 1 — Resources & JSONL Question Bank Import
+  // Step 1 — Resources (source material for AI-shortfall RAG grounding — a different concern
+  // from bulk question import, which now lives in Question Bank -> Import / Extract)
   const [documents, setDocuments] = useState<any[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const jsonlFileInputRef = useRef<HTMLInputElement>(null);
-
-  // JSONL Import State
-  const [jsonlFile, setJsonlFile] = useState<File | null>(null);
-  const [jsonlPreview, setJsonlPreview] = useState<any | null>(null);
-  const [jsonlImportResult, setJsonlImportResult] = useState<any | null>(null);
-  const [isParsingJSONL, setIsParsingJSONL] = useState(false);
-  const [isImportingJSONL, setIsImportingJSONL] = useState(false);
-  // Target subject for the JSONL import — required, never inferred from file content (a prior
-  // version silently hardcoded every JSONL import into one fixed subject regardless of what was
-  // actually in the file, mixing unrelated question sets together).
-  const [jsonlTargetSubjectId, setJsonlTargetSubjectId] = useState<string>('');
-  const [jsonlNewSubjectName, setJsonlNewSubjectName] = useState<string>('');
 
   // Step 2 — Subject & Topics Availability Matrix (Real DB counts)
   const [subjects, setSubjects] = useState<any[]>([]);
@@ -198,8 +200,12 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Step 5 — Review Table & Final Exam Draft
-  const [paperQuestions, setPaperQuestions] = useState<any[]>(savedDraft?.paperQuestions || []);
-  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set(savedDraft?.selectedQuestionIds || []));
+  const [paperQuestions, setPaperQuestions] = useState<any[]>(
+    hasInitialSelection ? initialSelectedQuestions! : savedDraft?.paperQuestions || []
+  );
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(
+    new Set(hasInitialSelection ? initialSelectedQuestions!.map((q: any) => q.id) : savedDraft?.selectedQuestionIds || [])
+  );
 
   // Finalized Exam Draft State
   const [finalizedExam, setFinalizedExam] = useState<any | null>(null);
@@ -330,37 +336,58 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
     }
   }, []);
 
+  // A ref (not a dependency) so this callback keeps a stable identity across subject changes —
+  // it previously depended on `selectedSubjectId` directly, which meant selecting any subject
+  // recreated `loadSubjects`, re-triggered the mount effect below, and refired the subjects list
+  // fetch repeatedly. That request storm was racing the topic-availability fetch for the subject
+  // the user had just picked, which is what caused the wrong/empty topics found live via UI
+  // testing — the previous stale-response guard alone wasn't enough while this kept firing.
+  const selectedSubjectIdRef = useRef(selectedSubjectId);
+  useEffect(() => {
+    selectedSubjectIdRef.current = selectedSubjectId;
+  }, [selectedSubjectId]);
+
   const loadSubjects = useCallback(async () => {
     try {
       const res = await aiService.getQuestionBankSubjects();
       if (res?.success && res.data?.length > 0) {
         setSubjects(res.data);
-        if (!selectedSubjectId) setSelectedSubjectId(res.data[0].id);
+        if (!selectedSubjectIdRef.current) setSelectedSubjectId(res.data[0].id);
       }
     } catch (e: any) {
       console.error('Failed to load subjects:', e);
     }
-  }, [selectedSubjectId]);
+  }, []);
 
   useEffect(() => {
     loadDocuments();
     loadSubjects();
-  }, [loadDocuments, loadSubjects]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount only — loadDocuments/loadSubjects now have stable identities
 
-  // Load Topic Availability Matrix when subject changes
+  // Load Topic Availability Matrix when subject changes. Guarded against out-of-order
+  // responses: switching subjects quickly (e.g. the initial default-subject load racing a
+  // user's immediate explicit selection) could let an older, slower request resolve after a
+  // newer one and silently overwrite the correct topics with the previous subject's — found
+  // live via UI testing (selecting a 251-question subject showed one unrelated 0-question topic
+  // from the subject that had loaded by default before it).
+  const latestSubjectRequestRef = useRef<string | null>(null);
   const loadTopicAvailability = useCallback(async (subjId: string) => {
     if (!subjId) return;
+    latestSubjectRequestRef.current = subjId;
     setLoadingTopics(true);
     try {
       const res = await aiService.getTopicAvailability(subjId);
+      if (latestSubjectRequestRef.current !== subjId) return; // a newer request has since superseded this one
       if (res?.success) {
         setTopicAvailability(res.data || []);
         setSelectedTopicIds((res.data || []).map((t: any) => t.topicId));
       }
     } catch (e: any) {
+      if (latestSubjectRequestRef.current !== subjId) return;
       setErrorMsg(e.response?.data?.message || 'Failed to load topic availability.');
     } finally {
-      setLoadingTopics(false);
+      if (latestSubjectRequestRef.current === subjId) setLoadingTopics(false);
     }
   }, []);
 
@@ -396,64 +423,6 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
   // Distribution target calculation helpers
   const diffSum = easyPercent + medPercent + hardPercent;
   const typeSum = mcqPercent + msqPercent + natPercent;
-
-  // JSONL Question Bank Import Actions
-  const handleSelectJSONLFile = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const file = files[0];
-    setErrorMsg(null);
-    setJsonlFile(file);
-    setIsParsingJSONL(true);
-    setJsonlPreview(null);
-    setJsonlImportResult(null);
-    setJsonlTargetSubjectId('');
-    setJsonlNewSubjectName('');
-
-    try {
-      const res = await aiService.previewJSONLImport(file);
-      if (res?.success) {
-        setJsonlPreview(res.data);
-      } else {
-        setErrorMsg(res?.message || 'Failed to parse JSONL file.');
-      }
-    } catch (e: any) {
-      setErrorMsg(e.response?.data?.message || 'Failed to parse JSONL file.');
-    } finally {
-      setIsParsingJSONL(false);
-    }
-  };
-
-  const handleExecuteJSONLImport = async () => {
-    if (!jsonlFile && !jsonlPreview) return;
-    if (!jsonlTargetSubjectId && !jsonlNewSubjectName.trim()) {
-      setErrorMsg('Select a target subject (or name a new one) before importing — the questions in this file need a real home, not a guessed one.');
-      return;
-    }
-    setErrorMsg(null);
-    setIsImportingJSONL(true);
-
-    try {
-      const target = jsonlTargetSubjectId
-        ? { subjectId: jsonlTargetSubjectId }
-        : { subjectName: jsonlNewSubjectName.trim() };
-      const res = await aiService.importJSONL(jsonlFile!, target);
-      if (res?.success) {
-        setJsonlImportResult(res.data);
-        showToast('JSONL Question Bank import complete!');
-        // Refresh Subjects and Topic Availability Matrix from PostgreSQL!
-        await loadSubjects();
-        if (selectedSubjectId) {
-          await loadTopicAvailability(selectedSubjectId);
-        }
-      } else {
-        setErrorMsg(res?.message || 'JSONL Import failed.');
-      }
-    } catch (e: any) {
-      setErrorMsg(e.response?.data?.message || 'JSONL Import failed.');
-    } finally {
-      setIsImportingJSONL(false);
-    }
-  };
 
   // Handle Paper Preview calculation
   const handleCalculatePreview = async () => {
@@ -724,19 +693,14 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => jsonlFileInputRef.current?.click()}
-              className="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5" /> Upload Question Bank (.JSONL)
-            </button>
-            <input
-              ref={jsonlFileInputRef}
-              type="file"
-              accept=".jsonl,.txt"
-              className="hidden"
-              onChange={(e) => { handleSelectJSONLFile(e.target.files); e.target.value = ''; }}
-            />
+            {onExitToQuestionBank && (
+              <button
+                onClick={onExitToQuestionBank}
+                className="px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold transition-all flex items-center gap-1.5"
+              >
+                ← Back to Question Bank
+              </button>
+            )}
           </div>
         </div>
 
@@ -789,203 +753,18 @@ export const AIBatchQuestionGeneratorStudio: React.FC<AIBatchQuestionGeneratorSt
           </div>
         )}
 
-        {/* JSONL IMPORT PREVIEW & COMPLETION MODAL / VIEW */}
-        {jsonlPreview && !jsonlImportResult && (
-          <section className="bg-white border-2 border-emerald-600 rounded p-6 space-y-5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <div>
-                <h2 className="text-sm font-bold uppercase text-slate-900">Question Bank Import Preview</h2>
-                <p className="text-xs text-slate-500 mt-0.5">File: <span className="font-mono font-bold text-slate-800">{jsonlPreview.fileName}</span></p>
-              </div>
-              <button onClick={() => setJsonlPreview(null)} className="text-slate-400 hover:text-slate-700">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Target Subject — required. Never guessed from file content. */}
-            <div className="bg-amber-50 border border-amber-200 rounded p-3 space-y-2">
-              <label className="block text-xs font-bold text-amber-900 uppercase tracking-wider">
-                Import Into Subject <span className="text-red-600">*</span>
-              </label>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <select
-                  value={jsonlTargetSubjectId}
-                  onChange={(e) => { setJsonlTargetSubjectId(e.target.value); if (e.target.value) setJsonlNewSubjectName(''); }}
-                  className="flex-1 p-2 border border-slate-300 rounded text-xs bg-white"
-                >
-                  <option value="">— Create a new subject —</option>
-                  {subjects.map((s: any) => (
-                    <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
-                  ))}
-                </select>
-                {!jsonlTargetSubjectId && (
-                  <input
-                    type="text"
-                    value={jsonlNewSubjectName}
-                    onChange={(e) => setJsonlNewSubjectName(e.target.value)}
-                    placeholder="New subject name, e.g. Data Structures"
-                    className="flex-1 p-2 border border-slate-300 rounded text-xs"
-                  />
-                )}
-              </div>
-              <p className="text-[11px] text-amber-800">
-                These {jsonlPreview.totalRecords} records will be organized under this subject as one module ("Chapter 1") with a topic per {jsonlPreview.topicsCount} distinct topic heading in the file.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 text-xs font-mono text-center">
-              <div className="p-3 bg-slate-50 border rounded">
-                <div className="text-slate-500 text-[10px]">Records</div>
-                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.totalRecords}</div>
-              </div>
-              <div className="p-3 bg-slate-50 border rounded">
-                <div className="text-slate-500 text-[10px]">Topics</div>
-                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.topicsCount}</div>
-              </div>
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded">
-                <div className="text-emerald-700 text-[10px]">Verified</div>
-                <div className="font-bold text-emerald-900 mt-1">{jsonlPreview.verifiedCount}</div>
-              </div>
-              <div className="p-3 bg-slate-100 border border-slate-300 rounded">
-                <div className="text-slate-700 text-[10px]">Unanswered</div>
-                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.unansweredInSourceCount}</div>
-              </div>
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded">
-                <div className="text-amber-700 text-[10px]">Needs Review</div>
-                <div className="font-bold text-amber-900 mt-1">{jsonlPreview.needsReviewCount}</div>
-              </div>
-              <div className="p-3 bg-slate-50 border rounded">
-                <div className="text-slate-500 text-[10px]">Rejected</div>
-                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.rejectedCount}</div>
-              </div>
-              <div className="p-3 bg-slate-50 border rounded">
-                <div className="text-slate-500 text-[10px]">Duplicates</div>
-                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.duplicateCount}</div>
-              </div>
-              <div className="p-3 bg-slate-50 border rounded">
-                <div className="text-slate-500 text-[10px]">Invalid</div>
-                <div className="font-bold text-slate-900 mt-1">{jsonlPreview.invalidCount}</div>
-              </div>
-            </div>
-
-            {/* Topic Breakdown Table */}
-            <div className="border border-slate-200 rounded max-h-60 overflow-y-auto">
-              <table className="w-full text-xs font-mono">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 sticky top-0">
-                  <tr className="text-left">
-                    <th className="px-3 py-2 font-semibold">Topic</th>
-                    <th className="px-3 py-2 font-semibold text-center">Total</th>
-                    <th className="px-3 py-2 font-semibold text-center">Verified</th>
-                    <th className="px-3 py-2 font-semibold text-center">Unanswered</th>
-                    <th className="px-3 py-2 font-semibold text-center">Needs Review</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {jsonlPreview.topicBreakdown.map((t: any) => (
-                    <tr key={t.topicHeading}>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{t.topicHeading}</td>
-                      <td className="px-3 py-2 text-center">{t.total}</td>
-                      <td className="px-3 py-2 text-center text-emerald-700 font-bold">{t.verified}</td>
-                      <td className="px-3 py-2 text-center text-slate-600">{t.unansweredInSource}</td>
-                      <td className="px-3 py-2 text-center text-amber-700">{t.needsReview}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
-              <button onClick={() => setJsonlPreview(null)} className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded hover:bg-slate-50">
-                Cancel
-              </button>
-              <button
-                onClick={handleExecuteJSONLImport}
-                disabled={isImportingJSONL || (!jsonlTargetSubjectId && !jsonlNewSubjectName.trim())}
-                title={!jsonlTargetSubjectId && !jsonlNewSubjectName.trim() ? 'Choose or name a target subject first' : undefined}
-                className="px-6 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded flex items-center gap-1.5 disabled:opacity-50"
-              >
-                {isImportingJSONL ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                Import {jsonlPreview.totalRecords} Questions to PostgreSQL
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* JSONL IMPORT COMPLETION SCREEN */}
-        {jsonlImportResult && (
-          <section className="bg-emerald-50 border-2 border-emerald-600 rounded p-6 space-y-4 text-emerald-950">
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="w-8 h-8 text-emerald-600" />
-              <div>
-                <h2 className="text-base font-bold uppercase">CHAPTER 1 IMPORT COMPLETE</h2>
-                <p className="text-xs text-emerald-800 mt-0.5">
-                  Successfully transactionally imported {jsonlImportResult.importedCount} questions into PostgreSQL.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 text-xs font-mono text-center">
-              <div className="p-2.5 bg-white border border-emerald-200 rounded">
-                <div className="text-slate-500 text-[10px]">Processed</div>
-                <div className="font-bold text-slate-900">{jsonlImportResult.totalProcessed}</div>
-              </div>
-              <div className="p-2.5 bg-white border border-emerald-200 rounded">
-                <div className="text-slate-500 text-[10px]">Imported</div>
-                <div className="font-bold text-emerald-700">{jsonlImportResult.importedCount}</div>
-              </div>
-              <div className="p-2.5 bg-white border border-emerald-200 rounded">
-                <div className="text-slate-500 text-[10px]">Skipped</div>
-                <div className="font-bold text-slate-700">{jsonlImportResult.skippedCount}</div>
-              </div>
-              <div className="p-2.5 bg-white border border-emerald-200 rounded">
-                <div className="text-slate-500 text-[10px]">Duplicates</div>
-                <div className="font-bold text-slate-700">{jsonlImportResult.duplicateCount}</div>
-              </div>
-              <div className="p-2.5 bg-white border border-emerald-200 rounded">
-                <div className="text-slate-500 text-[10px]">VERIFIED</div>
-                <div className="font-bold text-emerald-700">{jsonlImportResult.verifiedCount}</div>
-              </div>
-              <div className="p-2.5 bg-white border border-emerald-200 rounded">
-                <div className="text-slate-500 text-[10px]">UNANSWERED</div>
-                <div className="font-bold text-slate-700">{jsonlImportResult.unansweredCount}</div>
-              </div>
-              <div className="p-2.5 bg-white border border-emerald-200 rounded">
-                <div className="text-slate-500 text-[10px]">NEEDS REVIEW</div>
-                <div className="font-bold text-amber-700">{jsonlImportResult.needsReviewCount}</div>
-              </div>
-              <div className="p-2.5 bg-white border border-emerald-200 rounded">
-                <div className="text-slate-500 text-[10px]">REJECTED</div>
-                <div className="font-bold text-slate-700">{jsonlImportResult.rejectedCount}</div>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => {
-                  setJsonlImportResult(null);
-                  setJsonlPreview(null);
-                  setActiveStep('topics');
-                }}
-                className="px-5 py-2 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-bold rounded flex items-center gap-1.5"
-              >
-                View Question Bank <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
-          </section>
-        )}
-
         {/* ============================ STEP 1 — RESOURCES ============================ */}
-        {activeStep === 'resources' && !jsonlPreview && !jsonlImportResult && (
+        {activeStep === 'resources' && (
           <div className="space-y-5">
             <section className="bg-white border border-slate-200 rounded">
               <header className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
-                <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Source Resources &amp; Question Bank Files</h2>
+                <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Source Resources</h2>
                 <button
                   type="button"
-                  onClick={() => jsonlFileInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 flex items-center gap-1 cursor-pointer"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-3 py-1.5 rounded bg-blue-700 text-white text-xs font-bold hover:bg-blue-800 flex items-center gap-1 cursor-pointer"
                 >
-                  <FileSpreadsheet className="w-3.5 h-3.5" /> Upload Question Bank (.JSONL)
+                  <UploadCloud className="w-3.5 h-3.5" /> Upload Resource
                 </button>
               </header>
               <div className="p-5">

@@ -17,3 +17,5 @@ frontend/.env
 uploads/
 **/uploads/
 
+*.tsbuildinfo
+

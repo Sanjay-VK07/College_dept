@@ -56,9 +56,16 @@ import api from '@/lib/api';
 import { aiService } from '@/services/aiService';
 import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
 import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
+import { SmartQuestionPaperBuilder } from '@/components/question-bank/SmartQuestionPaperBuilder';
+import { QuestionBankImportPanel } from '@/components/question-bank/QuestionBankImportPanel';
 
 export default function AdminDashboard() {
   const router = useRouter();
+  // Question Bank sub-navigation: Library (browse/filter/select), Import (JSONL/Excel/CSV/PDF —
+  // one entry point), Builder (the relocated Smart Question Paper Builder).
+  const [questionBankView, setQuestionBankView] = useState<'LIBRARY' | 'IMPORT' | 'BUILDER'>('LIBRARY');
+  const [builderInitialQuestions, setBuilderInitialQuestions] = useState<any[] | undefined>(undefined);
+
   const [activeTab, setActiveTab] = useState<
     | 'OVERVIEW'
     | 'EXAMS'
@@ -174,6 +181,17 @@ export default function AdminDashboard() {
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
   const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
+  // Question Bank Library filters — client-side over the already-fetched `questions` array
+  // (~450 rows at current scale; not worth a new server-side query surface for this).
+  const [qbSearch, setQbSearch] = useState('');
+  const [qbSubjectFilter, setQbSubjectFilter] = useState('ALL');
+  const [qbTopicFilter, setQbTopicFilter] = useState('ALL');
+  const [qbTypeFilter, setQbTypeFilter] = useState('ALL');
+  const [qbDifficultyFilter, setQbDifficultyFilter] = useState('ALL');
+  const [qbVerificationFilter, setQbVerificationFilter] = useState('ALL');
+  const [qbOriginFilter, setQbOriginFilter] = useState('ALL');
+  const [qbDetailQuestion, setQbDetailQuestion] = useState<any | null>(null);
 
   // Live Clock & Reactive State
   const [currentDateTime, setCurrentDateTime] = useState<string>('');
@@ -871,9 +889,38 @@ export default function AdminDashboard() {
       return 0;
     });
 
-  // Questions extracted from an uploaded PDF are grouped under their source document
-  // in the UI instead of being listed individually here.
-  const individualQuestions = questions.filter((q: any) => !q.aiSources || q.aiSources.length === 0);
+  // Question Bank Library — every question (SOURCE-imported, individually authored, and
+  // AI-generated alike), filterable by subject/topic/type/difficulty/verification/origin.
+  const qbSubjectOptions = Array.from(
+    new Map(
+      questions
+        .map((q: any) => q.subtopic?.topic?.module?.subject)
+        .filter(Boolean)
+        .map((s: any) => [s.id, s])
+    ).values()
+  ).sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+  const qbTopicOptions = Array.from(
+    new Map(
+      questions
+        .filter((q: any) => qbSubjectFilter === 'ALL' || q.subtopic?.topic?.module?.subject?.id === qbSubjectFilter)
+        .map((q: any) => q.subtopic?.topic)
+        .filter(Boolean)
+        .map((t: any) => [t.id, t])
+    ).values()
+  ).sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+  const individualQuestions = questions.filter((q: any) => {
+    if (qbSearch && !q.text?.toLowerCase().includes(qbSearch.toLowerCase()) && !(q.customId || '').toLowerCase().includes(qbSearch.toLowerCase())) return false;
+    if (qbSubjectFilter !== 'ALL' && q.subtopic?.topic?.module?.subject?.id !== qbSubjectFilter) return false;
+    if (qbTopicFilter !== 'ALL' && q.subtopic?.topic?.id !== qbTopicFilter) return false;
+    if (qbTypeFilter !== 'ALL' && q.type !== qbTypeFilter) return false;
+    if (qbDifficultyFilter !== 'ALL' && q.difficulty !== qbDifficultyFilter) return false;
+    if (qbVerificationFilter !== 'ALL' && q.verificationStatus !== qbVerificationFilter) return false;
+    if (qbOriginFilter === 'AI_GENERATED' && !(q.aiSources && q.aiSources.length > 0) && q.origin !== 'AI_GENERATED') return false;
+    if (qbOriginFilter === 'SOURCE' && ((q.aiSources && q.aiSources.length > 0) || q.origin === 'AI_GENERATED')) return false;
+    return true;
+  });
 
   if (loading) {
     return (
@@ -1785,28 +1832,56 @@ export default function AdminDashboard() {
           {/* TAB 3: QUESTION BANK */}
           {activeTab === 'QUESTIONS' && (
             <div className="space-y-4">
-              {/* AI question generation now lives in one place: the AI Assistant tab's Source-
-                  Grounded Question Generator Studio (distribution controls, real progress,
-                  independent verification, auto-publish, and review queue all in one surface). */}
-              <div className="erp-card space-y-2 bg-gradient-to-r from-blue-50/50 to-indigo-50/30 border border-blue-200">
-                <div className="flex items-center space-x-2">
-                  <Zap className="w-4 h-4 text-blue-600" />
-                  <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                    AI Question Generation Moved
-                  </h3>
+              {/* Question Bank sub-navigation — Library / Import / Build Examination, the
+                  canonical home for the whole question-authoring workflow. */}
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-1 border-b border-slate-200">
+                  {([
+                    { id: 'LIBRARY', label: 'Questions' },
+                    { id: 'IMPORT', label: 'Import / Extract' },
+                    { id: 'BUILDER', label: 'Build Examination' },
+                  ] as const).map((v) => (
+                    <button
+                      key={v.id}
+                      onClick={() => {
+                        if (v.id !== 'BUILDER') setBuilderInitialQuestions(undefined);
+                        setQuestionBankView(v.id);
+                      }}
+                      className={`px-3.5 py-2 text-xs font-semibold border-b-2 transition-colors ${
+                        questionBankView === v.id
+                          ? 'border-[#1E40AF] text-[#1E40AF]'
+                          : 'border-transparent text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
                 </div>
-                <p className="text-xs text-slate-600">
-                  Source-grounded AI question generation, verification status, and the faculty review queue are now consolidated under the{' '}
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('AI_ASSISTANT')}
-                    className="font-semibold text-blue-700 underline hover:text-blue-900"
-                  >
-                    AI Assistant → AI Question Generator
-                  </button>{' '}
-                  tab.
-                </p>
+                {questionBankView === 'LIBRARY' && (
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setQuestionBankView('IMPORT')} className="erp-btn-secondary py-1.5 text-xs">
+                      Import Questions
+                    </button>
+                    <button
+                      onClick={() => { setBuilderInitialQuestions(undefined); setQuestionBankView('BUILDER'); }}
+                      className="erp-btn-primary py-1.5 text-xs"
+                    >
+                      Create Examination
+                    </button>
+                  </div>
+                )}
               </div>
+
+              {questionBankView === 'BUILDER' && (
+                <SmartQuestionPaperBuilder
+                  role="ADMIN"
+                  initialSelectedQuestions={builderInitialQuestions}
+                  onExitToQuestionBank={() => { setBuilderInitialQuestions(undefined); setQuestionBankView('LIBRARY'); }}
+                />
+              )}
+
+              {questionBankView === 'LIBRARY' && (
+              <>
 
               {/* Pending Solutions Review Queue */}
               {pendingSolutions.length > 0 && (
@@ -1877,21 +1952,6 @@ export default function AdminDashboard() {
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                 <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Question Bank</h3>
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder="Max Qs (PDF only)"
-                      value={pdfTargetCount}
-                      onChange={(e) => setPdfTargetCount(e.target.value)}
-                      title="Optional: cap how many questions to extract from a PDF upload. Leave blank to extract every question with a confidently matched answer."
-                      className="erp-select text-xs py-1.5 w-32"
-                    />
-                  </div>
-                  <label className="erp-btn-secondary py-1 text-xs cursor-pointer">
-                    <span>Import File (Excel/CSV/JSON/PDF)</span>
-                    <input type="file" accept=".xlsx,.xls,.csv,.json,.pdf" onChange={handleQuestionFileUpload} className="hidden" />
-                  </label>
                   <button onClick={() => setIsAddQuestionOpen(true)} className="erp-btn-primary py-1 text-xs">
                     <Plus className="w-3.5 h-3.5" />
                     <span>Add Question</span>
@@ -1905,7 +1965,9 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* PDF Import Progress — real background job status, polled every 3s */}
+              {/* PDF Import Progress — real background job status, polled every 3s. Import itself
+                  now happens from the Import / Extract sub-tab; this stays visible from Library
+                  too so an in-flight extraction is never lost from view mid-navigation. */}
               {pdfImportJob && (
                 <div className={`erp-card space-y-2 border-l-4 ${
                   pdfImportJob.status === 'COMPLETED'
@@ -2010,6 +2072,64 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              {/* Library filters */}
+              <div className="erp-card space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={qbSearch}
+                    onChange={(e) => setQbSearch(e.target.value)}
+                    placeholder="Search text or question ID..."
+                    className="erp-input text-xs py-1.5 w-56"
+                  />
+                  <select value={qbSubjectFilter} onChange={(e) => { setQbSubjectFilter(e.target.value); setQbTopicFilter('ALL'); }} className="erp-select text-xs py-1.5">
+                    <option value="ALL">All Subjects</option>
+                    {qbSubjectOptions.map((s: any) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                  <select value={qbTopicFilter} onChange={(e) => setQbTopicFilter(e.target.value)} className="erp-select text-xs py-1.5">
+                    <option value="ALL">All Topics</option>
+                    {qbTopicOptions.map((t: any) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  <select value={qbTypeFilter} onChange={(e) => setQbTypeFilter(e.target.value)} className="erp-select text-xs py-1.5">
+                    <option value="ALL">All Types</option>
+                    <option value="MCQ">MCQ</option>
+                    <option value="MSQ">MSQ</option>
+                    <option value="NAT">NAT</option>
+                  </select>
+                  <select value={qbDifficultyFilter} onChange={(e) => setQbDifficultyFilter(e.target.value)} className="erp-select text-xs py-1.5">
+                    <option value="ALL">All Difficulties</option>
+                    <option value="EASY">Easy</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HARD">Hard</option>
+                  </select>
+                  <select value={qbVerificationFilter} onChange={(e) => setQbVerificationFilter(e.target.value)} className="erp-select text-xs py-1.5">
+                    <option value="ALL">All Verification</option>
+                    <option value="VERIFIED">Verified</option>
+                    <option value="NEEDS_REVIEW">Needs Review</option>
+                    <option value="UNANSWERED_IN_SOURCE">Unanswered in Source</option>
+                    <option value="REJECTED">Rejected</option>
+                  </select>
+                  <select value={qbOriginFilter} onChange={(e) => setQbOriginFilter(e.target.value)} className="erp-select text-xs py-1.5">
+                    <option value="ALL">Source + AI Generated</option>
+                    <option value="SOURCE">Source Only</option>
+                    <option value="AI_GENERATED">AI Generated Only</option>
+                  </select>
+                  {(qbSearch || qbSubjectFilter !== 'ALL' || qbTopicFilter !== 'ALL' || qbTypeFilter !== 'ALL' || qbDifficultyFilter !== 'ALL' || qbVerificationFilter !== 'ALL' || qbOriginFilter !== 'ALL') && (
+                    <button
+                      onClick={() => { setQbSearch(''); setQbSubjectFilter('ALL'); setQbTopicFilter('ALL'); setQbTypeFilter('ALL'); setQbDifficultyFilter('ALL'); setQbVerificationFilter('ALL'); setQbOriginFilter('ALL'); }}
+                      className="text-xs text-blue-700 hover:underline"
+                    >
+                      Clear Filters
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-500 font-mono">{individualQuestions.length} of {questions.length} questions shown</p>
+              </div>
+
               {/* Bulk action toolbar — appears only when one or more questions are selected */}
               {selectedQuestionIds.size > 0 && (
                 <div className="erp-card flex flex-wrap items-center justify-between gap-2 border-l-4 border-l-red-500 bg-red-50/40">
@@ -2017,8 +2137,21 @@ export default function AdminDashboard() {
                     ✓ {selectedQuestionIds.size} question{selectedQuestionIds.size === 1 ? '' : 's'} selected
                   </span>
                   <div className="flex items-center gap-2">
-                    {/* Future bulk actions (change difficulty/topic/type, export selected, etc.)
-                        get their own button here, next to Delete Selected. */}
+                    <button
+                      onClick={() => {
+                        const selected = individualQuestions.filter((q: any) => selectedQuestionIds.has(q.id));
+                        const unverified = selected.filter((q: any) => q.verificationStatus !== 'VERIFIED');
+                        if (unverified.length > 0) {
+                          showToast(`${unverified.length} selected question(s) aren't VERIFIED yet — only VERIFIED questions can enter an examination.`);
+                          return;
+                        }
+                        setBuilderInitialQuestions(selected);
+                        setQuestionBankView('BUILDER');
+                      }}
+                      className="erp-btn-primary py-1 px-3 text-[11px]"
+                    >
+                      Create Examination From Selected
+                    </button>
                     <button
                       onClick={() => setIsBulkDeleteConfirmOpen(true)}
                       className="erp-btn-danger py-1 px-3 text-[11px]"
@@ -2053,13 +2186,17 @@ export default function AdminDashboard() {
                             }
                           }}
                           onChange={handleToggleSelectAllVisible}
-                          title="Select all questions on this page"
+                          title="Select all questions matching the current filters"
                         />
                       </th>
                       <th>Question Code</th>
                       <th>Question Statement</th>
-                      <th>Question Type</th>
+                      <th>Subject / Topic</th>
+                      <th>Type</th>
                       <th>Difficulty</th>
+                      <th>Origin</th>
+                      <th>Verification</th>
+                      <th>Source</th>
                       <th>Marks</th>
                       <th>Actions</th>
                     </tr>
@@ -2067,14 +2204,18 @@ export default function AdminDashboard() {
                   <tbody>
                     {individualQuestions.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="py-8 text-center text-slate-500">
-                          No individually authored questions found in Question Bank database.
+                        <td colSpan={11} className="py-8 text-center text-slate-500">
+                          No questions match the current filters.
                         </td>
                       </tr>
                     ) : (
-                      individualQuestions.map((q) => (
-                        <tr key={q.id} className={selectedQuestionIds.has(q.id) ? 'bg-blue-50/40' : ''}>
-                          <td>
+                      individualQuestions.map((q: any) => (
+                        <tr
+                          key={q.id}
+                          className={`cursor-pointer ${selectedQuestionIds.has(q.id) ? 'bg-blue-50/40' : ''}`}
+                          onClick={() => setQbDetailQuestion(q)}
+                        >
+                          <td onClick={(e) => e.stopPropagation()}>
                             <input
                               type="checkbox"
                               className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
@@ -2082,12 +2223,40 @@ export default function AdminDashboard() {
                               onChange={() => handleToggleSelectQuestion(q.id)}
                             />
                           </td>
-                          <td className="font-mono font-bold text-[#1E40AF]">{q.id.slice(0, 8)}</td>
+                          <td className="font-mono font-bold text-[#1E40AF]">{q.customId || q.id.slice(0, 8)}</td>
                           <td className="font-semibold text-slate-900 max-w-xs truncate">{q.text}</td>
+                          <td className="text-xs text-slate-600 max-w-[10rem] truncate">
+                            {q.subtopic?.topic?.module?.subject?.name || '—'}
+                            {q.subtopic?.topic?.name ? <span className="block text-[10px] text-slate-400">{q.subtopic.topic.name}</span> : null}
+                          </td>
                           <td><span className="erp-badge-gray">{q.type}</span></td>
                           <td><span className="erp-badge-gray">{q.difficulty}</span></td>
-                          <td className="font-bold font-mono text-emerald-700">+{q.marks}</td>
                           <td>
+                            <span className={`erp-badge-${(q.aiSources && q.aiSources.length > 0) || q.origin === 'AI_GENERATED' ? 'blue' : 'gray'}`}>
+                              {(q.aiSources && q.aiSources.length > 0) || q.origin === 'AI_GENERATED' ? 'AI_GENERATED' : 'SOURCE'}
+                            </span>
+                          </td>
+                          <td>
+                            <span
+                              className={`erp-badge-${
+                                q.verificationStatus === 'VERIFIED'
+                                  ? 'green'
+                                  : q.verificationStatus === 'NEEDS_REVIEW'
+                                  ? 'amber'
+                                  : q.verificationStatus === 'REJECTED'
+                                  ? 'red'
+                                  : 'gray'
+                              }`}
+                            >
+                              {q.verificationStatus || '—'}
+                            </span>
+                          </td>
+                          <td className="text-xs text-slate-500 font-mono">
+                            {q.sourcePage ? `Pg ${q.sourcePage}` : '—'}
+                            {q.sourceHeading ? <span className="block text-[10px] text-slate-400 truncate max-w-[8rem]">{q.sourceHeading}</span> : null}
+                          </td>
+                          <td className="font-bold font-mono text-emerald-700">+{q.marks}</td>
+                          <td onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center space-x-1">
                               <button
                                 disabled={isGeneratingSolutionId === q.id}
@@ -2114,6 +2283,19 @@ export default function AdminDashboard() {
                   </tbody>
                 </table>
               </div>
+              </>
+              )}
+
+              {questionBankView === 'IMPORT' && (
+                <QuestionBankImportPanel
+                  pdfTargetCount={pdfTargetCount}
+                  setPdfTargetCount={setPdfTargetCount}
+                  onQuestionFileUpload={handleQuestionFileUpload}
+                  pdfImportJob={pdfImportJob}
+                  onDismissPdfImportJob={() => setPdfImportJob(null)}
+                  onImportComplete={() => { fetchInitialData(); setQuestionBankView('LIBRARY'); }}
+                />
+              )}
             </div>
           )}
 
@@ -2473,7 +2655,7 @@ export default function AdminDashboard() {
               </div>
               <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
                 <button type="button" onClick={() => setIsCreateExamOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
-                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Schedule & Publish Paper</button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Create Draft Examination</button>
               </div>
             </form>
           </div>
@@ -2600,6 +2782,92 @@ export default function AdminDashboard() {
       )}
 
       {/* Bulk Delete Confirmation Modal */}
+      {/* Question Bank Library — detail modal */}
+      {qbDetailQuestion && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4" onClick={() => setQbDetailQuestion(null)}>
+          <div className="erp-card max-w-2xl w-full max-h-[85vh] overflow-y-auto space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#1E40AF] font-mono">{qbDetailQuestion.customId || qbDetailQuestion.id}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {qbDetailQuestion.subtopic?.topic?.module?.subject?.name || 'General'}
+                  {qbDetailQuestion.subtopic?.topic?.name ? ` → ${qbDetailQuestion.subtopic.topic.name}` : ''}
+                </p>
+              </div>
+              <button onClick={() => setQbDetailQuestion(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className="erp-badge-gray">{qbDetailQuestion.type}</span>
+              <span className="erp-badge-gray">{qbDetailQuestion.difficulty}</span>
+              <span className={`erp-badge-${(qbDetailQuestion.aiSources && qbDetailQuestion.aiSources.length > 0) || qbDetailQuestion.origin === 'AI_GENERATED' ? 'blue' : 'gray'}`}>
+                {(qbDetailQuestion.aiSources && qbDetailQuestion.aiSources.length > 0) || qbDetailQuestion.origin === 'AI_GENERATED' ? 'AI_GENERATED' : 'SOURCE'}
+              </span>
+              <span
+                className={`erp-badge-${
+                  qbDetailQuestion.verificationStatus === 'VERIFIED'
+                    ? 'green'
+                    : qbDetailQuestion.verificationStatus === 'NEEDS_REVIEW'
+                    ? 'amber'
+                    : qbDetailQuestion.verificationStatus === 'REJECTED'
+                    ? 'red'
+                    : 'gray'
+                }`}
+              >
+                {qbDetailQuestion.verificationStatus || 'UNKNOWN'}
+              </span>
+            </div>
+
+            <p className="text-sm font-semibold text-slate-900 leading-relaxed whitespace-pre-wrap">{qbDetailQuestion.text}</p>
+
+            {Array.isArray(qbDetailQuestion.options) && qbDetailQuestion.options.length > 0 && (
+              <div className="space-y-1.5">
+                {qbDetailQuestion.options.map((opt: any, idx: number) => {
+                  const correctIndices = Array.isArray(qbDetailQuestion.correctAnswer) ? qbDetailQuestion.correctAnswer : [];
+                  const isCorrect = correctIndices.includes(idx);
+                  return (
+                    <div
+                      key={idx}
+                      className={`text-xs p-2 rounded border flex items-center gap-2 ${
+                        isCorrect ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold' : 'bg-slate-50 border-slate-200 text-slate-700'
+                      }`}
+                    >
+                      <span className="font-mono font-bold">{String.fromCharCode(65 + idx)}.</span>
+                      <span>{opt.text || opt}</span>
+                      {isCorrect && <CheckCircle className="w-3.5 h-3.5 text-emerald-600 ml-auto shrink-0" />}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-xs">
+              <span className="font-bold text-slate-700">Correct Answer: </span>
+              <span className="font-mono text-emerald-700">{JSON.stringify(qbDetailQuestion.correctAnswer)}</span>
+            </div>
+
+            {qbDetailQuestion.explanation && (
+              <div className="p-2.5 bg-blue-50/50 border border-blue-200/60 rounded text-xs text-slate-700">
+                <span className="font-bold text-[#1E40AF]">Explanation: </span>
+                {qbDetailQuestion.explanation}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3 text-xs pt-2 border-t border-slate-200">
+              <div><span className="font-bold text-slate-700">Marks: </span>{qbDetailQuestion.marks}</div>
+              <div><span className="font-bold text-slate-700">Negative Marks: </span>{qbDetailQuestion.negativeMarks ?? 0}</div>
+              <div><span className="font-bold text-slate-700">Source Document: </span>{qbDetailQuestion.sourceDocument?.title || qbDetailQuestion.sourceDocument?.fileName || '—'}</div>
+              <div><span className="font-bold text-slate-700">Source Page: </span>{qbDetailQuestion.sourcePage || '—'}</div>
+              <div><span className="font-bold text-slate-700">Source Chapter: </span>{qbDetailQuestion.sourceChapter || '—'}</div>
+              <div><span className="font-bold text-slate-700">Source Section: </span>{qbDetailQuestion.sourceSection || '—'}</div>
+              <div className="col-span-2"><span className="font-bold text-slate-700">Source Heading: </span>{qbDetailQuestion.sourceHeading || '—'}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isBulkDeleteConfirmOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
           <div className="erp-card max-w-md w-full space-y-4">

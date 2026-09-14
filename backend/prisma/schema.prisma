@@ -172,6 +172,9 @@ model MockTest {
   targetSection      String?
   isPublished        Boolean                 @default(false)
   resultVisibility   ResultVisibility        @default(AFTER_EXAM_ENDS)
+  // Only meaningful when resultVisibility = MANUAL_PUBLISH: results stay hidden from students
+  // until a Faculty/Admin explicitly flips this, regardless of exam status or endTime.
+  resultsPublished   Boolean                 @default(false)
   solutionVisibility SolutionVisibility      @default(SHOW_AFTER_RESULT)
   shuffleQuestions   Boolean                 @default(true)
   shuffleOptions     Boolean                 @default(true)

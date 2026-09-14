@@ -48,7 +48,7 @@ export default function LoginPage() {
         if (role === 'STUDENT') {
           router.push('/student/dashboard');
         } else if (role === 'FACULTY') {
-          router.push('/faculty/invigilator/test-demo-123');
+          router.push('/faculty/invigilator');
         } else {
           router.push('/admin/dashboard');
         }
