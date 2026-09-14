@@ -1,15 +1,29 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { CheckCircle2, CheckCircle, AlertCircle, X, Loader2, ArrowRight, UploadCloud, AlertTriangle, Image as ImageIcon, FileArchive } from 'lucide-react';
+import {
+  CheckCircle2,
+  CheckCircle,
+  AlertCircle,
+  X,
+  Loader2,
+  ArrowRight,
+  UploadCloud,
+  AlertTriangle,
+  Image as ImageIcon,
+  FileArchive,
+  BookOpen,
+  PlusCircle,
+} from 'lucide-react';
 import { aiService } from '@/services/aiService';
+import { SearchableSubjectSelect, SubjectOption } from './SearchableSubjectSelect';
 
 interface JSONLImportPanelProps {
   onImportComplete?: () => void;
 }
 
 export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComplete }) => {
-  const [subjects, setSubjects] = useState<any[]>([]);
+  const [subjects, setSubjects] = useState<SubjectOption[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -17,27 +31,40 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
   const [importResult, setImportResult] = useState<any | null>(null);
   const [isParsing, setIsParsing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+
+  // Subject Selection / Creation State
+  const [subjectMode, setSubjectMode] = useState<'SELECT' | 'CREATE'>('SELECT');
   const [targetSubjectId, setTargetSubjectId] = useState<string>('');
   const [newSubjectName, setNewSubjectName] = useState<string>('');
+  const [newSubjectCode, setNewSubjectCode] = useState<string>('');
+  const [newDepartment, setNewDepartment] = useState<string>('CSE');
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadSubjects = () => {
     aiService
       .getQuestionBankSubjects()
       .then((res) => {
         if (res?.success) {
-          const list = res.data || [];
+          const list: SubjectOption[] = res.data || [];
           setSubjects(list);
-          // Default to Computer Science / COA subject if found
-          const defaultSubj = list.find((s: any) => s.code?.includes('COA') || s.name?.includes('Computer'));
-          if (defaultSubj) {
-            setTargetSubjectId(defaultSubj.id);
-          } else if (list.length > 0) {
-            setTargetSubjectId(list[0].id);
+          // Auto-select Computer Networks or Computer Organization if not already selected
+          if (!targetSubjectId && list.length > 0) {
+            const defaultSubj =
+              list.find((s) => s.name?.toLowerCase().includes('computer network')) ||
+              list.find((s) => s.code?.includes('COA') || s.name?.toLowerCase().includes('computer')) ||
+              list[0];
+            if (defaultSubj) {
+              setTargetSubjectId(defaultSubj.id);
+            }
           }
         }
       })
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    loadSubjects();
   }, []);
 
   const handleSelectFile = async (files: FileList | null) => {
@@ -65,20 +92,38 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
 
   const handleExecuteImport = async () => {
     if (!uploadedFile && !previewData) return;
-    if (!targetSubjectId && !newSubjectName.trim()) {
-      setErrorMsg('Select a target subject (or name a new one) before importing.');
+
+    if (subjectMode === 'SELECT' && !targetSubjectId) {
+      setErrorMsg('Please select a target subject.');
       return;
     }
+    if (subjectMode === 'CREATE' && !newSubjectName.trim()) {
+      setErrorMsg('Please enter a subject name for creation.');
+      return;
+    }
+
     setErrorMsg(null);
     setIsImporting(true);
 
     try {
-      const target = targetSubjectId
-        ? { subjectId: targetSubjectId }
-        : { subjectName: newSubjectName.trim() };
+      const target =
+        subjectMode === 'SELECT'
+          ? {
+              subjectId: targetSubjectId,
+              moduleName: previewData?.chapterName,
+            }
+          : {
+              subjectName: newSubjectName.trim(),
+              subjectCode: newSubjectCode.trim() || undefined,
+              department: newDepartment.trim() || 'CSE',
+              moduleName: previewData?.chapterName,
+            };
+
       const res = await aiService.importJSONL(uploadedFile!, target);
       if (res?.success) {
         setImportResult(res.data);
+        // Refresh subjects list so newly created subjects appear in state
+        loadSubjects();
       } else {
         setErrorMsg(res?.message || 'Question Bank Import failed.');
       }
@@ -88,6 +133,28 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
       setIsImporting(false);
     }
   };
+
+  // Derive target subject summary display metadata
+  const selectedSubject = subjects.find((s) => s.id === targetSubjectId);
+  const matchedExisting = newSubjectName.trim()
+    ? subjects.find((s) => s.name.trim().toLowerCase() === newSubjectName.trim().toLowerCase())
+    : null;
+
+  const targetSubjectDisplayName =
+    subjectMode === 'SELECT'
+      ? selectedSubject?.name || 'No subject selected'
+      : matchedExisting
+      ? matchedExisting.name
+      : newSubjectName.trim() || 'Pending Subject Name';
+
+  const targetSubjectDisplayCode =
+    subjectMode === 'SELECT'
+      ? selectedSubject?.code || (selectedSubject?.id ? `${selectedSubject.id.slice(0, 10)}...` : '—')
+      : matchedExisting
+      ? `${matchedExisting.code || matchedExisting.id.slice(0, 10)} (Reusing existing)`
+      : newSubjectCode.trim() || 'Auto-generated code';
+
+  const chapterDisplayName = previewData?.chapterName || 'Chapter 1';
 
   return (
     <div className="space-y-4">
@@ -101,6 +168,7 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
         </div>
       )}
 
+      {/* UPLOAD DROPZONE */}
       {!previewData && !importResult && (
         <div
           onClick={() => fileInputRef.current?.click()}
@@ -148,6 +216,8 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">Question Bank Import Preview</h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 File: <span className="font-mono font-bold text-slate-900">{previewData.fileName}</span>
+                <span className="mx-2">•</span>
+                Chapter: <span className="font-bold text-emerald-700">{chapterDisplayName}</span>
               </p>
             </div>
             <button onClick={() => setPreviewData(null)} className="text-slate-400 hover:text-slate-700">
@@ -175,37 +245,97 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
             </div>
           )}
 
-          {/* Target Subject Picker */}
-          <div className="bg-slate-50 border border-slate-200 rounded p-3 space-y-2">
-            <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Target Subject <span className="text-red-600">*</span>
-            </label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <select
-                value={targetSubjectId}
-                onChange={(e) => {
-                  setTargetSubjectId(e.target.value);
-                  if (e.target.value) setNewSubjectName('');
-                }}
-                className="flex-1 p-2 border border-slate-300 rounded text-xs bg-white font-medium"
-              >
-                <option value="">— Create a new subject —</option>
-                {subjects.map((s: any) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.code})
-                  </option>
-                ))}
-              </select>
-              {!targetSubjectId && (
-                <input
-                  type="text"
-                  value={newSubjectName}
-                  onChange={(e) => setNewSubjectName(e.target.value)}
-                  placeholder="New subject name, e.g. Computer Organization"
-                  className="flex-1 p-2 border border-slate-300 rounded text-xs"
-                />
-              )}
+          {/* TARGET SUBJECT SELECTION / ENTRY COMPONENT */}
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                Subject <span className="text-red-600">*</span>
+              </span>
+              <div className="inline-flex rounded-md shadow-sm bg-slate-200/90 p-0.5" role="group">
+                <button
+                  type="button"
+                  onClick={() => setSubjectMode('SELECT')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded transition-all ${
+                    subjectMode === 'SELECT'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Select existing subject ▾
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubjectMode('CREATE')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded transition-all flex items-center gap-1 ${
+                    subjectMode === 'CREATE'
+                      ? 'bg-emerald-700 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  + Create new subject
+                </button>
+              </div>
             </div>
+
+            {subjectMode === 'SELECT' ? (
+              <div className="space-y-1.5">
+                <SearchableSubjectSelect
+                  subjects={subjects}
+                  value={targetSubjectId}
+                  onChange={(id) => setTargetSubjectId(id)}
+                  placeholder="Type to search existing subjects..."
+                  className="w-full"
+                />
+                <p className="text-[11px] text-slate-500">
+                  Search by subject name. Displays subject name prominently with its code as secondary metadata.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Subject Name <span className="text-red-600">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newSubjectName}
+                      onChange={(e) => setNewSubjectName(e.target.value)}
+                      placeholder="e.g. Computer Networks"
+                      className="w-full p-2 border border-slate-300 rounded text-xs bg-white font-medium focus:ring-1 focus:ring-emerald-600 focus:border-emerald-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Subject Code <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newSubjectCode}
+                      onChange={(e) => setNewSubjectCode(e.target.value)}
+                      placeholder="e.g. CS_CN"
+                      className="w-full p-2 border border-slate-300 rounded text-xs bg-white font-mono uppercase focus:ring-1 focus:ring-emerald-600 focus:border-emerald-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px] text-slate-500 bg-white p-2.5 rounded border border-slate-200">
+                  <span>
+                    Department: <strong className="text-slate-800 font-mono">{newDepartment}</strong> (default)
+                  </span>
+                  {matchedExisting ? (
+                    <span className="text-emerald-700 font-semibold">
+                      ✓ Matches existing subject "{matchedExisting.name}" ({matchedExisting.code}) — will reuse without duplicate.
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 italic">
+                      Normalized matching (case-insensitive) prevents creating duplicate subjects.
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Core Metrics Grid */}
@@ -266,8 +396,29 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
             </div>
           )}
 
+          {/* PRE-IMPORT SUMMARY CARD */}
+          <div className="bg-slate-900 text-white rounded-lg p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+              <div>
+                <span className="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Target Subject</span>
+                <span className="font-bold text-white text-sm">{targetSubjectDisplayName}</span>
+              </div>
+              <div className="border-l border-slate-700 pl-4">
+                <span className="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Subject ID / Code</span>
+                <span className="font-mono text-emerald-400 font-semibold">{targetSubjectDisplayCode}</span>
+              </div>
+              <div className="border-l border-slate-700 pl-4">
+                <span className="text-slate-400 block text-[10px] uppercase tracking-wider font-semibold">Chapter</span>
+                <span className="font-bold text-sky-300 font-mono">{chapterDisplayName}</span>
+              </div>
+            </div>
+            <div className="text-[11px] text-slate-400 sm:text-right">
+              Ready to import <strong>{previewData.validCount ?? previewData.totalRecords}</strong> questions
+            </div>
+          </div>
+
           {/* Action Buttons */}
-          <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
+          <div className="flex justify-end gap-3 pt-2 border-t border-slate-200">
             <button
               onClick={() => setPreviewData(null)}
               className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded hover:bg-slate-50"
@@ -276,7 +427,7 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
             </button>
             <button
               onClick={handleExecuteImport}
-              disabled={isImporting || (!targetSubjectId && !newSubjectName.trim())}
+              disabled={isImporting || (subjectMode === 'SELECT' && !targetSubjectId) || (subjectMode === 'CREATE' && !newSubjectName.trim())}
               className="px-6 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded flex items-center gap-1.5 disabled:opacity-50"
             >
               {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
@@ -286,43 +437,67 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
         </section>
       )}
 
-      {/* IMPORT COMPLETION SCREEN */}
+      {/* POST-IMPORT SUMMARY SCREEN */}
       {importResult && (
         <section className="bg-emerald-50 border-2 border-emerald-600 rounded-lg p-5 space-y-4 text-emerald-950 shadow-md">
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className="w-7 h-7 text-emerald-600 shrink-0" />
-            <div>
-              <h2 className="text-sm font-bold uppercase tracking-wide">Import Complete</h2>
-              <p className="text-xs text-emerald-800 mt-0.5">
-                Successfully processed {importResult.totalProcessed} records into PostgreSQL.
-              </p>
+          <div className="flex items-center justify-between border-b border-emerald-200 pb-3">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="w-7 h-7 text-emerald-600 shrink-0" />
+              <div>
+                <h2 className="text-sm font-bold uppercase tracking-wide">Import Complete</h2>
+                <p className="text-xs text-emerald-800 mt-0.5">
+                  Successfully imported dataset into Question Bank.
+                </p>
+              </div>
             </div>
           </div>
 
+          {/* Post-Import Target Card */}
+          <div className="bg-white border border-emerald-300 rounded-lg p-3.5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div>
+              <span className="text-slate-500 text-[10px] uppercase tracking-wider font-bold block">Subject</span>
+              <span className="font-bold text-slate-900 text-sm">{importResult.subjectName || targetSubjectDisplayName}</span>
+              {importResult.subjectCode && (
+                <span className="text-[10px] text-slate-500 font-mono block mt-0.5">Code: {importResult.subjectCode}</span>
+              )}
+            </div>
+            <div>
+              <span className="text-slate-500 text-[10px] uppercase tracking-wider font-bold block">Chapter</span>
+              <span className="font-bold text-emerald-800 font-mono text-sm">{importResult.moduleName || chapterDisplayName}</span>
+            </div>
+            <div>
+              <span className="text-slate-500 text-[10px] uppercase tracking-wider font-bold block">Package File</span>
+              <span className="font-mono text-slate-700 truncate block text-xs mt-0.5">{importResult.fileName}</span>
+            </div>
+          </div>
+
+          {/* Core Metrics Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs font-mono text-center">
-            <div className="p-2.5 bg-white border border-emerald-200 rounded">
-              <div className="text-slate-500 text-[10px]">Inserted</div>
+            <div className="p-2.5 bg-white border border-emerald-200 rounded shadow-sm">
+              <div className="text-slate-500 text-[10px]">Questions Processed</div>
+              <div className="font-bold text-slate-900 text-sm">{importResult.totalProcessed}</div>
+            </div>
+            <div className="p-2.5 bg-white border border-emerald-300 rounded shadow-sm">
+              <div className="text-emerald-700 text-[10px] font-bold">Inserted</div>
               <div className="font-bold text-emerald-700 text-sm">{importResult.importedCount}</div>
             </div>
-            <div className="p-2.5 bg-white border border-emerald-200 rounded">
+            <div className="p-2.5 bg-white border border-slate-200 rounded shadow-sm">
               <div className="text-slate-500 text-[10px]">Duplicates</div>
               <div className="font-bold text-slate-800 text-sm">{importResult.duplicateCount}</div>
             </div>
-            <div className="p-2.5 bg-white border border-blue-200 rounded">
-              <div className="text-slate-500 text-[10px]">With Figures</div>
-              <div className="font-bold text-blue-800 text-sm">{importResult.questionsWithFiguresCount ?? 0}</div>
-            </div>
-            <div className="p-2.5 bg-white border border-blue-200 rounded">
-              <div className="text-slate-500 text-[10px]">Figures (New)</div>
+            <div className="p-2.5 bg-white border border-blue-200 rounded shadow-sm">
+              <div className="text-blue-700 text-[10px]">Figures (New)</div>
               <div className="font-bold text-blue-700 text-sm">{importResult.figuresStoredCount ?? 0}</div>
             </div>
-            <div className="p-2.5 bg-white border border-indigo-200 rounded">
-              <div className="text-slate-500 text-[10px]">Figures (Reused)</div>
+            <div className="p-2.5 bg-white border border-indigo-200 rounded shadow-sm">
+              <div className="text-indigo-700 text-[10px]">Figures (Reused)</div>
               <div className="font-bold text-indigo-700 text-sm">{importResult.figuresReusedCount ?? 0}</div>
             </div>
-            <div className="p-2.5 bg-white border border-emerald-200 rounded">
-              <div className="text-slate-500 text-[10px]">VERIFIED</div>
-              <div className="font-bold text-emerald-700 text-sm">{importResult.verifiedCount}</div>
+            <div className={`p-2.5 bg-white border rounded shadow-sm ${importResult.missingFiguresCount > 0 ? 'border-amber-400 bg-amber-50' : 'border-slate-200'}`}>
+              <div className="text-slate-500 text-[10px]">Missing Figures</div>
+              <div className={`font-bold text-sm ${importResult.missingFiguresCount > 0 ? 'text-amber-800' : 'text-slate-800'}`}>
+                {importResult.missingFiguresCount ?? 0}
+              </div>
             </div>
           </div>
 
@@ -369,4 +544,3 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
     </div>
   );
 };
-

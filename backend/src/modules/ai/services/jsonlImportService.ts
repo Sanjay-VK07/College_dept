@@ -88,6 +88,7 @@ export interface ImportPreviewResult {
   duplicateCount: number;
   invalidCount: number;
   topicBreakdown: TopicBreakdownItem[];
+  chapterName?: string;
   validRecords: JSONLRecord[];
   invalidRecords: Array<{ line: number; error: string; raw: string }>;
 }
@@ -268,8 +269,27 @@ export class JSONLImportService {
 
     const topicBreakdown = Array.from(topicMap.values()).sort((a, b) => a.topicHeading.localeCompare(b.topicHeading));
 
+    let detectedChapter: string | null = null;
+    for (const rec of validRecords) {
+      if (rec.sourceChapter) {
+        detectedChapter = `Chapter ${String(rec.sourceChapter).replace(/^ch(?:apter)?\s*/i, '').trim()}`;
+        break;
+      }
+      if (rec.chapter) {
+        detectedChapter = `Chapter ${String(rec.chapter).replace(/^ch(?:apter)?\s*/i, '').trim()}`;
+        break;
+      }
+    }
+    if (!detectedChapter && fileName) {
+      const chMatch = fileName.match(/ch(?:apter)?[_ -]?0*(\d+)/i);
+      if (chMatch) {
+        detectedChapter = `Chapter ${parseInt(chMatch[1], 10)}`;
+      }
+    }
+
     return {
       fileName,
+      chapterName: detectedChapter || 'Chapter 1',
       totalRecords: validRecords.length + invalidRecords.length,
       validCount: validRecords.length,
       questionsWithFigures,
@@ -346,18 +366,21 @@ export class JSONLImportService {
       throw new Error('No valid records found in JSONL file.');
     }
 
-    if (!target.subjectId && !target.subjectName) {
+    const trimmedSubjectName = target.subjectName ? target.subjectName.trim() : undefined;
+    const trimmedSubjectCode = target.subjectCode ? target.subjectCode.trim() : undefined;
+
+    if (!target.subjectId && !trimmedSubjectName) {
       throw new Error('A target subject is required for JSONL import (subjectId of an existing subject, or subjectName to create/reuse one).');
     }
 
-    // 1. Resolve the caller-specified subject — by id if given, else find-or-create by name/code.
+    // 1. Resolve the caller-specified subject — by id if given, else find-or-create by normalized name/code.
     let subject = target.subjectId
       ? await prisma.subject.findUnique({ where: { id: target.subjectId } })
       : await prisma.subject.findFirst({
           where: {
             OR: [
-              { name: { equals: target.subjectName!, mode: 'insensitive' } },
-              ...(target.subjectCode ? [{ code: { equals: target.subjectCode, mode: 'insensitive' as const } }] : []),
+              ...(trimmedSubjectName ? [{ name: { equals: trimmedSubjectName, mode: 'insensitive' as const } }] : []),
+              ...(trimmedSubjectCode ? [{ code: { equals: trimmedSubjectCode, mode: 'insensitive' as const } }] : []),
             ],
           },
         });
@@ -369,14 +392,14 @@ export class JSONLImportService {
     if (!subject) {
       subject = await prisma.subject.create({
         data: {
-          name: target.subjectName!,
-          code: target.subjectCode || `GEN-${target.subjectName!.replace(/[^A-Za-z0-9]/g, '').slice(0, 12).toUpperCase()}-${Date.now() % 1000}`,
-          department: target.department || 'CSE',
+          name: trimmedSubjectName!,
+          code: trimmedSubjectCode || `GEN-${trimmedSubjectName!.replace(/[^A-Za-z0-9]/g, '').slice(0, 12).toUpperCase()}-${Date.now() % 1000}`,
+          department: target.department?.trim() || 'CSE',
         },
       });
     }
 
-    const moduleName = target.moduleName || 'Chapter 1';
+    const moduleName = target.moduleName?.trim() || preview.chapterName || 'Chapter 1';
 
     // 2. Pre-create or map Module & Topic & Subtopic taxonomy entities
     const topicHeadingToSubtopicMap = new Map<string, string>();
@@ -606,6 +629,10 @@ export class JSONLImportService {
 
     return {
       fileName,
+      subjectId: subject.id,
+      subjectName: subject.name,
+      subjectCode: subject.code,
+      moduleName,
       totalProcessed: preview.totalRecords,
       importedCount,
       skippedCount: preview.invalidCount + existingDuplicateCount,

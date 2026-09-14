@@ -59,6 +59,7 @@ import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
 import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 import { SmartQuestionPaperBuilder } from '@/components/question-bank/SmartQuestionPaperBuilder';
 import { QuestionBankImportPanel } from '@/components/question-bank/QuestionBankImportPanel';
+import { SearchableSubjectSelect } from '@/components/question-bank/SearchableSubjectSelect';
 import { CURRENT_INSTITUTION } from '@/config/institution';
 
 interface College {
@@ -2458,12 +2459,19 @@ export default function AdminDashboard() {
                     placeholder="Search text or question ID..."
                     className="erp-input text-xs py-1.5 w-56"
                   />
-                  <select value={qbSubjectFilter} onChange={(e) => { setQbSubjectFilter(e.target.value); setQbTopicFilter('ALL'); }} className="erp-select text-xs py-1.5">
-                    <option value="ALL">All Subjects</option>
-                    {qbSubjectOptions.map((s: any) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
+                  <SearchableSubjectSelect
+                    subjects={qbSubjectOptions}
+                    value={qbSubjectFilter}
+                    onChange={(val) => {
+                      setQbSubjectFilter(val);
+                      setQbTopicFilter('ALL');
+                    }}
+                    includeAllOption
+                    allOptionLabel="All Subjects"
+                    placeholder="All Subjects"
+                    size="sm"
+                    className="w-56"
+                  />
                   <select value={qbTopicFilter} onChange={(e) => setQbTopicFilter(e.target.value)} className="erp-select text-xs py-1.5">
                     <option value="ALL">All Topics</option>
                     {qbTopicOptions.map((t: any) => (
