@@ -51,6 +51,7 @@ import {
   FileCheck,
   PieChart as PieChartIcon,
   Bot,
+  Building,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { aiService } from '@/services/aiService';
@@ -58,6 +59,211 @@ import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
 import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 import { SmartQuestionPaperBuilder } from '@/components/question-bank/SmartQuestionPaperBuilder';
 import { QuestionBankImportPanel } from '@/components/question-bank/QuestionBankImportPanel';
+import { CURRENT_INSTITUTION } from '@/config/institution';
+
+interface College {
+  id: string;
+  code: string;
+  name: string;
+  domain?: string;
+  isDefault?: boolean;
+}
+
+interface MasterDepartment {
+  id: string;
+  code: string;
+  name: string;
+  collegeId: string;
+  active: boolean;
+  studentCount?: number;
+}
+
+const DEFAULT_COLLEGES: College[] = [
+  { id: 'citchennai', code: 'CIT', name: 'Chennai Institute of Technology', domain: 'citchennai.net', isDefault: true },
+  { id: 'uce', code: 'UCE', name: 'University College of Engineering', domain: 'uce.edu' },
+  { id: 'cit-auto', code: 'CIT-AUTO', name: 'CIT Autonomous College', domain: 'citauto.edu' },
+];
+
+const DEFAULT_DEPARTMENTS: MasterDepartment[] = [
+  // Fixed Institution: Chennai Institute of Technology (CIT)
+  { id: 'dept-cit-cse', code: 'CSE', name: 'Computer Science and Engineering', collegeId: 'citchennai', active: true },
+  { id: 'dept-cit-ece', code: 'ECE', name: 'Electronics & Communication', collegeId: 'citchennai', active: true },
+  { id: 'dept-cit-it', code: 'IT', name: 'Information Technology', collegeId: 'citchennai', active: true },
+  { id: 'dept-cit-aids', code: 'AI&DS', name: 'Artificial Intelligence and Data Science', collegeId: 'citchennai', active: true },
+  { id: 'dept-cit-bme', code: 'BME', name: 'Biomedical Engineering', collegeId: 'citchennai', active: true },
+  { id: 'dept-cit-mech', code: 'MECH', name: 'Mechanical Engineering', collegeId: 'citchennai', active: true },
+  { id: 'dept-cit-eee', code: 'EEE', name: 'Electrical and Electronics Engineering', collegeId: 'citchennai', active: true },
+  { id: 'dept-cit-civil', code: 'CIVIL', name: 'Civil Engineering', collegeId: 'citchennai', active: true },
+  { id: 'dept-cit-biotech', code: 'BIOTECH', name: 'Biotechnology', collegeId: 'citchennai', active: true },
+  // Preserved records for other colleges (non-destructive)
+  { id: 'dept-uce-civil', code: 'CIVIL', name: 'Civil Engineering', collegeId: 'uce', active: true },
+  { id: 'dept-uce-mech', code: 'MECH', name: 'Mechanical Engineering', collegeId: 'uce', active: true },
+  { id: 'dept-uce-eee', code: 'EEE', name: 'Electrical and Electronics Engineering', collegeId: 'uce', active: true },
+  { id: 'dept-uce-biotech', code: 'BIOTECH', name: 'Biotechnology', collegeId: 'uce', active: true },
+];
+
+const DEPARTMENT_CODE_MAP: Record<string, string> = {
+  'Computer Science and Engineering': 'CSE',
+  'Computer Science & Engineering': 'CSE',
+  'CSE': 'CSE',
+  'Electronics & Communication': 'ECE',
+  'Electronics and Communication': 'ECE',
+  'ECE': 'ECE',
+  'Information Technology': 'IT',
+  'IT': 'IT',
+  'Mechanical Engineering': 'MECH',
+  'MECH': 'MECH',
+  'Civil Engineering': 'CIVIL',
+  'CIVIL': 'CIVIL',
+  'Electrical and Electronics Engineering': 'EEE',
+  'Electrical & Electronics Engineering': 'EEE',
+  'EEE': 'EEE',
+  'Biotechnology': 'BIOTECH',
+  'Artificial Intelligence and Data Science': 'AI&DS',
+  'Artificial Intelligence & Data Science': 'AI&DS',
+  'Biomedical Engineering': 'BME',
+  'BME': 'BME',
+};
+
+const DEPARTMENT_FULL_NAME_MAP: Record<string, string> = {
+  'CSE': 'Computer Science and Engineering',
+  'ECE': 'Electronics & Communication',
+  'IT': 'Information Technology',
+  'MECH': 'Mechanical Engineering',
+  'CIVIL': 'Civil Engineering',
+  'EEE': 'Electrical and Electronics Engineering',
+  'BIOTECH': 'Biotechnology',
+  'AI&DS': 'Artificial Intelligence and Data Science',
+  'BME': 'Biomedical Engineering',
+};
+
+function getDepartmentCode(dept: string, masterList?: MasterDepartment[]): string {
+  if (!dept) return 'GEN';
+  const trimmed = dept.trim();
+  if (masterList && masterList.length > 0) {
+    const found = masterList.find(
+      (d) => d.name.toLowerCase() === trimmed.toLowerCase() || d.code.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (found) return found.code;
+  }
+  if (DEPARTMENT_CODE_MAP[trimmed]) return DEPARTMENT_CODE_MAP[trimmed];
+  if (trimmed.length <= 5) return trimmed.toUpperCase();
+  const words = trimmed.replace(/&/g, ' ').split(/\s+/).filter(Boolean);
+  if (words.length > 1) {
+    return words.map((w) => w[0].toUpperCase()).join('');
+  }
+  return trimmed.slice(0, 4).toUpperCase();
+}
+
+function getDepartmentFullName(dept: string, masterList?: MasterDepartment[]): string {
+  if (!dept) return 'General Department';
+  const trimmed = dept.trim();
+  if (masterList && masterList.length > 0) {
+    const found = masterList.find(
+      (d) => d.code.toLowerCase() === trimmed.toLowerCase() || d.name.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (found) return found.name;
+  }
+  return DEPARTMENT_FULL_NAME_MAP[trimmed] || trimmed;
+}
+
+interface AcademicSemester {
+  id: string;
+  value: string;
+  number: number;
+  year: number;
+  label: string;
+  shortLabel: string;
+  roman: string;
+}
+
+const ACADEMIC_SEMESTERS: AcademicSemester[] = [
+  { id: 'SEM-1', value: 'Semester I', number: 1, year: 1, label: 'Semester I', shortLabel: 'Sem I', roman: 'I' },
+  { id: 'SEM-2', value: 'Semester II', number: 2, year: 1, label: 'Semester II', shortLabel: 'Sem II', roman: 'II' },
+  { id: 'SEM-3', value: 'Semester III', number: 3, year: 2, label: 'Semester III', shortLabel: 'Sem III', roman: 'III' },
+  { id: 'SEM-4', value: 'Semester IV', number: 4, year: 2, label: 'Semester IV', shortLabel: 'Sem IV', roman: 'IV' },
+  { id: 'SEM-5', value: 'Semester V', number: 5, year: 3, label: 'Semester V', shortLabel: 'Sem V', roman: 'V' },
+  { id: 'SEM-6', value: 'Semester VI', number: 6, year: 3, label: 'Semester VI', shortLabel: 'Sem VI', roman: 'VI' },
+  { id: 'SEM-7', value: 'Semester VII', number: 7, year: 4, label: 'Semester VII', shortLabel: 'Sem VII', roman: 'VII' },
+  { id: 'SEM-8', value: 'Semester VIII', number: 8, year: 4, label: 'Semester VIII', shortLabel: 'Sem VIII', roman: 'VIII' },
+];
+
+function getExamSemester(exam: any): string {
+  if (!exam) return 'Semester VI';
+
+  // 1. Direct explicit property
+  if (exam.targetSemester && typeof exam.targetSemester === 'string') {
+    const matched = ACADEMIC_SEMESTERS.find(
+      (s) =>
+        s.value.toLowerCase() === exam.targetSemester.toLowerCase() ||
+        s.label.toLowerCase() === exam.targetSemester.toLowerCase() ||
+        s.shortLabel.toLowerCase() === exam.targetSemester.toLowerCase()
+    );
+    if (matched) return matched.value;
+  }
+
+  // 2. Numeric semester
+  if (typeof exam.semester === 'number' && exam.semester >= 1 && exam.semester <= 8) {
+    const matched = ACADEMIC_SEMESTERS.find((s) => s.number === exam.semester);
+    if (matched) return matched.value;
+  }
+  if (typeof exam.semester === 'string') {
+    const matched = ACADEMIC_SEMESTERS.find(
+      (s) =>
+        s.value.toLowerCase() === exam.semester.toLowerCase() ||
+        s.label.toLowerCase() === exam.semester.toLowerCase() ||
+        s.shortLabel.toLowerCase() === exam.semester.toLowerCase() ||
+        s.number.toString() === exam.semester
+    );
+    if (matched) return matched.value;
+  }
+
+  // 3. Scan title and description text
+  const textToScan = `${exam.title || ''} ${exam.description || ''}`;
+
+  const romanOrdered = [
+    { roman: 'VIII', num: 8, sem: 'Semester VIII' },
+    { roman: 'VII', num: 7, sem: 'Semester VII' },
+    { roman: 'VI', num: 6, sem: 'Semester VI' },
+    { roman: 'IV', num: 4, sem: 'Semester IV' },
+    { roman: 'V', num: 5, sem: 'Semester V' },
+    { roman: 'III', num: 3, sem: 'Semester III' },
+    { roman: 'II', num: 2, sem: 'Semester II' },
+    { roman: 'I', num: 1, sem: 'Semester I' },
+  ];
+
+  for (const item of romanOrdered) {
+    const regex = new RegExp(`\\b(semester|sem)[\\s\\-_:]*(${item.roman}|${item.num})\\b`, 'i');
+    if (regex.test(textToScan)) {
+      return item.sem;
+    }
+  }
+
+  for (const item of romanOrdered) {
+    if (textToScan.includes(`Semester ${item.roman}`) || textToScan.includes(`Sem ${item.roman}`)) {
+      return item.sem;
+    }
+  }
+
+  // 4. Anna University / Standard course codes and DBMS demo exam check
+  if (textToScan.includes('CS8601') || textToScan.includes('Database Management Systems')) {
+    return 'Semester VI';
+  }
+  if (textToScan.includes('CS6301') || textToScan.includes('Compiler Design')) {
+    return 'Semester VI';
+  }
+
+  // 5. Fallback based on targetYear
+  if (exam.targetYear) {
+    const yr = Number(exam.targetYear);
+    if (yr === 1) return 'Semester I';
+    if (yr === 2) return 'Semester III';
+    if (yr === 3) return 'Semester VI';
+    if (yr === 4) return 'Semester VII';
+  }
+
+  return 'Semester VI';
+}
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -97,11 +303,24 @@ export default function AdminDashboard() {
     registerNo: '',
     name: '',
     email: '',
-    department: 'Computer Science and Engineering',
+    department: '',
     year: '3',
     semester: '6',
     section: 'A',
   });
+
+  // Department Master Data State (Fixed Institution: Chennai Institute of Technology)
+  const [colleges, setColleges] = useState<College[]>(DEFAULT_COLLEGES);
+  const [departmentsList, setDepartmentsList] = useState<MasterDepartment[]>(DEFAULT_DEPARTMENTS);
+  const [isAddDeptOpen, setIsAddDeptOpen] = useState(false);
+  const [editingDept, setEditingDept] = useState<MasterDepartment | null>(null);
+  const [deptFormData, setDeptFormData] = useState({
+    code: '',
+    name: '',
+    collegeId: CURRENT_INSTITUTION.id,
+    active: true,
+  });
+  const [deletingDept, setDeletingDept] = useState<MasterDepartment | null>(null);
 
   // Table State: Faculty Directory
   const [faculty, setFaculty] = useState<any[]>([]);
@@ -158,6 +377,7 @@ export default function AdminDashboard() {
     durationMinutes: '180',
     totalMarks: '100',
     targetDepartment: 'Computer Science and Engineering',
+    targetSemester: 'Semester VI',
     maxViolations: '5',
     instructions: '1. Total Duration: 180 Minutes.\n2. Fullscreen security mode is strictly enforced.',
     questionCount: '',
@@ -353,7 +573,14 @@ export default function AdminDashboard() {
       }
 
       // If silent poll, update core stats only
-      if (silent) return;
+      if (silent) {
+        api.get('/admin/departments').then((res) => {
+          if (res?.data?.success && res.data.data?.length > 0) {
+            setDepartmentsList(res.data.data);
+          }
+        }).catch(() => {});
+        return;
+      }
 
       // Group 2: Management directories
       const [studentsRes, facultyRes, questionsRes, examsRes, questionBankDocsRes] = await Promise.all([
@@ -370,14 +597,22 @@ export default function AdminDashboard() {
       if (examsRes.data?.success) setExams(examsRes.data.data);
       if (questionBankDocsRes.data?.success) setQuestionBankDocuments(questionBankDocsRes.data.data);
 
-      // Group 3: System settings & ledger
-      const [resultsRes, settingsRes] = await Promise.all([
+      // Group 3: System settings, ledger, colleges & departments
+      const [resultsRes, settingsRes, collegesRes, deptsRes] = await Promise.all([
         api.get('/admin/results-ledger'),
         api.get('/admin/settings'),
+        api.get('/admin/colleges'),
+        api.get('/admin/departments'),
       ]);
 
       if (resultsRes.data?.success) setResultsLedger(resultsRes.data.data);
       if (settingsRes.data?.success) setSystemSettings(settingsRes.data.data);
+      if (collegesRes?.data?.success && collegesRes.data.data?.length > 0) {
+        setColleges(collegesRes.data.data);
+      }
+      if (deptsRes?.data?.success && deptsRes.data.data?.length > 0) {
+        setDepartmentsList(deptsRes.data.data);
+      }
     } catch (err: any) {
       console.error('Error fetching admin dashboard data:', err);
       if (!silent) {
@@ -418,12 +653,16 @@ export default function AdminDashboard() {
   // Handlers: Student & Faculty
   const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!newStudent.department) {
+      showToast('Please select a department');
+      return;
+    }
     try {
       const res = await api.post('/admin/students', newStudent);
       if (res.data?.success) {
         showToast('Student record added successfully');
         setIsAddStudentOpen(false);
-        setNewStudent({ registerNo: '', name: '', email: '', department: 'Computer Science and Engineering', year: '3', semester: '6', section: 'A' });
+        setNewStudent({ registerNo: '', name: '', email: '', department: '', year: '3', semester: '6', section: 'A' });
         fetchInitialData();
       }
     } catch (err: any) {
@@ -490,11 +729,93 @@ export default function AdminDashboard() {
     }
   };
 
+  // Handlers: Department Master Data
+  const handleCreateDepartment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deptFormData.code.trim() || !deptFormData.name.trim()) {
+      showToast('Department code and name are required');
+      return;
+    }
+    try {
+      const res = await api.post('/admin/departments', deptFormData);
+      if (res.data?.success) {
+        showToast(`Department ${res.data.data.code} added successfully`);
+        setIsAddDeptOpen(false);
+        setDeptFormData({
+          code: '',
+          name: '',
+          collegeId: CURRENT_INSTITUTION.id,
+          active: true,
+        });
+        fetchInitialData(true);
+      }
+    } catch (err: any) {
+      console.error('Error creating department:', err);
+      showToast(err.response?.data?.message || 'Failed to create department');
+    }
+  };
+
+  const handleUpdateDepartment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDept) return;
+    if (!deptFormData.code.trim() || !deptFormData.name.trim()) {
+      showToast('Department code and name are required');
+      return;
+    }
+    try {
+      const res = await api.put(`/admin/departments/${editingDept.id}`, deptFormData);
+      if (res.data?.success) {
+        showToast(`Department ${res.data.data.code} updated successfully`);
+        setEditingDept(null);
+        fetchInitialData(true);
+      }
+    } catch (err: any) {
+      console.error('Error updating department:', err);
+      showToast(err.response?.data?.message || 'Failed to update department');
+    }
+  };
+
+  const handleToggleDepartmentStatus = async (dept: MasterDepartment) => {
+    try {
+      const res = await api.put(`/admin/departments/${dept.id}`, {
+        active: !dept.active,
+      });
+      if (res.data?.success) {
+        showToast(`Department ${dept.code} ${dept.active ? 'deactivated' : 'activated'}`);
+        fetchInitialData(true);
+      }
+    } catch (err: any) {
+      console.error('Error toggling department status:', err);
+      showToast(err.response?.data?.message || 'Failed to update department status');
+    }
+  };
+
+  const handleDeleteDepartment = async () => {
+    if (!deletingDept) return;
+    try {
+      const res = await api.delete(`/admin/departments/${deletingDept.id}`);
+      if (res.data?.success) {
+        showToast(`Department ${deletingDept.code} deleted`);
+        setDeletingDept(null);
+        fetchInitialData(true);
+      }
+    } catch (err: any) {
+      console.error('Error deleting department:', err);
+      showToast(err.response?.data?.message || 'Failed to delete department');
+    }
+  };
+
   // Handlers: Examination Management
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await api.post('/admin/exams', newExamForm);
+      const semObj = ACADEMIC_SEMESTERS.find((s) => s.value === newExamForm.targetSemester) || ACADEMIC_SEMESTERS[5];
+      const payload = {
+        ...newExamForm,
+        targetYear: semObj.year,
+        description: newExamForm.description || `Official CBT Assessment for ${newExamForm.targetSemester}`,
+      };
+      const res = await api.post('/admin/exams', payload);
       if (res.data?.success) {
         showToast(res.data.message || 'Examination scheduled and published successfully!');
         setIsCreateExamOpen(false);
@@ -505,6 +826,7 @@ export default function AdminDashboard() {
           durationMinutes: '180',
           totalMarks: '100',
           targetDepartment: 'Computer Science and Engineering',
+          targetSemester: 'Semester VI',
           maxViolations: '5',
           instructions: '1. Total Duration: 180 Minutes.\n2. Fullscreen security mode is strictly enforced.',
           questionCount: '',
@@ -542,6 +864,7 @@ export default function AdminDashboard() {
 
   const handleDuplicateExam = async (exam: any) => {
     try {
+      const examSem = getExamSemester(exam);
       const duplicateData = {
         title: `${exam.title} (Copy)`,
         description: exam.description,
@@ -549,6 +872,8 @@ export default function AdminDashboard() {
         durationMinutes: exam.durationMinutes,
         totalMarks: exam.totalMarks,
         targetDepartment: exam.targetDepartment || 'Computer Science and Engineering',
+        targetSemester: examSem,
+        targetYear: exam.targetYear,
         maxViolations: exam.maxViolations || 5,
         instructions: exam.instructions,
       };
@@ -846,7 +1171,11 @@ export default function AdminDashboard() {
         s.name.toLowerCase().includes(studentSearch.toLowerCase()) ||
         s.email.toLowerCase().includes(studentSearch.toLowerCase()) ||
         (s.registerNo && s.registerNo.toLowerCase().includes(studentSearch.toLowerCase()));
-      const matchesDept = deptFilter === 'ALL' || s.department === deptFilter;
+      const matchesDept =
+        deptFilter === 'ALL' ||
+        s.department === deptFilter ||
+        getDepartmentCode(s.department, departmentsList) === deptFilter ||
+        getDepartmentFullName(s.department, departmentsList) === deptFilter;
       return matchesSearch && matchesDept;
     })
     .sort((a, b) => {
@@ -865,7 +1194,19 @@ export default function AdminDashboard() {
         (e.description && e.description.toLowerCase().includes(examSearch.toLowerCase()));
 
       const matchesDept =
-        examDeptFilter === 'ALL' || e.targetDepartment === examDeptFilter;
+        examDeptFilter === 'ALL' ||
+        e.targetDepartment === examDeptFilter ||
+        getDepartmentCode(e.targetDepartment, departmentsList) === examDeptFilter ||
+        getDepartmentFullName(e.targetDepartment, departmentsList) === examDeptFilter;
+
+      const examSemester = getExamSemester(e);
+      const matchesSem =
+        examSemFilter === 'ALL' ||
+        examSemester === examSemFilter ||
+        (examSemFilter !== 'ALL' && (
+          e.title?.toLowerCase().includes(examSemFilter.toLowerCase()) ||
+          e.description?.toLowerCase().includes(examSemFilter.toLowerCase())
+        ));
 
       const matchesFaculty =
         examFacultyFilter === 'ALL' || e.createdBy?.name === examFacultyFilter;
@@ -879,7 +1220,7 @@ export default function AdminDashboard() {
           ? !e.isPublished
           : true;
 
-      return matchesSearch && matchesDept && matchesFaculty && matchesStatus;
+      return matchesSearch && matchesDept && matchesSem && matchesFaculty && matchesStatus;
     })
     .sort((a, b) => {
       if (examSortBy === 'NEWEST') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -953,7 +1294,7 @@ export default function AdminDashboard() {
   const realMetrics = overview?.metrics || {
     students: students.length,
     faculty: faculty.length,
-    departments: overview?.departmentBreakdown?.length || 1,
+    departments: departmentsList.length || overview?.departmentBreakdown?.length || 1,
     questionBank: questions.length,
     activeExams: exams.filter((e) => e.isPublished).length,
     todaysExams: 0,
@@ -968,6 +1309,21 @@ export default function AdminDashboard() {
   const notificationsList = overview?.notifications || [];
   const pendingTasksList = overview?.pendingTasks || [];
   const systemHealthServices = overview?.systemHealth || [];
+
+  // Departments scoped strictly to the current institution (Chennai Institute of Technology)
+  const citDepartments = departmentsList.filter(
+    (dept) => !dept.collegeId || dept.collegeId === CURRENT_INSTITUTION.id
+  );
+
+  const allActiveDepartments = citDepartments.filter((dept) => dept.active);
+
+  const departmentOptions: string[] = Array.from(
+    new Set([
+      ...allActiveDepartments.map((d) => d.name),
+      ...(overview?.departmentBreakdown?.map((d: any) => d.department || d.name) || []),
+      ...(students?.map((s: any) => getDepartmentFullName(s.department, citDepartments)) || []),
+    ].filter(Boolean))
+  );
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans select-none-security">
@@ -988,7 +1344,7 @@ export default function AdminDashboard() {
             </div>
             <div>
               <h1 className="text-base font-bold text-white tracking-tight">University Examination Management System</h1>
-              <p className="text-xs text-blue-200">Controller of Examinations • Governance Dashboard v2.0</p>
+              <p className="text-xs text-blue-200">Controller of Examinations • {CURRENT_INSTITUTION.name} ({CURRENT_INSTITUTION.code})</p>
             </div>
           </div>
 
@@ -1363,22 +1719,25 @@ export default function AdminDashboard() {
                       className="erp-select py-1.5 text-xs"
                     >
                       <option value="ALL">All Departments</option>
-                      <option value="Computer Science and Engineering">CSE</option>
-                      <option value="Electronics & Communication">ECE</option>
-                      <option value="Information Technology">IT</option>
-                      <option value="Mechanical Engineering">MECH</option>
+                      {citDepartments.map((dept) => (
+                        <option key={dept.id} value={dept.name}>
+                          {dept.code} - {dept.name}
+                        </option>
+                      ))}
                     </select>
 
                     {/* Semester Dropdown */}
                     <select
                       value={examSemFilter}
                       onChange={(e) => setExamSemFilter(e.target.value)}
-                      className="erp-select py-1.5 text-xs"
+                      className="erp-select py-1.5 text-xs font-medium"
                     >
                       <option value="ALL">All Semesters</option>
-                      <option value="Semester VI">Semester VI</option>
-                      <option value="Semester V">Semester V</option>
-                      <option value="Semester IV">Semester IV</option>
+                      {ACADEMIC_SEMESTERS.map((sem) => (
+                        <option key={sem.id} value={sem.value}>
+                          {sem.label}
+                        </option>
+                      ))}
                     </select>
 
                     {/* Faculty Dropdown */}
@@ -1529,9 +1888,15 @@ export default function AdminDashboard() {
                       <div className="p-3 bg-blue-50 text-[#1E40AF] inline-flex rounded-full">
                         <BookOpen className="w-6 h-6" />
                       </div>
-                      <h3 className="text-sm font-bold text-slate-900">No examinations have been created.</h3>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        {examSemFilter !== 'ALL'
+                          ? `No examinations scheduled for ${examSemFilter}`
+                          : 'No examinations have been created.'}
+                      </h3>
                       <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                        No examination papers currently match your filter rules. Click below to schedule a new examination.
+                        {examSemFilter !== 'ALL'
+                          ? `There are currently no active or draft examination papers assigned to ${examSemFilter}.`
+                          : 'No examination papers currently match your filter rules. Click below to schedule a new examination.'}
                       </p>
                       <button onClick={() => setIsCreateExamOpen(true)} className="erp-btn-primary py-2 text-xs">
                         <Plus className="w-3.5 h-3.5" />
@@ -1547,6 +1912,7 @@ export default function AdminDashboard() {
                             <th className="w-8"></th>
                             <th>Exam Name & Code</th>
                             <th>Course</th>
+                            <th>Semester</th>
                             <th>Department</th>
                             <th>Faculty</th>
                             <th>Duration</th>
@@ -1579,6 +1945,11 @@ export default function AdminDashboard() {
                                     <div className="text-[11px] text-slate-500 line-clamp-1">{exam.description}</div>
                                   </td>
                                   <td className="font-mono font-bold text-[#1E40AF]">CS6301</td>
+                                  <td>
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 whitespace-nowrap">
+                                      {getExamSemester(exam)}
+                                    </span>
+                                  </td>
                                   <td className="font-mono text-xs">{exam.targetDepartment || 'CSE'}</td>
                                   <td className="font-medium text-slate-700">{exam.createdBy?.name || 'Dr. Sabitha'}</td>
                                   <td className="font-mono">{exam.durationMinutes} Mins</td>
@@ -1628,7 +1999,7 @@ export default function AdminDashboard() {
                                 {/* Row Expansion Content Drawer */}
                                 {isExpanded && (
                                   <tr className="bg-blue-50/40">
-                                    <td colSpan={10} className="p-4 space-y-3 border-t border-b border-blue-200 text-xs">
+                                    <td colSpan={11} className="p-4 space-y-3 border-t border-b border-blue-200 text-xs">
                                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                         <div>
                                           <span className="font-bold text-slate-700 block uppercase text-[10px]">Exam Instructions</span>
@@ -1667,8 +2038,13 @@ export default function AdminDashboard() {
                         <div key={exam.id} className="erp-card space-y-3 border-slate-200 hover:border-blue-300">
                           <div className="flex justify-between items-start">
                             <div>
-                              <span className="erp-badge-blue">{exam.examType || 'SCHEDULED'}</span>
-                              <h4 className="text-sm font-bold text-slate-900 mt-1">{exam.title}</h4>
+                              <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                                <span className="erp-badge-blue">{exam.examType || 'SCHEDULED'}</span>
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  {getExamSemester(exam)}
+                                </span>
+                              </div>
+                              <h4 className="text-sm font-bold text-slate-900">{exam.title}</h4>
                               <p className="text-xs text-slate-500 line-clamp-2 mt-0.5">{exam.description}</p>
                             </div>
                             <span className="text-xs font-bold text-emerald-700 font-mono shrink-0">+{exam.totalMarks} Marks</span>
@@ -2302,9 +2678,9 @@ export default function AdminDashboard() {
           {/* TAB 4: STUDENTS */}
           {activeTab === 'STUDENTS' && (
             <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative w-60">
+                  <div className="relative w-60 max-w-full">
                     <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
                     <input
                       type="text"
@@ -2321,31 +2697,43 @@ export default function AdminDashboard() {
                     className="erp-select text-xs py-1.5"
                   >
                     <option value="ALL">All Departments</option>
-                    <option value="Computer Science and Engineering">CSE</option>
-                    <option value="Electronics & Communication">ECE</option>
+                    {citDepartments.map((dept) => (
+                      <option key={dept.id} value={dept.name}>
+                        {dept.code} - {dept.name}
+                      </option>
+                    ))}
                   </select>
 
                   <button
                     onClick={() => setStudentSortOrder(studentSortOrder === 'ASC' ? 'DESC' : 'ASC')}
-                    className="erp-btn-secondary py-1.5 text-xs"
+                    className="erp-btn-secondary h-8 py-1.5 px-3 text-xs font-medium whitespace-nowrap"
                   >
                     <ArrowUpDown className="w-3.5 h-3.5" />
                     <span>Sort ({studentSortOrder})</span>
                   </button>
                 </div>
 
-                <div className="flex flex-wrap items-center space-x-2">
-                  <label className="erp-btn-secondary py-1.5 text-xs cursor-pointer">
+                <div className="flex flex-wrap items-center justify-end gap-2 w-full sm:w-auto ml-auto">
+                  <label className="erp-btn-secondary h-8 py-1.5 px-3 text-xs font-medium whitespace-nowrap cursor-pointer">
                     <span>Import Roster</span>
                     <input type="file" accept=".xlsx,.xls,.csv" onChange={handleStudentFileUpload} className="hidden" />
                   </label>
-                  <button onClick={() => handleExportCSV('Students', filteredStudents)} className="erp-btn-secondary py-1.5 text-xs">
+                  <button
+                    onClick={() => handleExportCSV('Students', filteredStudents)}
+                    className="erp-btn-secondary h-8 py-1.5 px-3 text-xs font-medium whitespace-nowrap"
+                  >
                     Export CSV
                   </button>
-                  <button onClick={() => handleExportPDF('Students')} className="erp-btn-secondary py-1.5 text-xs">
+                  <button
+                    onClick={() => handleExportPDF('Students')}
+                    className="erp-btn-secondary h-8 py-1.5 px-3 text-xs font-medium whitespace-nowrap"
+                  >
                     Export PDF
                   </button>
-                  <button onClick={() => setIsAddStudentOpen(true)} className="erp-btn-primary py-1.5 text-xs">
+                  <button
+                    onClick={() => setIsAddStudentOpen(true)}
+                    className="erp-btn-primary h-8 py-1.5 px-3 text-xs font-medium whitespace-nowrap border border-transparent"
+                  >
                     <Plus className="w-4 h-4" />
                     <span>Add Student</span>
                   </button>
@@ -2493,18 +2881,132 @@ export default function AdminDashboard() {
           {/* TAB 6: DEPARTMENTS */}
           {activeTab === 'DEPARTMENTS' && (
             <div className="space-y-4">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Academic Departments</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                {(overview?.departmentBreakdown || []).map((d: any, i: number) => (
-                  <div key={i} className="erp-card space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="erp-badge-blue font-mono">{d.department}</span>
-                      <span className="text-xs font-bold text-emerald-700">{d.count} Students</span>
-                    </div>
-                    <h4 className="text-sm font-bold text-slate-900">{d.department}</h4>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                      <Building className="w-4 h-4 text-[#1E40AF]" />
+                      Academic Departments
+                    </h3>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+                      {CURRENT_INSTITUTION.name} ({CURRENT_INSTITUTION.code})
+                    </span>
                   </div>
-                ))}
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Centralized department directory, code designations, and live student counts for {CURRENT_INSTITUTION.name}.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    onClick={() => {
+                      setDeptFormData({
+                        code: '',
+                        name: '',
+                        collegeId: CURRENT_INSTITUTION.id,
+                        active: true,
+                      });
+                      setIsAddDeptOpen(true);
+                    }}
+                    className="erp-btn-primary py-1.5 px-3 text-xs font-medium"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Department</span>
+                  </button>
+                </div>
               </div>
+
+              {citDepartments.length === 0 ? (
+                <div className="erp-card text-center py-12 text-slate-500 text-xs space-y-2">
+                  <Building className="w-8 h-8 text-slate-300 mx-auto" />
+                  <div className="font-semibold text-slate-700">No departments found for {CURRENT_INSTITUTION.name}.</div>
+                  <div>Click &quot;Add Department&quot; above to create a new academic department.</div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                  {citDepartments.map((dept) => {
+                    const studentCount =
+                      dept.studentCount !== undefined
+                        ? dept.studentCount
+                        : students.filter((s: any) =>
+                            s.department === dept.name ||
+                            s.department === dept.code ||
+                            getDepartmentCode(s.department) === dept.code
+                          ).length;
+
+                    return (
+                      <div key={dept.id} className="erp-card space-y-3 flex flex-col justify-between hover:border-blue-300 transition-colors">
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="erp-badge-blue font-mono font-bold shrink-0">{dept.code}</span>
+                              {dept.active ? (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  Active
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                                  Inactive
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs font-bold text-emerald-700 whitespace-nowrap shrink-0">
+                              {studentCount} Students
+                            </span>
+                          </div>
+
+                          <h4 className="text-sm font-bold text-slate-900 break-words">{dept.name}</h4>
+
+                          <div className="text-[11px] text-slate-500 flex items-center gap-1.5 pt-0.5">
+                            <Building className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="truncate">{CURRENT_INSTITUTION.name}</span>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1 text-xs">
+                          <button
+                            onClick={() => handleToggleDepartmentStatus(dept)}
+                            className={`text-[11px] font-semibold px-2 py-1 rounded transition-colors ${
+                              dept.active
+                                ? 'text-amber-700 hover:bg-amber-50'
+                                : 'text-emerald-700 hover:bg-emerald-50'
+                            }`}
+                            title={dept.active ? 'Deactivate Department' : 'Activate Department'}
+                          >
+                            {dept.active ? 'Deactivate' : 'Activate'}
+                          </button>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingDept(dept);
+                                setDeptFormData({
+                                  code: dept.code,
+                                  name: dept.name,
+                                  collegeId: dept.collegeId || CURRENT_INSTITUTION.id,
+                                  active: dept.active,
+                                });
+                              }}
+                              className="text-slate-600 hover:text-blue-700 hover:bg-slate-100 p-1.5 rounded transition-colors"
+                              title="Edit Department"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              onClick={() => setDeletingDept(dept)}
+                              className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded transition-colors"
+                              title="Delete Department"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -2600,17 +3102,35 @@ export default function AdminDashboard() {
                   />
                 </div>
               </div>
-              <div>
-                <label className="block font-semibold text-slate-700 uppercase mb-1">Target Department</label>
-                <select
-                  value={newExamForm.targetDepartment}
-                  onChange={(e) => setNewExamForm({ ...newExamForm, targetDepartment: e.target.value })}
-                  className="erp-select w-full"
-                >
-                  <option value="Computer Science and Engineering">Computer Science and Engineering</option>
-                  <option value="Electronics & Communication">Electronics & Communication</option>
-                  <option value="Information Technology">Information Technology</option>
-                </select>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Target Department</label>
+                  <select
+                    value={newExamForm.targetDepartment}
+                    onChange={(e) => setNewExamForm({ ...newExamForm, targetDepartment: e.target.value })}
+                    className="erp-select w-full"
+                  >
+                    {allActiveDepartments.map((dept) => (
+                      <option key={dept.id} value={dept.name}>
+                        {dept.name} ({dept.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Target Semester *</label>
+                  <select
+                    value={newExamForm.targetSemester}
+                    onChange={(e) => setNewExamForm({ ...newExamForm, targetSemester: e.target.value })}
+                    className="erp-select w-full"
+                  >
+                    {ACADEMIC_SEMESTERS.map((sem) => (
+                      <option key={sem.id} value={sem.value}>
+                        {sem.label} (Year {sem.year})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -2675,7 +3195,9 @@ export default function AdminDashboard() {
             </div>
             <div className="space-y-3 text-xs">
               <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
-                <div className="font-bold text-slate-800">Target Department: {selectedExamPreview.targetDepartment}</div>
+                <div className="font-bold text-slate-800">
+                  Target Department: {selectedExamPreview.targetDepartment} • {getExamSemester(selectedExamPreview)}
+                </div>
                 <div className="font-mono text-slate-600">Total Duration: {selectedExamPreview.durationMinutes} Minutes • Total Marks: {selectedExamPreview.totalMarks}</div>
               </div>
               <div>
@@ -2692,8 +3214,8 @@ export default function AdminDashboard() {
 
       {/* Add Student Modal */}
       {isAddStudentOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
-          <div className="erp-card max-w-md w-full space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="erp-card max-w-md w-full space-y-4 max-h-[90vh] overflow-y-auto my-auto">
             <div className="flex justify-between items-center border-b border-slate-200 pb-2">
               <h3 className="text-sm font-bold text-slate-900">Add New Student Account</h3>
               <button onClick={() => setIsAddStudentOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
@@ -2731,6 +3253,22 @@ export default function AdminDashboard() {
                   placeholder="ganesh@citchennai.net"
                   className="erp-input"
                 />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Department *</label>
+                <select
+                  value={newStudent.department}
+                  onChange={(e) => setNewStudent({ ...newStudent, department: e.target.value })}
+                  required
+                  className="erp-select w-full"
+                >
+                  <option value="" disabled>Select Department</option>
+                  {allActiveDepartments.map((dept) => (
+                    <option key={dept.id} value={dept.name}>
+                      {dept.code} - {dept.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="flex justify-end space-x-2 pt-2">
                 <button type="button" onClick={() => setIsAddStudentOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
@@ -2772,11 +3310,242 @@ export default function AdminDashboard() {
                   className="erp-input"
                 />
               </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Department *</label>
+                <select
+                  value={newFaculty.department}
+                  onChange={(e) => setNewFaculty({ ...newFaculty, department: e.target.value })}
+                  required
+                  className="erp-select w-full"
+                >
+                  {allActiveDepartments.map((dept) => (
+                    <option key={dept.id} value={dept.name}>
+                      {dept.code} - {dept.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="flex justify-end space-x-2 pt-2">
                 <button type="button" onClick={() => setIsAddFacultyOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
                 <button type="submit" className="erp-btn-primary py-1.5 text-xs">Save Faculty</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Department Modal */}
+      {isAddDeptOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-md w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Add Academic Department</h3>
+              <button onClick={() => setIsAddDeptOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleCreateDepartment} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Department Code *</label>
+                <input
+                  type="text"
+                  value={deptFormData.code}
+                  onChange={(e) => setDeptFormData({ ...deptFormData, code: e.target.value.toUpperCase() })}
+                  required
+                  placeholder="e.g. BME, AI&DS, CSE"
+                  className="erp-input font-mono uppercase"
+                />
+                <p className="text-[10px] text-slate-500 mt-0.5">Short abbreviation shown on badges and student cards</p>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Department Full Name *</label>
+                <input
+                  type="text"
+                  value={deptFormData.name}
+                  onChange={(e) => setDeptFormData({ ...deptFormData, name: e.target.value })}
+                  required
+                  placeholder="e.g. Biomedical Engineering"
+                  className="erp-input"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Institution</label>
+                <div className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded text-slate-700 text-xs font-medium">
+                  <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span>{CURRENT_INSTITUTION.name} ({CURRENT_INSTITUTION.code})</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="addDeptActive"
+                  checked={deptFormData.active}
+                  onChange={(e) => setDeptFormData({ ...deptFormData, active: e.target.checked })}
+                  className="rounded text-blue-600 focus:ring-blue-500"
+                />
+                <label htmlFor="addDeptActive" className="text-slate-700 font-medium cursor-pointer">
+                  Active for student enrollment and examination scheduling
+                </label>
+              </div>
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsAddDeptOpen(false)}
+                  className="erp-btn-secondary py-1.5 text-xs"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">
+                  Save Department
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Department Modal */}
+      {editingDept && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-md w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Edit Academic Department</h3>
+              <button onClick={() => setEditingDept(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateDepartment} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Department Code *</label>
+                <input
+                  type="text"
+                  value={deptFormData.code}
+                  onChange={(e) => setDeptFormData({ ...deptFormData, code: e.target.value.toUpperCase() })}
+                  required
+                  placeholder="e.g. CSE"
+                  className="erp-input font-mono uppercase"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Department Full Name *</label>
+                <input
+                  type="text"
+                  value={deptFormData.name}
+                  onChange={(e) => setDeptFormData({ ...deptFormData, name: e.target.value })}
+                  required
+                  placeholder="e.g. Computer Science and Engineering"
+                  className="erp-input"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 uppercase mb-1">Institution</label>
+                <div className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded text-slate-700 text-xs font-medium">
+                  <Building className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span>{CURRENT_INSTITUTION.name} ({CURRENT_INSTITUTION.code})</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="editDeptActive"
+                  checked={deptFormData.active}
+                  onChange={(e) => setDeptFormData({ ...deptFormData, active: e.target.checked })}
+                  className="rounded text-blue-600 focus:ring-blue-500"
+                />
+                <label htmlFor="editDeptActive" className="text-slate-700 font-medium cursor-pointer">
+                  Active for student enrollment and examination scheduling
+                </label>
+              </div>
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingDept(null)}
+                  className="erp-btn-secondary py-1.5 text-xs"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">
+                  Update Department
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Department Confirmation Modal */}
+      {deletingDept && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="erp-card max-w-md w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-bold text-slate-900">Delete Department</h3>
+              <button onClick={() => setDeletingDept(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {(deletingDept.studentCount || 0) > 0 ? (
+              <div className="space-y-3 text-xs">
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded text-amber-800 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                    Cannot Delete Department with Enrolled Students
+                  </div>
+                  <p>
+                    Department <strong>{deletingDept.name} ({deletingDept.code})</strong> currently has{' '}
+                    <strong>{deletingDept.studentCount} enrolled student(s)</strong>.
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    To maintain academic audit records and examination broadsheets, departments with enrolled students cannot be deleted. You can deactivate the department instead so no new students or exams can be assigned to it.
+                  </p>
+                </div>
+                <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setDeletingDept(null)}
+                    className="erp-btn-secondary py-1.5 text-xs"
+                  >
+                    Close
+                  </button>
+                  {deletingDept.active && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleToggleDepartmentStatus(deletingDept);
+                        setDeletingDept(null);
+                      }}
+                      className="erp-btn-primary py-1.5 text-xs"
+                    >
+                      Deactivate Department
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <p className="text-slate-700">
+                  Are you sure you want to delete department <strong>{deletingDept.name} ({deletingDept.code})</strong>?
+                </p>
+                <p className="text-slate-500 text-[11px]">
+                  This department has 0 enrolled students. Deleting it will permanently remove it from the institution catalog.
+                </p>
+                <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setDeletingDept(null)}
+                    className="erp-btn-secondary py-1.5 text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteDepartment}
+                    className="erp-btn-danger py-1.5 text-xs"
+                  >
+                    Confirm Delete
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2993,7 +3762,7 @@ export default function AdminDashboard() {
 
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 py-3 px-6 text-center text-xs text-slate-500 mt-auto">
-        © 2026 University Examination Management System | Controller of Examinations | Version 2.0
+        © 2026 {CURRENT_INSTITUTION.name} ({CURRENT_INSTITUTION.code}) • Office of the Controller of Examinations • Version 2.0
       </footer>
     </div>
   );
