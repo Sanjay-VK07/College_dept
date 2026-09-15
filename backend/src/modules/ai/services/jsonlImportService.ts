@@ -911,7 +911,22 @@ export class JSONLImportService {
       return { options: [], correctAnswer: parsed.answer, needsReview: parsed.needsReview };
     }
 
-    return { options: [], correctAnswer: [] };
+    if ((qType as string) === 'FREE_RESPONSE' || (qType as string) === 'UNKNOWN') {
+      const raw = Array.isArray(rec.correctAnswer) && rec.correctAnswer.length > 0
+        ? rec.correctAnswer[0]
+        : rec.correctAnswer !== undefined && rec.correctAnswer !== null
+        ? rec.correctAnswer
+        : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
+        ? (Array.isArray(rec.answer) ? rec.answer[0] : rec.answer)
+        : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
+        ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer[0] : rec.rawAnswer)
+        : '';
+      const hasAnswer = Boolean(raw && String(raw).trim().length > 0);
+      const needsReview = (qType as string) === 'UNKNOWN' || !hasAnswer;
+      return { options: [], correctAnswer: hasAnswer ? [raw] : [], needsReview };
+    }
+
+    return { options: [], correctAnswer: [], needsReview: true };
   }
 }
 
