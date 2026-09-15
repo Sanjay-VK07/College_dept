@@ -25,8 +25,8 @@ describe('Import Verification Status Diagnostic & Validation Tests', () => {
       questionId: 'TEST_V2',
       question: 'Question explicitly flagged for review in source',
       options: { A: 'Opt A', B: 'Opt B' },
-      correctAnswer: ['A'],
-      rawAnswer: 'A',
+      correctAnswer: [],
+      rawAnswer: null,
       questionType: 'MCQ',
       verificationStatus: 'NEEDS_REVIEW',
     };

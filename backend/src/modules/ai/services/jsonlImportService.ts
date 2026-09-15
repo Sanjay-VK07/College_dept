@@ -335,7 +335,8 @@ export class JSONLImportService {
       else if (rawType === 'UNKNOWN') qType = QuestionType.UNKNOWN;
 
       const refPaths = this.extractReferencedFigurePaths(rec);
-      const { needsReview } = this.normalizeOptionsAndAnswer(rec, qType);
+      const { needsReview, type: effectiveQType } = this.normalizeOptionsAndAnswer(rec, qType);
+      if (effectiveQType) qType = effectiveQType;
 
       let hasMissingFigureRef = false;
       if (availableFigures && availableFigures.size > 0 && refPaths.length > 0) {
@@ -351,13 +352,12 @@ export class JSONLImportService {
       const passesValidation = isContentValid && !needsReview && !hasMissingFigureRef;
 
       const rawVStatus = (rec.verificationStatus || '').toUpperCase();
-      const isExplicitlyFlagged = rawVStatus === 'NEEDS_REVIEW' || rawVStatus === 'REJECTED';
       let vStatus: string;
       if (rawVStatus === 'REJECTED') {
         vStatus = 'REJECTED';
       } else if (rawVStatus === 'UNANSWERED_IN_SOURCE') {
         vStatus = 'UNANSWERED_IN_SOURCE';
-      } else if (!isExplicitlyFlagged && passesValidation) {
+      } else if (passesValidation) {
         vStatus = 'VERIFIED';
       } else {
         vStatus = 'NEEDS_REVIEW';
@@ -605,7 +605,8 @@ export class JSONLImportService {
       else if (rawType === 'FREE_RESPONSE') qType = QuestionType.FREE_RESPONSE;
       else if (rawType === 'UNKNOWN') qType = QuestionType.UNKNOWN;
 
-      const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer, needsReview } = this.normalizeOptionsAndAnswer(rec, qType);
+      const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer, needsReview, type: effectiveQType } = this.normalizeOptionsAndAnswer(rec, qType);
+      if (effectiveQType) qType = effectiveQType;
 
       let hasMissingFigureRef = false;
       if (refPaths.length > 0) {
@@ -621,7 +622,6 @@ export class JSONLImportService {
 
       const isContentValid = typeof rec.question === 'string' && rec.question.trim().length > 0;
       const rawVStatus = (rec.verificationStatus || '').toUpperCase();
-      const isExplicitlyFlagged = rawVStatus === 'NEEDS_REVIEW' || rawVStatus === 'REJECTED';
       const missingFigRefs = hasMissingFigureRef ? 1 : 0;
       const passesValidation = isContentValid && !needsReview && missingFigRefs === 0;
 
@@ -630,7 +630,7 @@ export class JSONLImportService {
         effectiveVStatus = VerificationStatus.REJECTED;
       } else if (rawVStatus === 'UNANSWERED_IN_SOURCE') {
         effectiveVStatus = VerificationStatus.UNANSWERED_IN_SOURCE;
-      } else if (!isExplicitlyFlagged && passesValidation) {
+      } else if (passesValidation) {
         effectiveVStatus = VerificationStatus.VERIFIED;
       } else {
         effectiveVStatus = VerificationStatus.NEEDS_REVIEW;
@@ -836,11 +836,48 @@ export class JSONLImportService {
     return { answer: {}, needsReview: true };
   }
 
-  private static normalizeOptionsAndAnswer(
+  public static normalizeOptionsAndAnswer(
     rec: JSONLRecord,
     qType: QuestionType
-  ): { options: any; correctAnswer: any; needsReview?: boolean } {
-    if (qType === QuestionType.MCQ || qType === QuestionType.MSQ) {
+  ): { options: any; correctAnswer: any; needsReview?: boolean; type?: QuestionType } {
+    let rawOptCount = 0;
+    if (Array.isArray(rec.options)) {
+      rawOptCount = rec.options.length;
+    } else if (rec.options && typeof rec.options === 'object') {
+      rawOptCount = Object.keys(rec.options).length;
+    }
+
+    const extractRawChoiceTokens = (val: any): string[] => {
+      if (val === undefined || val === null || val === 'N/A') return [];
+      if (Array.isArray(val)) {
+        return val.flatMap((v) => extractRawChoiceTokens(v));
+      }
+      const str = String(val).trim();
+      if (!str || str === 'N/A') return [];
+      if (/[,;/]/.test(str)) {
+        return str.split(/[,;/]+/).map((s) => s.trim()).filter((s) => s.length > 0);
+      }
+      return [str];
+    };
+
+    const rawChoices = extractRawChoiceTokens(
+      rec.correctAnswer !== undefined && rec.correctAnswer !== null
+        ? rec.correctAnswer
+        : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
+        ? rec.answer
+        : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
+        ? rec.rawAnswer
+        : (rec as any).answerKey || (rec as any).answer_key
+    );
+
+    const hasChoiceTokens = rawChoices.length > 0 && rawChoices.some((c) => /^[A-Z]$/i.test(c.trim()));
+
+    let effectiveQType = qType;
+    if (rawOptCount >= 2 && hasChoiceTokens) {
+      effectiveQType = rawChoices.length > 1 ? QuestionType.MSQ : QuestionType.MCQ;
+    }
+
+    if (effectiveQType === QuestionType.MCQ || effectiveQType === QuestionType.MSQ) {
       let optionsArray: any[] = [];
       let correctIndices: number[] = [];
 
@@ -849,53 +886,45 @@ export class JSONLImportService {
         optionsArray = letters.map((l) => ({ text: (rec.options as Record<string, string>)[l], label: l }));
         const letterToIndex = new Map(letters.map((l, i) => [l.toUpperCase(), i]));
 
-        const rawCorrect = Array.isArray(rec.correctAnswer)
-          ? rec.correctAnswer
-          : rec.correctAnswer !== undefined && rec.correctAnswer !== null
-          ? [rec.correctAnswer]
-          : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
-          ? (Array.isArray(rec.answer) ? rec.answer : [rec.answer])
-          : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
-          ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer : [rec.rawAnswer])
-          : [];
-
-        correctIndices = rawCorrect
+        correctIndices = rawChoices
           .map((v: any) => {
-            if (typeof v === 'string' && letterToIndex.has(v.trim().toUpperCase())) return letterToIndex.get(v.trim().toUpperCase());
+            const trimmed = String(v).trim().toUpperCase();
+            if (letterToIndex.has(trimmed)) return letterToIndex.get(trimmed)!;
             const n = Number(v);
             return Number.isFinite(n) ? n : null;
           })
           .filter((v: any): v is number => v !== null);
       } else if (Array.isArray(rec.options)) {
         optionsArray = rec.options.map((o: any) => (typeof o === 'string' ? { text: o } : o));
-        
-        const rawCorrect = Array.isArray(rec.correctAnswer)
-          ? rec.correctAnswer
-          : rec.correctAnswer !== undefined && rec.correctAnswer !== null
-          ? [rec.correctAnswer]
-          : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
-          ? (Array.isArray(rec.answer) ? rec.answer : [rec.answer])
-          : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
-          ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer : [rec.rawAnswer])
-          : [];
 
-        correctIndices = rawCorrect.map((v: any) => {
-          if (typeof v === 'string' && /^[A-Z]$/i.test(v.trim())) {
-            return v.trim().toUpperCase().charCodeAt(0) - 65;
+        const labelToIndex = new Map<string, number>();
+        optionsArray.forEach((o, idx) => {
+          if (o && typeof o === 'object' && o.label) {
+            labelToIndex.set(String(o.label).trim().toUpperCase(), idx);
           }
-          const n = Number(v);
-          return Number.isFinite(n) ? n : null;
-        }).filter((n: any): n is number => n !== null);
+        });
+
+        correctIndices = rawChoices
+          .map((v: any) => {
+            const trimmed = String(v).trim().toUpperCase();
+            if (labelToIndex.has(trimmed)) return labelToIndex.get(trimmed)!;
+            if (/^[A-Z]$/.test(trimmed)) {
+              return trimmed.charCodeAt(0) - 65;
+            }
+            const n = Number(v);
+            return Number.isFinite(n) ? n : null;
+          })
+          .filter((v: any): v is number => v !== null);
       }
 
       const hasMissingAnswer = correctIndices.length === 0;
-      const hasInvalidOptions = qType === QuestionType.MCQ && optionsArray.length < 2;
+      const hasInvalidOptions = optionsArray.length < 2;
       const needsReview = hasMissingAnswer || hasInvalidOptions;
 
-      return { options: optionsArray, correctAnswer: correctIndices, needsReview };
+      return { options: optionsArray, correctAnswer: correctIndices, needsReview, type: effectiveQType };
     }
 
-    if (qType === QuestionType.NAT) {
+    if (effectiveQType === QuestionType.NAT) {
       const raw = Array.isArray(rec.correctAnswer) && rec.correctAnswer.length > 0
         ? rec.correctAnswer[0]
         : rec.correctAnswer !== undefined && rec.correctAnswer !== null
@@ -908,10 +937,10 @@ export class JSONLImportService {
 
       const rawStr = typeof raw === 'string' ? raw : String(raw ?? '');
       const parsed = this.parseNATAnswer(rawStr);
-      return { options: [], correctAnswer: parsed.answer, needsReview: parsed.needsReview };
+      return { options: [], correctAnswer: parsed.answer, needsReview: parsed.needsReview, type: effectiveQType };
     }
 
-    if ((qType as string) === 'FREE_RESPONSE' || (qType as string) === 'UNKNOWN') {
+    if ((effectiveQType as string) === 'FREE_RESPONSE' || (effectiveQType as string) === 'UNKNOWN') {
       const raw = Array.isArray(rec.correctAnswer) && rec.correctAnswer.length > 0
         ? rec.correctAnswer[0]
         : rec.correctAnswer !== undefined && rec.correctAnswer !== null
@@ -922,11 +951,11 @@ export class JSONLImportService {
         ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer[0] : rec.rawAnswer)
         : '';
       const hasAnswer = Boolean(raw && String(raw).trim().length > 0);
-      const needsReview = (qType as string) === 'UNKNOWN' || !hasAnswer;
-      return { options: [], correctAnswer: hasAnswer ? [raw] : [], needsReview };
+      const needsReview = (effectiveQType as string) === 'UNKNOWN' || !hasAnswer;
+      return { options: [], correctAnswer: hasAnswer ? [raw] : [], needsReview, type: effectiveQType };
     }
 
-    return { options: [], correctAnswer: [], needsReview: true };
+    return { options: [], correctAnswer: [], needsReview: true, type: effectiveQType };
   }
 }
 
