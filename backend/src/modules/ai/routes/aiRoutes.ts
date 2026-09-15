@@ -106,6 +106,8 @@ router.post('/question-paper/generate', requireRoles(Role.FACULTY, Role.ADMIN), 
 router.get('/question-paper/generation/:jobId', statusPollLimiter, requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.getGenerationJobStatus);
 router.post('/question-paper/regenerate-selection', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.regenerateSelection);
 router.post('/question-paper/finalize', requireRoles(Role.FACULTY, Role.ADMIN), requireExamCreatePermission, QuestionPaperController.finalizePaper);
+router.get('/question-paper/exams/:id/preview', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.getExamPreview);
+router.post('/question-paper/exams/:id/validate', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.validateExamination);
 router.post('/question-paper/exams/:id/publish', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.publishExamination);
 
 // RAG Knowledge Base Document Management Sub-router (Authenticated Users, RBAC inside sub-router)

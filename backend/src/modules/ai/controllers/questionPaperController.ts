@@ -135,6 +135,34 @@ export class QuestionPaperController {
     }
   }
 
+  public static async getExamPreview(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+
+      const { id } = req.params;
+      const result = await QuestionPaperService.getExamPreview(id, req.user.id, req.user.role);
+      return res.status(200).json(result);
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  public static async validateExamination(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+
+      const { id } = req.params;
+      const result = await QuestionPaperService.getExamPreview(id, req.user.id, req.user.role);
+      return res.status(200).json({ success: true, validation: result.validation });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
   public static async publishExamination(req: AuthRequest, res: Response) {
     try {
       if (!req.user) {

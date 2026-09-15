@@ -9,6 +9,7 @@ import { AnswerVerificationService } from './answerVerificationService';
 import { EmbeddingProvider } from './embeddingProvider';
 import { QuestionGenerationPrompt } from '../prompts/questionGenerationPrompt';
 import { NotificationController } from '../../../controllers/notificationController';
+import { ExamValidationService } from './examValidationService';
 
 export interface PreviewPaperPayload {
   subjectId: string;
@@ -623,6 +624,53 @@ export class QuestionPaperService {
   }
 
   /**
+   * Fetches full preview payload and validation analysis for a draft examination.
+   */
+  public static async getExamPreview(mockTestId: string, userId: string, role: Role) {
+    if (role !== Role.FACULTY && role !== Role.ADMIN) {
+      throw new Error('Forbidden: Only Faculty and Admin can access examination preview.');
+    }
+
+    const mockTest = await prisma.mockTest.findUnique({
+      where: { id: mockTestId },
+      include: {
+        createdBy: { select: { id: true, name: true, email: true } },
+        testQuestions: {
+          orderBy: { order: 'asc' },
+          include: {
+            questionVersion: true,
+            question: {
+              include: {
+                subtopic: {
+                  include: {
+                    topic: {
+                      include: { module: { include: { subject: true } } },
+                    },
+                  },
+                },
+                sourceDocument: { select: { id: true, title: true, fileName: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!mockTest) {
+      throw new Error(`Examination '${mockTestId}' not found.`);
+    }
+
+    const validation = ExamValidationService.validatePrePublish(mockTest);
+
+    return {
+      success: true,
+      mockTest,
+      questions: mockTest.testQuestions,
+      validation,
+    };
+  }
+
+  /**
    * Explicit action to publish an examination DRAFT for students.
    */
   public static async publishExamination(mockTestId: string, userId: string, role: Role) {
@@ -634,8 +682,21 @@ export class QuestionPaperService {
       where: { id: mockTestId },
       include: {
         testQuestions: {
+          orderBy: { order: 'asc' },
           include: {
-            question: true,
+            questionVersion: true,
+            question: {
+              include: {
+                subtopic: {
+                  include: {
+                    topic: {
+                      include: { module: { include: { subject: true } } },
+                    },
+                  },
+                },
+                sourceDocument: { select: { id: true, title: true, fileName: true } },
+              },
+            },
           },
         },
       },
@@ -655,14 +716,12 @@ export class QuestionPaperService {
       };
     }
 
-    if (mockTest.testQuestions.length === 0) {
-      throw new Error('Cannot publish an examination without any questions attached.');
-    }
-
-    // Perform final pre-publication validation
-    const unverified = mockTest.testQuestions.filter((tq) => tq.question.verificationStatus !== VerificationStatus.VERIFIED);
-    if (unverified.length > 0) {
-      throw new Error(`Cannot publish exam: ${unverified.length} question(s) are not VERIFIED.`);
+    // Perform strict server-side pre-publication validation
+    const validation = ExamValidationService.validatePrePublish(mockTest);
+    if (!validation.canPublish) {
+      throw new Error(
+        `Cannot publish examination '${mockTest.title}'. ${validation.blocking.length} blocking issue(s):\n• ${validation.blocking.join('\n• ')}`
+      );
     }
 
     const updatedMockTest = await prisma.mockTest.update({
@@ -684,6 +743,7 @@ export class QuestionPaperService {
       success: true,
       message: `Examination '${updatedMockTest.title}' has been successfully published for students!`,
       mockTest: updatedMockTest,
+      validation,
     };
   }
 }

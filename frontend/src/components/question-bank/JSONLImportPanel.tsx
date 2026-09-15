@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
 import {
@@ -341,18 +341,18 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
           {/* Core Metrics Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5 text-xs font-mono text-center">
             <div className="p-2.5 bg-slate-50 border rounded">
-              <div className="text-slate-500 text-[10px]">Questions detected</div>
-              <div className="font-bold text-slate-900 text-sm mt-0.5">{previewData.totalRecords}</div>
-            </div>
-            <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded">
-              <div className="text-emerald-700 text-[10px]">Questions valid</div>
-              <div className="font-bold text-emerald-900 text-sm mt-0.5">{previewData.validCount ?? previewData.totalRecords}</div>
+              <div className="text-slate-500 text-[10px]">Questions</div>
+              <div className="font-bold text-slate-900 text-sm mt-0.5">{previewData.validCount ?? previewData.totalRecords}</div>
             </div>
             <div className="p-2.5 bg-blue-50 border border-blue-200 rounded">
               <div className="text-blue-700 text-[10px] flex items-center justify-center gap-1">
-                <ImageIcon className="w-3 h-3" /> With figures
+                <ImageIcon className="w-3 h-3" /> Questions with figures
               </div>
               <div className="font-bold text-blue-900 text-sm mt-0.5">{previewData.questionsWithFigures ?? 0}</div>
+            </div>
+            <div className="p-2.5 bg-indigo-50 border border-indigo-200 rounded">
+              <div className="text-indigo-700 text-[10px]">Figure assets</div>
+              <div className="font-bold text-indigo-900 text-sm mt-0.5">{previewData.figureAssetsFoundCount ?? 0}</div>
             </div>
             <div className={`p-2.5 border rounded ${previewData.missingFiguresCount > 0 ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-slate-50'}`}>
               <div className="text-slate-500 text-[10px]">Missing figures</div>
@@ -472,13 +472,9 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
           </div>
 
           {/* Core Metrics Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs font-mono text-center">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-xs font-mono text-center">
             <div className="p-2.5 bg-white border border-emerald-200 rounded shadow-sm">
-              <div className="text-slate-500 text-[10px]">Questions Processed</div>
-              <div className="font-bold text-slate-900 text-sm">{importResult.totalProcessed}</div>
-            </div>
-            <div className="p-2.5 bg-white border border-emerald-300 rounded shadow-sm">
-              <div className="text-emerald-700 text-[10px] font-bold">Inserted</div>
+              <div className="text-slate-500 text-[10px]">Inserted</div>
               <div className="font-bold text-emerald-700 text-sm">{importResult.importedCount}</div>
             </div>
             <div className="p-2.5 bg-white border border-slate-200 rounded shadow-sm">
@@ -486,12 +482,20 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
               <div className="font-bold text-slate-800 text-sm">{importResult.duplicateCount}</div>
             </div>
             <div className="p-2.5 bg-white border border-blue-200 rounded shadow-sm">
-              <div className="text-blue-700 text-[10px]">Figures (New)</div>
-              <div className="font-bold text-blue-700 text-sm">{importResult.figuresStoredCount ?? 0}</div>
+              <div className="text-blue-700 text-[10px]">Questions w/ Figures</div>
+              <div className="font-bold text-blue-700 text-sm">{importResult.questionsWithFiguresCount ?? 0}</div>
             </div>
             <div className="p-2.5 bg-white border border-indigo-200 rounded shadow-sm">
-              <div className="text-indigo-700 text-[10px]">Figures (Reused)</div>
-              <div className="font-bold text-indigo-700 text-sm">{importResult.figuresReusedCount ?? 0}</div>
+              <div className="text-indigo-700 text-[10px]">Figure Assets (New)</div>
+              <div className="font-bold text-indigo-700 text-sm">{importResult.figuresStoredCount ?? 0}</div>
+            </div>
+            <div className="p-2.5 bg-white border border-sky-200 rounded shadow-sm">
+              <div className="text-sky-700 text-[10px]">Figure Assets (Reused)</div>
+              <div className="font-bold text-sky-700 text-sm">{importResult.figuresReusedCount ?? 0}</div>
+            </div>
+            <div className="p-2.5 bg-white border border-amber-200 rounded shadow-sm">
+              <div className="text-amber-700 text-[10px]">Figure Assets (Repaired)</div>
+              <div className="font-bold text-amber-700 text-sm">{importResult.figuresRepairedCount ?? 0}</div>
             </div>
             <div className={`p-2.5 bg-white border rounded shadow-sm ${importResult.missingFiguresCount > 0 ? 'border-amber-400 bg-amber-50' : 'border-slate-200'}`}>
               <div className="text-slate-500 text-[10px]">Missing Figures</div>

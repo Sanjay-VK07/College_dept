@@ -53,6 +53,7 @@ import {
   Bot,
   Building,
 } from 'lucide-react';
+import { ExamPreviewModal } from '@/components/question-bank/ExamPreviewModal';
 import api from '@/lib/api';
 import { aiService } from '@/services/aiService';
 import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
@@ -3199,35 +3200,17 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* Modal: Preview Question Paper */}
-      {selectedExamPreview && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
-          <div className="erp-card max-w-xl w-full space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">{selectedExamPreview.title}</h3>
-                <p className="text-xs text-slate-500">Official Question Paper Preview</p>
-              </div>
-              <button onClick={() => setSelectedExamPreview(null)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
-            </div>
-            <div className="space-y-3 text-xs">
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
-                <div className="font-bold text-slate-800">
-                  Target Department: {selectedExamPreview.targetDepartment} • {getExamSemester(selectedExamPreview)}
-                </div>
-                <div className="font-mono text-slate-600">Total Duration: {selectedExamPreview.durationMinutes} Minutes • Total Marks: {selectedExamPreview.totalMarks}</div>
-              </div>
-              <div>
-                <span className="font-bold text-slate-700 uppercase block mb-1">Instructions:</span>
-                <p className="text-slate-600 whitespace-pre-wrap font-mono bg-slate-50 p-2.5 rounded border border-slate-200">{selectedExamPreview.instructions}</p>
-              </div>
-            </div>
-            <div className="flex justify-end pt-2">
-              <button onClick={() => setSelectedExamPreview(null)} className="erp-btn-secondary py-1.5 text-xs">Close Preview</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modal: Exam Preview & Pre-Publish Validation */}
+      <ExamPreviewModal
+        isOpen={!!selectedExamPreview}
+        onClose={() => setSelectedExamPreview(null)}
+        mockTestId={selectedExamPreview?.id}
+        initialMockTest={selectedExamPreview}
+        onPublished={() => {
+          fetchInitialData();
+          setSelectedExamPreview(null);
+        }}
+      />
 
       {/* Add Student Modal */}
       {isAddStudentOpen && (

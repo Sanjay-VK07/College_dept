@@ -621,6 +621,16 @@ export const aiService = {
     return res.data;
   },
 
+  async getExamPreview(mockTestId: string) {
+    const res = await api.get(`/ai/question-paper/exams/${mockTestId}/preview`);
+    return res.data;
+  },
+
+  async validateExam(mockTestId: string) {
+    const res = await api.post(`/ai/question-paper/exams/${mockTestId}/validate`);
+    return res.data;
+  },
+
   async publishExamination(mockTestId: string) {
     const res = await api.post(`/ai/question-paper/exams/${mockTestId}/publish`);
     return res.data;

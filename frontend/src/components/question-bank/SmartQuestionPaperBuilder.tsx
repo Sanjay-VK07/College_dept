@@ -27,6 +27,7 @@ import {
   Search,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { ExamPreviewModal } from './ExamPreviewModal';
 
 interface SmartQuestionPaperBuilderProps {
   role?: string;
@@ -212,6 +213,7 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
   const [showFinalizedQuestions, setShowFinalizedQuestions] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
   const [examSettings, setExamSettings] = useState(
     savedDraft?.examSettings || {
       title: '',
@@ -1311,11 +1313,18 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => setIsPreviewModalOpen(true)}
+                      className="px-4 py-2 bg-[#1E40AF] hover:bg-blue-800 text-white text-xs font-bold rounded flex items-center gap-1.5 shadow-sm"
+                    >
+                      <Eye className="w-4 h-4" />
+                      Exam Preview &amp; Validate
+                    </button>
+                    <button
                       onClick={() => setShowFinalizedQuestions((v) => !v)}
                       className="px-4 py-2 border border-emerald-300 text-emerald-800 text-xs font-bold rounded hover:bg-emerald-100 flex items-center gap-1"
                     >
                       <Eye className="w-4 h-4" />
-                      {showFinalizedQuestions ? 'Hide Question Paper' : `View Question Paper (${paperQuestions.length})`}
+                      {showFinalizedQuestions ? 'Hide List' : `View Questions (${paperQuestions.length})`}
                     </button>
                     <button
                       onClick={handlePublishExamination}
@@ -1485,6 +1494,29 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
           </div>
         )}
       </div>
+
+      {/* Full Examination Preview & Validation Modal */}
+      <ExamPreviewModal
+        isOpen={isPreviewModalOpen}
+        onClose={() => setIsPreviewModalOpen(false)}
+        mockTestId={finalizedExam?.id}
+        initialMockTest={
+          finalizedExam || {
+            title: examSettings.title || 'AI Assembled Question Paper',
+            targetDepartment: examSettings.targetDepartment || 'Computer Science and Engineering',
+            durationMinutes: examSettings.durationMinutes || 180,
+            totalMarks: examSettings.totalMarks || 100,
+            isPublished: false,
+            status: 'DRAFT',
+          }
+        }
+        initialQuestions={paperQuestions}
+        onPublished={() => {
+          if (finalizedExam) {
+            setFinalizedExam((prev: any) => ({ ...prev, isPublished: true, status: 'PUBLISHED' }));
+          }
+        }}
+      />
     </div>
   );
 };

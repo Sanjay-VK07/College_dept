@@ -78,6 +78,8 @@ export interface ImportPreviewResult {
   totalRecords: number;
   validCount: number;
   questionsWithFigures: number;
+  figureAssetsFoundCount: number;
+  unusedFigureAssetsCount: number;
   missingFiguresCount: number;
   missingFigures: MissingFigureRecord[];
   topicsCount: number;
@@ -96,39 +98,81 @@ export interface ImportPreviewResult {
 export class JSONLImportService {
   /**
    * Extracts any referenced figure file paths/names from a JSONL record.
+   * Scans explicit figure fields, imageUrl, and Markdown image syntax ![alt](path).
    */
   public static extractReferencedFigurePaths(rec: JSONLRecord): string[] {
     const paths: string[] = [];
 
+    const addPath = (p?: string) => {
+      if (typeof p === 'string' && p.trim()) {
+        const cleaned = p.trim();
+        if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://') && !cleaned.startsWith('/uploads/')) {
+          paths.push(cleaned);
+        }
+      }
+    };
+
+    const extractMarkdownImages = (text?: string) => {
+      if (typeof text === 'string' && text.includes('![')) {
+        const matches = text.matchAll(/!\[.*?\]\((.*?)\)/g);
+        for (const m of matches) {
+          if (m[1]) addPath(m[1]);
+        }
+      }
+    };
+
+    // 1. Check rec.figures array
     if (Array.isArray(rec.figures)) {
       for (const f of rec.figures) {
-        if (typeof f === 'string' && f.trim()) {
-          paths.push(f.trim());
+        if (typeof f === 'string') {
+          addPath(f);
         } else if (f && typeof f === 'object') {
           const p = f.imagePath || f.path || f.url || (f as any).imageUrl || (f as any).file || (f as any).fileName;
-          if (typeof p === 'string' && p.trim()) {
-            paths.push(p.trim());
-          }
+          addPath(p);
         }
       }
     }
 
+    // 2. Check rec.figure
     if (rec.figure) {
-      if (typeof rec.figure === 'string' && rec.figure.trim()) {
-        paths.push(rec.figure.trim());
+      if (typeof rec.figure === 'string') {
+        addPath(rec.figure);
       } else if (typeof rec.figure === 'object') {
         const p = (rec.figure as JSONLFigureRef).imagePath || (rec.figure as JSONLFigureRef).path || (rec.figure as JSONLFigureRef).url;
-        if (typeof p === 'string' && p.trim()) {
-          paths.push(p.trim());
+        addPath(p);
+      }
+    }
+
+    // 3. Check rec.imageUrl or rec.image
+    addPath(rec.imageUrl);
+    if (typeof rec.image === 'string') {
+      addPath(rec.image);
+    } else if (rec.image && typeof rec.image === 'object') {
+      const p = (rec.image as JSONLFigureRef).imagePath || (rec.image as JSONLFigureRef).path || (rec.image as JSONLFigureRef).url;
+      addPath(p);
+    }
+
+    // 4. Scan markdown images in question text, options, and explanations
+    extractMarkdownImages(rec.question);
+    extractMarkdownImages(rec.rawAnswer);
+    extractMarkdownImages(rec.reason);
+    extractMarkdownImages(rec.reviewReason);
+    extractMarkdownImages(rec.extractionNotes);
+
+    if (rec.options) {
+      if (Array.isArray(rec.options)) {
+        for (const opt of rec.options) {
+          if (typeof opt === 'string') extractMarkdownImages(opt);
+          else if (opt && typeof opt === 'object') extractMarkdownImages(opt.text || opt.value || opt.label);
+        }
+      } else if (typeof rec.options === 'object') {
+        for (const val of Object.values(rec.options)) {
+          if (typeof val === 'string') extractMarkdownImages(val);
         }
       }
     }
 
-    if (typeof rec.imageUrl === 'string' && rec.imageUrl.trim() && !rec.imageUrl.startsWith('http') && !rec.imageUrl.startsWith('/uploads/')) {
-      paths.push(rec.imageUrl.trim());
-    }
-
-    return Array.from(new Set(paths));
+    return Array.from(new Set(paths.map((p) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '').trim())));
   }
 
   /**
@@ -178,6 +222,7 @@ export class JSONLImportService {
 
     const missingFigures: MissingFigureRecord[] = [];
     let questionsWithFigures = 0;
+    const referencedAssetsFoundSet = new Set<string>();
 
     let lineIndex = 0;
     for (const rawLine of lines) {
@@ -206,30 +251,69 @@ export class JSONLImportService {
 
         seenIds.add(obj.questionId);
 
-        // Check figure references
+        // Check figure references & resolve against package figure entries
         const refPaths = this.extractReferencedFigurePaths(obj);
-        const hasFigureFlag = Boolean(obj.containsFigure || obj.hasFigure || (obj.figureCount && obj.figureCount > 0) || refPaths.length > 0);
+        let hasResolvedAssetForQuestion = false;
 
-        if (hasFigureFlag || refPaths.length > 0) {
-          questionsWithFigures++;
-        }
-
-        if (availableFigures && refPaths.length > 0) {
-          for (const ref of refPaths) {
-            const resolved = this.resolveFigureAsset(ref, availableFigures);
-            if (!resolved) {
-              missingFigures.push({
-                questionId: obj.questionId,
-                reference: ref,
-              });
+        if (availableFigures && availableFigures.size > 0) {
+          if (refPaths.length > 0) {
+            for (const ref of refPaths) {
+              const resolved = this.resolveFigureAsset(ref, availableFigures);
+              if (resolved) {
+                hasResolvedAssetForQuestion = true;
+                referencedAssetsFoundSet.add(resolved.entryPath || resolved.fileName);
+              } else {
+                missingFigures.push({
+                  questionId: obj.questionId,
+                  reference: ref,
+                });
+              }
             }
           }
+        } else {
+          // Plain JSONL upload (without ZIP archive)
+          if (refPaths.length > 0) {
+            for (const ref of refPaths) {
+              // Check if static file exists under public/uploads/ or uploads/
+              const p1 = path.resolve(process.cwd(), 'public', 'uploads', ref);
+              const p2 = path.resolve(process.cwd(), 'public', ref);
+              if (fs.existsSync(p1) || fs.existsSync(p2)) {
+                hasResolvedAssetForQuestion = true;
+                referencedAssetsFoundSet.add(ref);
+              } else {
+                missingFigures.push({
+                  questionId: obj.questionId,
+                  reference: ref,
+                });
+              }
+            }
+          }
+        }
+
+        // Increment questionsWithFigures ONLY IF at least one figure reference resolves to an actual asset!
+        if (hasResolvedAssetForQuestion) {
+          questionsWithFigures++;
         }
 
         validRecords.push(obj);
       } catch (err: any) {
         invalidRecords.push({ line: lineIndex, error: `JSON Parse error: ${err.message}`, raw: trimmed });
       }
+    }
+
+    const figureAssetsFoundCount = referencedAssetsFoundSet.size;
+
+    // Calculate unused physical assets present in ZIP archive (e.g. PDF page renders)
+    let unusedFigureAssetsCount = 0;
+    if (availableFigures && availableFigures.size > 0) {
+      const allZipPhysicalAssets = new Set(
+        Array.from(availableFigures.values()).map((a) => a.entryPath || a.fileName)
+      );
+      let matchedCount = 0;
+      for (const key of referencedAssetsFoundSet) {
+        if (allZipPhysicalAssets.has(key)) matchedCount++;
+      }
+      unusedFigureAssetsCount = Math.max(0, allZipPhysicalAssets.size - matchedCount);
     }
 
     // Calculate metrics and topic breakdown
@@ -241,7 +325,21 @@ export class JSONLImportService {
     const topicMap = new Map<string, TopicBreakdownItem>();
 
     for (const rec of validRecords) {
-      const vStatus = (rec.verificationStatus || 'VERIFIED').toUpperCase();
+      let qType: QuestionType = QuestionType.MCQ;
+      const rawType = (rec.questionType || '').toUpperCase();
+      if (rawType === 'MCQ') qType = QuestionType.MCQ;
+      else if (rawType === 'MSQ') qType = QuestionType.MSQ;
+      else if (rawType === 'NAT') qType = QuestionType.NAT;
+      else if (rawType === 'FREE_RESPONSE') qType = QuestionType.FREE_RESPONSE;
+      else if (rawType === 'UNKNOWN') qType = QuestionType.UNKNOWN;
+
+      const { needsReview } = this.normalizeOptionsAndAnswer(rec, qType);
+      const rawVStatus = (rec.verificationStatus || '').toUpperCase();
+      let vStatus = rawVStatus || 'VERIFIED';
+      if (needsReview && vStatus === 'VERIFIED') {
+        vStatus = 'NEEDS_REVIEW';
+      }
+
       if (vStatus === 'VERIFIED') verifiedCount++;
       else if (vStatus === 'UNANSWERED_IN_SOURCE') unansweredInSourceCount++;
       else if (vStatus === 'NEEDS_REVIEW') needsReviewCount++;
@@ -293,6 +391,8 @@ export class JSONLImportService {
       totalRecords: validRecords.length + invalidRecords.length,
       validCount: validRecords.length,
       questionsWithFigures,
+      figureAssetsFoundCount,
+      unusedFigureAssetsCount,
       missingFiguresCount: missingFigures.length,
       missingFigures,
       topicsCount: topicBreakdown.length,
@@ -464,16 +564,15 @@ export class JSONLImportService {
     const existingDuplicateCount = existingMap.size;
 
     // 4. Save figure assets and prepare question data payload
-    let figuresStoredCount = 0;
-    let figuresReusedCount = 0;
-    let figuresRepairedCount = 0;
+    const savedNewAssetUrls = new Set<string>();
+    const savedReusedAssetUrls = new Set<string>();
+    const repairedQuestionIds = new Set<string>();
     const missingFiguresMap = new Map<string, MissingFigureRecord>();
     const questionsToCreate: any[] = [];
 
     for (const rec of preview.validRecords) {
       const existingQ = existingMap.get(rec.questionId);
       const refPaths = this.extractReferencedFigurePaths(rec);
-      const containsFigureFlag = Boolean(rec.containsFigure || rec.hasFigure || (rec.figureCount && rec.figureCount > 0) || refPaths.length > 0);
 
       // --- DUPLICATE QUESTION HANDLING (Idempotent for Question, Independent for Figures) ---
       if (existingQ) {
@@ -483,9 +582,9 @@ export class JSONLImportService {
             if (asset) {
               const { url, newlyCreated } = await this.saveFigureAsset(asset);
               if (newlyCreated) {
-                figuresStoredCount++;
+                savedNewAssetUrls.add(url);
               } else {
-                figuresReusedCount++;
+                savedReusedAssetUrls.add(url);
               }
 
               // Repair existing question in DB if its imageUrl was missing or not pointing to the valid stored diagram
@@ -498,7 +597,7 @@ export class JSONLImportService {
                   },
                 });
                 existingQ.imageUrl = url;
-                figuresRepairedCount++;
+                repairedQuestionIds.add(existingQ.id);
               }
             } else {
               // Asset not resolved from ZIP
@@ -506,7 +605,7 @@ export class JSONLImportService {
                 const p1 = path.resolve(process.cwd(), 'public', existingQ.imageUrl.replace(/^\//, ''));
                 const p2 = path.resolve(process.cwd(), existingQ.imageUrl.replace(/^\//, ''));
                 if (fs.existsSync(p1) || fs.existsSync(p2)) {
-                  figuresReusedCount++;
+                  savedReusedAssetUrls.add(existingQ.imageUrl);
                 } else {
                   missingFiguresMap.set(`${rec.questionId}:${ref}`, { questionId: rec.questionId, reference: ref });
                 }
@@ -516,7 +615,7 @@ export class JSONLImportService {
             }
           }
         } else if (existingQ.imageUrl) {
-          figuresReusedCount++;
+          savedReusedAssetUrls.add(existingQ.imageUrl);
         }
         continue;
       }
@@ -554,9 +653,9 @@ export class JSONLImportService {
               imageUrl = url;
             }
             if (newlyCreated) {
-              figuresStoredCount++;
+              savedNewAssetUrls.add(url);
             } else {
-              figuresReusedCount++;
+              savedReusedAssetUrls.add(url);
             }
           } else {
             missingFiguresMap.set(`${rec.questionId}:${ref}`, { questionId: rec.questionId, reference: ref });
@@ -565,6 +664,8 @@ export class JSONLImportService {
       } else if (rec.imageUrl && (rec.imageUrl.startsWith('/uploads/') || rec.imageUrl.startsWith('http'))) {
         imageUrl = rec.imageUrl;
       }
+
+      const containsFigureFlag = Boolean(imageUrl || (rec.imageUrl && (rec.imageUrl.startsWith('/uploads/') || rec.imageUrl.startsWith('http'))));
 
       const visualMetadata: any = {
         visualExtractionReason: rec.visualExtractionReason || null,
@@ -639,11 +740,13 @@ export class JSONLImportService {
       duplicateCount: preview.duplicateCount + existingDuplicateCount,
       invalidCount: preview.invalidCount,
       questionsWithFiguresCount: preview.questionsWithFigures,
+      figureAssetsFoundCount: preview.figureAssetsFoundCount,
+      unusedFigureAssetsCount: preview.unusedFigureAssetsCount,
       missingFiguresCount: missingFiguresList.length,
       missingFigures: missingFiguresList,
-      figuresStoredCount,
-      figuresReusedCount,
-      figuresRepairedCount,
+      figuresStoredCount: savedNewAssetUrls.size,
+      figuresReusedCount: savedReusedAssetUrls.size,
+      figuresRepairedCount: repairedQuestionIds.size,
       verifiedCount: preview.verifiedCount,
       unansweredCount: preview.unansweredInSourceCount,
       needsReviewCount: preview.needsReviewCount,
@@ -654,6 +757,9 @@ export class JSONLImportService {
 
   private static parseNATAnswer(raw: string): { answer: any; needsReview: boolean } {
     const trimmed = (raw || '').trim();
+    if (!trimmed) {
+      return { answer: {}, needsReview: true };
+    }
     const isMultiRange = trimmed.includes(';');
     const firstSegment = isMultiRange ? trimmed.split(';')[0].trim() : trimmed;
 
@@ -679,32 +785,32 @@ export class JSONLImportService {
     qType: QuestionType
   ): { options: any; correctAnswer: any; needsReview?: boolean } {
     if (qType === QuestionType.MCQ || qType === QuestionType.MSQ) {
+      let optionsArray: any[] = [];
+      let correctIndices: number[] = [];
+
       if (rec.options && !Array.isArray(rec.options) && typeof rec.options === 'object') {
         const letters = Object.keys(rec.options).sort();
-        const optionsArray = letters.map((l) => ({ text: (rec.options as Record<string, string>)[l] }));
+        optionsArray = letters.map((l) => ({ text: (rec.options as Record<string, string>)[l], label: l }));
         const letterToIndex = new Map(letters.map((l, i) => [l.toUpperCase(), i]));
 
         const rawCorrect = Array.isArray(rec.correctAnswer)
           ? rec.correctAnswer
           : rec.correctAnswer !== undefined && rec.correctAnswer !== null
           ? [rec.correctAnswer]
+          : rec.rawAnswer !== undefined && rec.rawAnswer !== null
+          ? [rec.rawAnswer]
           : [];
 
-        const correctIndices = rawCorrect
+        correctIndices = rawCorrect
           .map((v: any) => {
-            if (typeof v === 'string' && letterToIndex.has(v.toUpperCase())) return letterToIndex.get(v.toUpperCase());
+            if (typeof v === 'string' && letterToIndex.has(v.trim().toUpperCase())) return letterToIndex.get(v.trim().toUpperCase());
             const n = Number(v);
             return Number.isFinite(n) ? n : null;
           })
           .filter((v: any): v is number => v !== null);
-
-        return { options: optionsArray, correctAnswer: correctIndices };
-      }
-
-      if (Array.isArray(rec.options)) {
-        const optionsArray = rec.options.map((o: any) => (typeof o === 'string' ? { text: o } : o));
+      } else if (Array.isArray(rec.options)) {
+        optionsArray = rec.options.map((o: any) => (typeof o === 'string' ? { text: o } : o));
         
-        let correctIndices: number[] = [];
         if (Array.isArray(rec.correctAnswer)) {
           correctIndices = rec.correctAnswer.map((v: any) => {
             if (typeof v === 'string' && /^[A-Z]$/i.test(v.trim())) {
@@ -717,17 +823,22 @@ export class JSONLImportService {
           correctIndices = [rec.correctAnswer.trim().toUpperCase().charCodeAt(0) - 65];
         } else if (typeof rec.correctAnswer === 'number' && Number.isFinite(rec.correctAnswer)) {
           correctIndices = [rec.correctAnswer];
+        } else if (typeof rec.rawAnswer === 'string' && /^[A-Z]$/i.test(rec.rawAnswer.trim())) {
+          correctIndices = [rec.rawAnswer.trim().toUpperCase().charCodeAt(0) - 65];
         }
-
-        return { options: optionsArray, correctAnswer: correctIndices };
       }
 
-      return { options: [], correctAnswer: [] };
+      const hasMissingAnswer = correctIndices.length === 0;
+      const hasInvalidOptions = qType === QuestionType.MCQ && optionsArray.length < 2;
+      const needsReview = hasMissingAnswer || hasInvalidOptions;
+
+      return { options: optionsArray, correctAnswer: correctIndices, needsReview };
     }
 
     if (qType === QuestionType.NAT) {
-      const raw = Array.isArray(rec.correctAnswer) ? rec.correctAnswer[0] : rec.correctAnswer;
-      const parsed = this.parseNATAnswer(typeof raw === 'string' ? raw : String(raw ?? rec.rawAnswer ?? ''));
+      const raw = Array.isArray(rec.correctAnswer) && rec.correctAnswer.length > 0 ? rec.correctAnswer[0] : rec.correctAnswer;
+      const rawStr = typeof raw === 'string' ? raw : raw !== undefined && raw !== null ? String(raw) : (rec.rawAnswer ? String(rec.rawAnswer) : '');
+      const parsed = this.parseNATAnswer(rawStr);
       return { options: [], correctAnswer: parsed.answer, needsReview: parsed.needsReview };
     }
 
