@@ -28,6 +28,7 @@ export interface JSONLRecord {
   question: string;
   options?: Record<string, string> | any[];
   correctAnswer?: any;
+  answer?: any;
   rawAnswer?: string;
   questionType: string;
   sourceDocument?: string;
@@ -333,10 +334,32 @@ export class JSONLImportService {
       else if (rawType === 'FREE_RESPONSE') qType = QuestionType.FREE_RESPONSE;
       else if (rawType === 'UNKNOWN') qType = QuestionType.UNKNOWN;
 
+      const refPaths = this.extractReferencedFigurePaths(rec);
       const { needsReview } = this.normalizeOptionsAndAnswer(rec, qType);
+
+      let hasMissingFigureRef = false;
+      if (availableFigures && availableFigures.size > 0 && refPaths.length > 0) {
+        for (const ref of refPaths) {
+          const resolved = this.resolveFigureAsset(ref, availableFigures);
+          if (!resolved) {
+            hasMissingFigureRef = true;
+          }
+        }
+      }
+
+      const isContentValid = typeof rec.question === 'string' && rec.question.trim().length > 0;
+      const passesValidation = isContentValid && !needsReview && !hasMissingFigureRef;
+
       const rawVStatus = (rec.verificationStatus || '').toUpperCase();
-      let vStatus = rawVStatus || 'VERIFIED';
-      if (needsReview && vStatus === 'VERIFIED') {
+      const isExplicitlyFlagged = rawVStatus === 'NEEDS_REVIEW' || rawVStatus === 'REJECTED';
+      let vStatus: string;
+      if (rawVStatus === 'REJECTED') {
+        vStatus = 'REJECTED';
+      } else if (rawVStatus === 'UNANSWERED_IN_SOURCE') {
+        vStatus = 'UNANSWERED_IN_SOURCE';
+      } else if (!isExplicitlyFlagged && passesValidation) {
+        vStatus = 'VERIFIED';
+      } else {
         vStatus = 'NEEDS_REVIEW';
       }
 
@@ -574,6 +597,45 @@ export class JSONLImportService {
       const existingQ = existingMap.get(rec.questionId);
       const refPaths = this.extractReferencedFigurePaths(rec);
 
+      let qType: QuestionType = QuestionType.MCQ;
+      const rawType = (rec.questionType || '').toUpperCase();
+      if (rawType === 'MCQ') qType = QuestionType.MCQ;
+      else if (rawType === 'MSQ') qType = QuestionType.MSQ;
+      else if (rawType === 'NAT') qType = QuestionType.NAT;
+      else if (rawType === 'FREE_RESPONSE') qType = QuestionType.FREE_RESPONSE;
+      else if (rawType === 'UNKNOWN') qType = QuestionType.UNKNOWN;
+
+      const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer, needsReview } = this.normalizeOptionsAndAnswer(rec, qType);
+
+      let hasMissingFigureRef = false;
+      if (refPaths.length > 0) {
+        if (figureEntries && figureEntries.size > 0) {
+          for (const ref of refPaths) {
+            const asset = this.resolveFigureAsset(ref, figureEntries);
+            if (!asset) {
+              hasMissingFigureRef = true;
+            }
+          }
+        }
+      }
+
+      const isContentValid = typeof rec.question === 'string' && rec.question.trim().length > 0;
+      const rawVStatus = (rec.verificationStatus || '').toUpperCase();
+      const isExplicitlyFlagged = rawVStatus === 'NEEDS_REVIEW' || rawVStatus === 'REJECTED';
+      const missingFigRefs = hasMissingFigureRef ? 1 : 0;
+      const passesValidation = isContentValid && !needsReview && missingFigRefs === 0;
+
+      let effectiveVStatus: VerificationStatus;
+      if (rawVStatus === 'REJECTED') {
+        effectiveVStatus = VerificationStatus.REJECTED;
+      } else if (rawVStatus === 'UNANSWERED_IN_SOURCE') {
+        effectiveVStatus = VerificationStatus.UNANSWERED_IN_SOURCE;
+      } else if (!isExplicitlyFlagged && passesValidation) {
+        effectiveVStatus = VerificationStatus.VERIFIED;
+      } else {
+        effectiveVStatus = VerificationStatus.NEEDS_REVIEW;
+      }
+
       // --- DUPLICATE QUESTION HANDLING (Idempotent for Question, Independent for Figures) ---
       if (existingQ) {
         if (refPaths.length > 0 && figureEntries) {
@@ -594,6 +656,9 @@ export class JSONLImportService {
                   data: {
                     imageUrl: url,
                     containsFigure: true,
+                    options: normalizedOptions,
+                    correctAnswer: normalizedCorrectAnswer as any,
+                    verificationStatus: effectiveVStatus,
                   },
                 });
                 existingQ.imageUrl = url;
@@ -617,6 +682,17 @@ export class JSONLImportService {
         } else if (existingQ.imageUrl) {
           savedReusedAssetUrls.add(existingQ.imageUrl);
         }
+
+        // Re-validate and update existing record if its status was NEEDS_REVIEW but it now passes validation
+        await prisma.question.update({
+          where: { id: existingQ.id },
+          data: {
+            options: normalizedOptions,
+            correctAnswer: normalizedCorrectAnswer as any,
+            verificationStatus: effectiveVStatus,
+          },
+        }).catch(() => {});
+
         continue;
       }
 
@@ -624,23 +700,6 @@ export class JSONLImportService {
       const subtopicId =
         topicHeadingToSubtopicMap.get(rec.sourceHeading || 'General Topic') ||
         Array.from(topicHeadingToSubtopicMap.values())[0];
-
-      let qType: QuestionType = QuestionType.MCQ;
-      const rawType = (rec.questionType || '').toUpperCase();
-      if (rawType === 'MCQ') qType = QuestionType.MCQ;
-      else if (rawType === 'MSQ') qType = QuestionType.MSQ;
-      else if (rawType === 'NAT') qType = QuestionType.NAT;
-      else if (rawType === 'FREE_RESPONSE') qType = QuestionType.FREE_RESPONSE;
-      else if (rawType === 'UNKNOWN') qType = QuestionType.UNKNOWN;
-
-      let vStatus: VerificationStatus = VerificationStatus.VERIFIED;
-      const rawVStatus = (rec.verificationStatus || '').toUpperCase();
-      if (rawVStatus === 'VERIFIED') vStatus = VerificationStatus.VERIFIED;
-      else if (rawVStatus === 'UNANSWERED_IN_SOURCE') vStatus = VerificationStatus.UNANSWERED_IN_SOURCE;
-      else if (rawVStatus === 'NEEDS_REVIEW') vStatus = VerificationStatus.NEEDS_REVIEW;
-      else if (rawVStatus === 'REJECTED') vStatus = VerificationStatus.REJECTED;
-      else if (rawVStatus === 'EXTRACTED') vStatus = VerificationStatus.EXTRACTED;
-      else if (rawVStatus === 'VALIDATING') vStatus = VerificationStatus.VALIDATING;
 
       // Resolve and save figures for new questions
       let imageUrl: string | null = null;
@@ -679,9 +738,6 @@ export class JSONLImportService {
         figures: rec.figures || (rec.figure ? [rec.figure] : []),
         resolvedImageUrl: imageUrl,
       };
-
-      const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer, needsReview } = this.normalizeOptionsAndAnswer(rec, qType);
-      const effectiveVStatus = needsReview && vStatus === VerificationStatus.VERIFIED ? VerificationStatus.NEEDS_REVIEW : vStatus;
 
       questionsToCreate.push({
         customId: rec.questionId,
@@ -757,7 +813,7 @@ export class JSONLImportService {
 
   private static parseNATAnswer(raw: string): { answer: any; needsReview: boolean } {
     const trimmed = (raw || '').trim();
-    if (!trimmed) {
+    if (!trimmed || trimmed.toUpperCase() === 'N/A') {
       return { answer: {}, needsReview: true };
     }
     const isMultiRange = trimmed.includes(';');
@@ -797,8 +853,10 @@ export class JSONLImportService {
           ? rec.correctAnswer
           : rec.correctAnswer !== undefined && rec.correctAnswer !== null
           ? [rec.correctAnswer]
-          : rec.rawAnswer !== undefined && rec.rawAnswer !== null
-          ? [rec.rawAnswer]
+          : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
+          ? (Array.isArray(rec.answer) ? rec.answer : [rec.answer])
+          : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
+          ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer : [rec.rawAnswer])
           : [];
 
         correctIndices = rawCorrect
@@ -811,21 +869,23 @@ export class JSONLImportService {
       } else if (Array.isArray(rec.options)) {
         optionsArray = rec.options.map((o: any) => (typeof o === 'string' ? { text: o } : o));
         
-        if (Array.isArray(rec.correctAnswer)) {
-          correctIndices = rec.correctAnswer.map((v: any) => {
-            if (typeof v === 'string' && /^[A-Z]$/i.test(v.trim())) {
-              return v.trim().toUpperCase().charCodeAt(0) - 65;
-            }
-            const n = Number(v);
-            return Number.isFinite(n) ? n : null;
-          }).filter((n: any): n is number => n !== null);
-        } else if (typeof rec.correctAnswer === 'string' && /^[A-Z]$/i.test(rec.correctAnswer.trim())) {
-          correctIndices = [rec.correctAnswer.trim().toUpperCase().charCodeAt(0) - 65];
-        } else if (typeof rec.correctAnswer === 'number' && Number.isFinite(rec.correctAnswer)) {
-          correctIndices = [rec.correctAnswer];
-        } else if (typeof rec.rawAnswer === 'string' && /^[A-Z]$/i.test(rec.rawAnswer.trim())) {
-          correctIndices = [rec.rawAnswer.trim().toUpperCase().charCodeAt(0) - 65];
-        }
+        const rawCorrect = Array.isArray(rec.correctAnswer)
+          ? rec.correctAnswer
+          : rec.correctAnswer !== undefined && rec.correctAnswer !== null
+          ? [rec.correctAnswer]
+          : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
+          ? (Array.isArray(rec.answer) ? rec.answer : [rec.answer])
+          : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
+          ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer : [rec.rawAnswer])
+          : [];
+
+        correctIndices = rawCorrect.map((v: any) => {
+          if (typeof v === 'string' && /^[A-Z]$/i.test(v.trim())) {
+            return v.trim().toUpperCase().charCodeAt(0) - 65;
+          }
+          const n = Number(v);
+          return Number.isFinite(n) ? n : null;
+        }).filter((n: any): n is number => n !== null);
       }
 
       const hasMissingAnswer = correctIndices.length === 0;
@@ -836,8 +896,17 @@ export class JSONLImportService {
     }
 
     if (qType === QuestionType.NAT) {
-      const raw = Array.isArray(rec.correctAnswer) && rec.correctAnswer.length > 0 ? rec.correctAnswer[0] : rec.correctAnswer;
-      const rawStr = typeof raw === 'string' ? raw : raw !== undefined && raw !== null ? String(raw) : (rec.rawAnswer ? String(rec.rawAnswer) : '');
+      const raw = Array.isArray(rec.correctAnswer) && rec.correctAnswer.length > 0
+        ? rec.correctAnswer[0]
+        : rec.correctAnswer !== undefined && rec.correctAnswer !== null
+        ? rec.correctAnswer
+        : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
+        ? (Array.isArray(rec.answer) ? rec.answer[0] : rec.answer)
+        : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
+        ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer[0] : rec.rawAnswer)
+        : '';
+
+      const rawStr = typeof raw === 'string' ? raw : String(raw ?? '');
       const parsed = this.parseNATAnswer(rawStr);
       return { options: [], correctAnswer: parsed.answer, needsReview: parsed.needsReview };
     }

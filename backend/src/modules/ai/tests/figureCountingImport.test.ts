@@ -248,6 +248,11 @@ describe('Figure Counting & Metrics Classification Unit Tests', () => {
 
     const pkg = extractQuestionBankZipPackage(zip.toBuffer());
 
+    const diskFile = path.resolve(process.cwd(), 'public', 'uploads', 'diagrams', 'dup_fig_asset.png');
+    if (fs.existsSync(diskFile)) {
+      try { fs.unlinkSync(diskFile); } catch (e) {}
+    }
+
     // First Import
     const import1 = await JSONLImportService.importJSONLToDatabase(
       pkg.jsonlEntries[0].text,
