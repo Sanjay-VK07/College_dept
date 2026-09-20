@@ -102,6 +102,7 @@ router.delete('/question-bank/questions/:id', requireRoles(Role.FACULTY, Role.AD
 router.post('/question-bank/questions/bulk-delete', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.bulkDeleteQuestions);
 
 router.post('/question-paper/preview', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.previewPaper);
+router.post('/question-paper/validate-preview', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.validatePreviewPayload);
 router.post('/question-paper/generate', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.startShortfallGeneration);
 router.get('/question-paper/generation/:jobId', statusPollLimiter, requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.getGenerationJobStatus);
 router.post('/question-paper/regenerate-selection', requireRoles(Role.FACULTY, Role.ADMIN), QuestionPaperController.regenerateSelection);

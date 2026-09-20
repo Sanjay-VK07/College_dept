@@ -18,11 +18,50 @@ import {
   RefreshCw,
   Edit3,
   Layers,
+  Maximize2,
+  ZoomIn,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { aiService } from '@/services/aiService';
 import { GateScientificCalculator } from '@/components/exam/GateScientificCalculator';
 import { QuestionPalette } from '@/components/exam/QuestionPalette';
+import { QuestionOptionContent } from '@/components/question-bank/QuestionOptionContent';
+
+export function renderString(val: any): string {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  if (typeof val === 'object') {
+    if (typeof val.text === 'string') return val.text;
+    if (typeof val.text === 'object') return renderString(val.text);
+    if (typeof val.title === 'string') return val.title;
+    if (typeof val.name === 'string') return val.name;
+    try {
+      return JSON.stringify(val);
+    } catch {
+      return String(val);
+    }
+  }
+  return String(val);
+}
+
+export function getContentRepresentation(q: any): 'TEXT' | 'IMAGE' | 'TEXT_WITH_IMAGE' {
+  if (q && q.contentRepresentation) return q.contentRepresentation;
+  const rawText = q ? renderString(q.text || (q.questionVersion && q.questionVersion.text) || '') : '';
+  const trimmed = rawText.replace(/!\[.*?\]\((.*?)\)/g, '').trim();
+  const hasText = !!(trimmed && trimmed !== 'null' && trimmed !== '[Image Question]');
+
+  let url: string | null = (q && (q.imageUrl || (q.questionVersion && q.questionVersion.imageUrl))) || null;
+  if (!url && rawText) {
+    const match = rawText.match(/!\[.*?\]\((.*?)\)/);
+    if (match && match[1]) url = match[1];
+  }
+  const hasImage = !!(url && url.trim());
+
+  if (hasImage && hasText) return 'TEXT_WITH_IMAGE';
+  if (hasImage && !hasText) return 'IMAGE';
+  return 'TEXT';
+}
 
 export interface ExamPreviewModalProps {
   isOpen: boolean;
@@ -33,6 +72,7 @@ export interface ExamPreviewModalProps {
   initialValidation?: any;
   onPublished?: () => void;
   onEditDraft?: () => void;
+  onCreateExam?: (orderedQuestions: any[], metadata: any) => void;
 }
 
 export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
@@ -44,6 +84,7 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
   initialValidation,
   onPublished,
   onEditDraft,
+  onCreateExam,
 }) => {
   const [activeTab, setActiveTab] = useState<'STUDENT_PREVIEW' | 'ADMIN_REVIEW'>('STUDENT_PREVIEW');
   const [mockTest, setMockTest] = useState<any>(initialMockTest || null);
@@ -63,15 +104,40 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishSuccess, setPublishSuccess] = useState(false);
 
+  // Image Lightbox Zoom state
+  const [zoomedImage, setZoomedImage] = useState<{ url: string; title?: string } | null>(null);
+
   useEffect(() => {
     if (isOpen && mockTestId && !initialMockTest) {
       loadPreviewData(mockTestId);
     } else if (isOpen && initialMockTest) {
       setMockTest(initialMockTest);
-      if (initialQuestions) setQuestions(initialQuestions);
+      if (initialQuestions) {
+        setQuestions(initialQuestions);
+        // Run in-memory backend preview validation for unpersisted preview
+        if (!initialValidation) {
+          runInMemoryValidation(initialQuestions, initialMockTest);
+        }
+      }
       if (initialValidation) setValidation(initialValidation);
     }
   }, [isOpen, mockTestId, initialMockTest]);
+
+  const runInMemoryValidation = async (qs: any[], testMeta: any) => {
+    try {
+      const res = await aiService.validatePreviewPayload({
+        title: testMeta?.title || 'Preview Exam',
+        durationMinutes: testMeta?.durationMinutes || 180,
+        totalMarks: testMeta?.totalMarks || 100,
+        questions: qs || [],
+      });
+      if (res?.success) {
+        setValidation(res.validation);
+      }
+    } catch (err: any) {
+      console.warn('In-memory preview validation error:', err);
+    }
+  };
 
   const loadPreviewData = async (testId: string) => {
     setLoading(true);
@@ -140,18 +206,28 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
 
     return {
       id: qId,
-      customId: q.customId,
-      text: qv?.text || q.text || '',
+      customId: renderString(q.customId),
+      text: renderString(qv?.text || q.text || ''),
       type: qv?.type || q.type || 'MCQ',
       difficulty: qv?.difficulty || q.difficulty || 'MEDIUM',
       marks: qv?.marks ?? q.marks ?? 1.0,
       negativeMarks: qv?.negativeMarks ?? q.negativeMarks ?? 0.33,
-      options: qv?.options || q.options || [],
+      options: (qv?.options || q.options || []).map((opt: any) => {
+        if (typeof opt === 'string') return opt;
+        if (typeof opt === 'object' && opt !== null) {
+          return {
+            ...opt,
+            text: renderString(opt.text || opt),
+          };
+        }
+        return renderString(opt);
+      }),
       correctAnswer: qv?.correctAnswer ?? q.correctAnswer,
       verificationStatus: q.verificationStatus || 'VERIFIED',
       origin: q.origin || 'SOURCE',
       imageUrl: qv?.imageUrl || q.imageUrl,
       containsFigure: q.containsFigure,
+      contentRepresentation: getContentRepresentation(qv || q),
       subtopic: q.subtopic,
       sourceDocument: q.sourceDocument,
       order: tq.order || idx + 1,
@@ -281,7 +357,25 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
               className="px-3.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition-colors"
             >
               <Edit3 className="w-3.5 h-3.5" />
-              <span>Edit Exam</span>
+              <span>Back / Edit Exam</span>
+            </button>
+          )}
+
+          {onCreateExam && !mockTest?.id && (
+            <button
+              onClick={() => {
+                onCreateExam(normalizedQuestions, mockTest);
+              }}
+              disabled={validation && !validation.canPublish}
+              className={`px-4 py-1.5 rounded text-xs font-bold flex items-center gap-1.5 transition-all ${
+                validation && !validation.canPublish
+                  ? 'bg-slate-700 text-slate-400 cursor-not-allowed border border-slate-600'
+                  : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md'
+              }`}
+              title={validation && !validation.canPublish ? 'Fix blocking validation errors to create exam' : 'Create Exam as DRAFT'}
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>Create Exam</span>
             </button>
           )}
 
@@ -374,8 +468,8 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
                   <span>Blocking Validation Errors (Must be resolved before publishing):</span>
                 </div>
                 <ul className="list-disc pl-5 space-y-0.5 font-medium">
-                  {validation.blocking.map((msg: string, i: number) => (
-                    <li key={i}>{msg}</li>
+                  {validation.blocking.map((msg: any, i: number) => (
+                    <li key={i}>{renderString(msg)}</li>
                   ))}
                 </ul>
               </div>
@@ -388,8 +482,8 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
                   <span>Quality Warnings (Advisory — does not block publishing):</span>
                 </div>
                 <ul className="list-disc pl-5 space-y-0.5">
-                  {validation.warnings.map((msg: string, i: number) => (
-                    <li key={i}>{msg}</li>
+                  {validation.warnings.map((msg: any, i: number) => (
+                    <li key={i}>{renderString(msg)}</li>
                   ))}
                 </ul>
               </div>
@@ -466,33 +560,75 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Question Statement & Markdown Image Parsing */}
-                      <div className="text-slate-900 text-base leading-relaxed mb-6 whitespace-pre-wrap font-medium">
+                      {/* Question Statement & Visual Asset Rendering */}
+                      <div className="mb-6 space-y-4">
                         {(() => {
-                          const text = currentQ.text;
-                          const imgRegex = /!\[.*?\]\((.*?)\)/;
-                          const match = text.match(imgRegex);
-                          if (match) {
-                            const imageUrl = match[1];
-                            const cleanText = text.replace(imgRegex, '').trim();
+                          const contentRep = currentQ.contentRepresentation || getContentRepresentation(currentQ);
+                          const text = currentQ.text || '';
+                          let imageUrl = currentQ.imageUrl;
+                          const match = text.match(/!\[.*?\]\((.*?)\)/);
+                          if (match && match[1]) {
+                            imageUrl = match[1];
+                          }
+                          const cleanText = text.replace(/!\[.*?\]\((.*?)\)/g, '').trim();
+
+                          if (contentRep === 'IMAGE') {
                             return (
-                              <div className="space-y-4">
-                                <div>{cleanText}</div>
-                                <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                                  <img src={imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
-                                </div>
+                              <div className="space-y-3">
+                                {imageUrl ? (
+                                  <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg relative group">
+                                    <img
+                                      src={imageUrl}
+                                      alt="Visual Question Diagram"
+                                      className="max-h-96 w-auto object-contain cursor-zoom-in rounded"
+                                      onClick={() => setZoomedImage({ url: imageUrl!, title: `Question ${currentIndex + 1} Visual Asset` })}
+                                    />
+                                    <button
+                                      onClick={() => setZoomedImage({ url: imageUrl!, title: `Question ${currentIndex + 1} Visual Asset` })}
+                                      className="absolute top-2 right-2 px-2 py-1 bg-slate-900/80 hover:bg-slate-900 text-white rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 shadow"
+                                    >
+                                      <Maximize2 className="w-3.5 h-3.5" />
+                                      <span>Zoom</span>
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="p-4 bg-amber-50 border border-amber-200 rounded text-amber-800 text-xs font-semibold flex items-center gap-2">
+                                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                    <span>⚠ Question contains a visual representation that could not be loaded.</span>
+                                  </div>
+                                )}
                               </div>
                             );
                           }
+
+                          if (contentRep === 'TEXT_WITH_IMAGE') {
+                            return (
+                              <div className="space-y-4">
+                                <div className="text-slate-900 text-base leading-relaxed whitespace-pre-wrap font-medium">{cleanText}</div>
+                                {imageUrl && (
+                                  <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg relative group">
+                                    <img
+                                      src={imageUrl}
+                                      alt="Question Diagram"
+                                      className="max-h-96 w-auto object-contain cursor-zoom-in rounded"
+                                      onClick={() => setZoomedImage({ url: imageUrl!, title: `Question ${currentIndex + 1} Figure` })}
+                                    />
+                                    <button
+                                      onClick={() => setZoomedImage({ url: imageUrl!, title: `Question ${currentIndex + 1} Figure` })}
+                                      className="absolute top-2 right-2 px-2 py-1 bg-slate-900/80 hover:bg-slate-900 text-white rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 shadow"
+                                    >
+                                      <Maximize2 className="w-3.5 h-3.5" />
+                                      <span>Zoom</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }
+
+                          // Default TEXT
                           return (
-                            <div className="space-y-4">
-                              <div>{text}</div>
-                              {currentQ.imageUrl && (
-                                <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                                  <img src={currentQ.imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
-                                </div>
-                              )}
-                            </div>
+                            <div className="text-slate-900 text-base leading-relaxed whitespace-pre-wrap font-medium">{cleanText}</div>
                           );
                         })()}
                       </div>
@@ -500,21 +636,42 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
                       {/* Options Entry Area */}
                       <div className="space-y-3 flex-1">
                         {currentQ.type === 'NAT' ? (
-                          <div className="max-w-xs space-y-2">
-                            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                              Numerical Answer Entry:
+                          <div className="max-w-xs space-y-2 bg-slate-50 p-4 border border-slate-200 rounded-lg">
+                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                              Numerical Answer Entry (NAT):
                             </label>
                             <input
                               type="number"
                               step="any"
                               value={selectedAnswers[currentQ.id] || ''}
                               onChange={(e) => handleNATChange(e.target.value)}
-                              placeholder="Enter calculated numerical answer"
-                              className="erp-input font-mono font-bold text-emerald-700"
+                              placeholder="Enter numerical value"
+                              className="erp-input font-mono font-bold text-emerald-700 bg-white"
                             />
+                            <p className="text-[11px] text-slate-500 font-mono">
+                              Enter exact calculation result. Correct answer is hidden in student preview.
+                            </p>
+                          </div>
+                        ) : currentQ.type === 'MATCH_THE_FOLLOWING' ? (
+                          <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+                            <div className="text-xs font-bold text-slate-800 uppercase tracking-wider">Match the Following Columns:</div>
+                            <div className="grid grid-cols-2 gap-4 text-xs font-medium text-slate-800">
+                              <div className="space-y-2 p-3 bg-white border border-slate-200 rounded">
+                                <div className="font-bold text-slate-900 border-b pb-1">Group I</div>
+                                {(currentQ.options?.group1 || ['1', '2', '3']).map((item: any, i: number) => (
+                                  <div key={i} className="py-1 font-mono">{i + 1}. {renderString(item)}</div>
+                                ))}
+                              </div>
+                              <div className="space-y-2 p-3 bg-white border border-slate-200 rounded">
+                                <div className="font-bold text-slate-900 border-b pb-1">Group II</div>
+                                {(currentQ.options?.group2 || ['P', 'Q', 'R']).map((item: any, i: number) => (
+                                  <div key={i} className="py-1 font-mono">{String.fromCharCode(80 + i)}. {renderString(item)}</div>
+                                ))}
+                              </div>
+                            </div>
                           </div>
                         ) : (
-                          currentQ.options.map((opt: any, optIdx: number) => {
+                          (currentQ.options || []).map((opt: any, optIdx: number) => {
                             const isSelected =
                               currentQ.type === 'MCQ'
                                 ? selectedAnswers[currentQ.id]?.[0] === optIdx
@@ -524,20 +681,27 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
                               <button
                                 key={optIdx}
                                 onClick={() => handleOptionSelect(optIdx)}
-                                className={`w-full text-left p-3.5 rounded-md border transition-colors flex items-center space-x-3.5 ${
+                                className={`w-full text-left p-3.5 rounded-md border transition-colors flex items-start space-x-3.5 ${
                                   isSelected
                                     ? 'bg-blue-50/80 border-[#1E40AF] text-slate-900 shadow-sm'
                                     : 'bg-white border-slate-200 text-slate-800 hover:bg-slate-50'
                                 }`}
                               >
                                 <div
-                                  className={`w-7 h-7 rounded flex items-center justify-center font-mono font-bold text-xs shrink-0 ${
+                                  className={`w-7 h-7 rounded flex items-center justify-center font-mono font-bold text-xs shrink-0 mt-0.5 ${
                                     isSelected ? 'bg-[#1E40AF] text-white' : 'bg-slate-100 text-slate-700 border border-slate-300'
                                   }`}
                                 >
                                   {String.fromCharCode(65 + optIdx)}
                                 </div>
-                                <span className="text-sm font-medium">{opt.text || opt}</span>
+                                <QuestionOptionContent
+                                  option={opt}
+                                  optionIndex={optIdx}
+                                  isSelected={isSelected}
+                                  onZoomImage={(url, title) => setZoomedImage({ url, title })}
+                                  className="flex-1"
+                                  textClassName="text-sm font-medium"
+                                />
                               </button>
                             );
                           })
@@ -791,6 +955,34 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
               )}
             </footer>
           </div>
+        </div>
+      )}
+
+      {/* Fullscreen Image Lightbox / Zoom Modal */}
+      {zoomedImage && (
+        <div className="fixed inset-0 z-[160] bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-4">
+          <div className="absolute top-4 right-4 flex items-center gap-3">
+            {zoomedImage.title && (
+              <span className="text-white text-xs font-semibold font-mono bg-slate-800 px-3 py-1 rounded border border-slate-700">
+                {zoomedImage.title}
+              </span>
+            )}
+            <button
+              onClick={() => setZoomedImage(null)}
+              className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-full transition-colors"
+              title="Close Image Zoom"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="max-w-5xl max-h-[85vh] overflow-auto p-3 bg-white rounded-lg shadow-2xl flex items-center justify-center border border-slate-700">
+            <img
+              src={zoomedImage.url}
+              alt={zoomedImage.title || 'Enlarged Figure'}
+              className="max-w-full max-h-[80vh] object-contain rounded"
+            />
+          </div>
+          <p className="text-slate-400 text-xs mt-3">Click X or click backdrop to close zoom view</p>
         </div>
       )}
     </div>

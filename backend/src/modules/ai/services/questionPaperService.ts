@@ -9,7 +9,7 @@ import { AnswerVerificationService } from './answerVerificationService';
 import { EmbeddingProvider } from './embeddingProvider';
 import { QuestionGenerationPrompt } from '../prompts/questionGenerationPrompt';
 import { NotificationController } from '../../../controllers/notificationController';
-import { ExamValidationService } from './examValidationService';
+import { ExamValidationService, computeContentRepresentation } from './examValidationService';
 
 export interface PreviewPaperPayload {
   subjectId: string;
@@ -287,12 +287,17 @@ export class QuestionPaperService {
       sourceMaterialWarning = 'No indexed source material is available for the selected topic(s). AI generation cannot proceed.';
     }
 
+    const formattedSelectedQuestions = selectedQuestions.map((q) => ({
+      ...q,
+      contentRepresentation: computeContentRepresentation(q),
+    }));
+
     return {
       requestedTotal,
       availableVerifiedCount: availableVerifiedQuestions.length,
       selectedExistingCount: selectedCount,
       aiRequiredCount,
-      selectedQuestions,
+      selectedQuestions: formattedSelectedQuestions,
       topicShortfalls,
       difficultyShortfalls,
       typeShortfalls,
@@ -557,20 +562,53 @@ export class QuestionPaperService {
       throw new Error('One or more selected questions could not be found in the database.');
     }
 
-    // 2. Validate all questions have verificationStatus = VERIFIED
-    const unverifiedQuestions = questions.filter((q) => q.verificationStatus !== VerificationStatus.VERIFIED);
+    // 2. Order questions according to explicit selectedQuestionIds array
+    const questionMap = new Map<string, any>();
+    for (const q of questions) {
+      questionMap.set(q.id, q);
+    }
+
+    const orderedQuestions: any[] = [];
+    for (const qId of selectedQuestionIds) {
+      const q = questionMap.get(qId);
+      if (!q) {
+        throw new Error(`Question '${qId}' could not be resolved from database.`);
+      }
+      orderedQuestions.push(q);
+    }
+
+    // 3. Validate all questions have verificationStatus = VERIFIED and no N/A answers
+    const unverifiedQuestions = orderedQuestions.filter((q) => q.verificationStatus !== VerificationStatus.VERIFIED);
     if (unverifiedQuestions.length > 0) {
       throw new Error(
         `Finalization blocked: ${unverifiedQuestions.length} selected question(s) have verification status '${unverifiedQuestions[0].verificationStatus}' and are not VERIFIED.`
       );
     }
 
-    // 3. Freeze QuestionVersion snapshot for each question
+    // 4. Server-Side Revalidation
+    const validation = ExamValidationService.validatePreviewPayload({
+      title,
+      durationMinutes: Number(examSettings.durationMinutes || 180),
+      totalMarks: Number(examSettings.totalMarks || 100),
+      questions: orderedQuestions,
+    });
+
+    if (!validation.canPublish) {
+      throw new Error(`Finalization blocked: ${validation.blocking.join('; ')}`);
+    }
+
+    // 5. Freeze QuestionVersion snapshot for each question
     const versionIds = await Promise.all(
-      questions.map((q) => QuestionVersionService.getCurrentVersionId(q.id))
+      orderedQuestions.map(async (q) => {
+        const vId = await QuestionVersionService.getCurrentVersionId(q.id);
+        if (!vId) {
+          throw new Error(`Question '${q.id}' is missing a valid QuestionVersion snapshot.`);
+        }
+        return vId;
+      })
     );
 
-    // 4. Resolve Subject default department if not provided
+    // 6. Resolve Subject default department if not provided
     let targetDepartment = examSettings.targetDepartment;
     if (!targetDepartment && subjectId) {
       const subj = await prisma.subject.findUnique({ where: { id: subjectId } });
@@ -583,7 +621,7 @@ export class QuestionPaperService {
     const durationMins = Number(examSettings.durationMinutes || 180);
     const defaultEnd = examSettings.endTime ? new Date(examSettings.endTime) : new Date(defaultStart.getTime() + durationMins * 60000);
 
-    // 5. Transactionally create draft MockTest
+    // 7. Transactionally create draft MockTest
     const [mockTest] = await prisma.$transaction(
       async (tx) => {
         const createdMockTest = await tx.mockTest.create({
@@ -592,7 +630,7 @@ export class QuestionPaperService {
             description: description || 'Assembled question paper using approved Question Bank questions.',
             examType: 'SCHEDULED',
             durationMinutes: durationMins,
-            totalMarks: Number(examSettings.totalMarks || questions.reduce((sum, q) => sum + q.marks, 0)),
+            totalMarks: Number(examSettings.totalMarks || orderedQuestions.reduce((sum, q) => sum + q.marks, 0)),
             startTime: defaultStart,
             endTime: defaultEnd,
             targetDepartment,
@@ -601,7 +639,7 @@ export class QuestionPaperService {
             instructions: examSettings.instructions || 'Read all instructions carefully before starting the exam.',
             createdById: userId,
             testQuestions: {
-              create: questions.map((q, idx) => ({
+              create: orderedQuestions.map((q, idx) => ({
                 questionId: q.id,
                 questionVersionId: versionIds[idx],
                 order: idx + 1,

@@ -339,34 +339,58 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
           </div>
 
           {/* Core Metrics Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5 text-xs font-mono text-center">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-2.5 text-xs font-mono text-center">
             <div className="p-2.5 bg-slate-50 border rounded">
-              <div className="text-slate-500 text-[10px]">Questions</div>
-              <div className="font-bold text-slate-900 text-sm mt-0.5">{previewData.validCount ?? previewData.totalRecords}</div>
+              <div className="text-slate-500 text-[10px]">Total Records</div>
+              <div className="font-bold text-slate-900 text-sm mt-0.5">{previewData.totalRecords ?? 0}</div>
+            </div>
+            <div className="p-2.5 bg-emerald-50 border border-emerald-300 rounded">
+              <div className="text-emerald-700 text-[10px] font-bold">Valid (Ready)</div>
+              <div className="font-bold text-emerald-900 text-sm mt-0.5">{previewData.validCount ?? 0}</div>
+            </div>
+            <div className={`p-2.5 border rounded ${previewData.invalidCount > 0 ? 'bg-red-50 border-red-300 text-red-900' : 'bg-slate-50 text-slate-700'}`}>
+              <div className="text-[10px] font-bold">Invalid Records</div>
+              <div className="font-bold text-sm mt-0.5">{previewData.invalidCount ?? 0}</div>
             </div>
             <div className="p-2.5 bg-blue-50 border border-blue-200 rounded">
               <div className="text-blue-700 text-[10px] flex items-center justify-center gap-1">
-                <ImageIcon className="w-3 h-3" /> Questions with figures
+                <ImageIcon className="w-3 h-3" /> Questions w/ Figs
               </div>
               <div className="font-bold text-blue-900 text-sm mt-0.5">{previewData.questionsWithFigures ?? 0}</div>
             </div>
             <div className="p-2.5 bg-indigo-50 border border-indigo-200 rounded">
-              <div className="text-indigo-700 text-[10px]">Figure assets</div>
+              <div className="text-indigo-700 text-[10px]">Figure Assets</div>
               <div className="font-bold text-indigo-900 text-sm mt-0.5">{previewData.figureAssetsFoundCount ?? 0}</div>
             </div>
             <div className={`p-2.5 border rounded ${previewData.missingFiguresCount > 0 ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-slate-50'}`}>
-              <div className="text-slate-500 text-[10px]">Missing figures</div>
+              <div className="text-slate-500 text-[10px]">Missing Figures</div>
               <div className="font-bold text-sm mt-0.5">{previewData.missingFiguresCount ?? 0}</div>
             </div>
             <div className="p-2.5 bg-slate-50 border rounded">
-              <div className="text-slate-500 text-[10px]">Duplicate questions</div>
+              <div className="text-slate-500 text-[10px]">Duplicates</div>
               <div className="font-bold text-slate-900 text-sm mt-0.5">{previewData.duplicateCount ?? 0}</div>
             </div>
-            <div className="p-2.5 bg-slate-50 border rounded">
-              <div className="text-slate-500 text-[10px]">Invalid records</div>
-              <div className="font-bold text-slate-900 text-sm mt-0.5">{previewData.invalidCount ?? 0}</div>
-            </div>
           </div>
+
+          {/* Invalid Records Error Details (if any) */}
+          {Array.isArray(previewData.invalidRecords) && previewData.invalidRecords.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded p-3 text-red-900 text-xs space-y-1.5">
+              <div className="font-bold flex items-center gap-1.5 text-red-800">
+                <AlertCircle className="w-4 h-4 text-red-600" />
+                <span>Invalid Records ({previewData.invalidRecords.length}) — Will be skipped during import:</span>
+              </div>
+              <div className="max-h-32 overflow-y-auto space-y-1 font-mono text-[11px] bg-white/80 p-2 rounded border border-red-200">
+                {previewData.invalidRecords.map((inv: any, idx: number) => (
+                  <div key={idx} className="flex items-start gap-2">
+                    <span className="text-red-700 font-bold">Line {inv.line}:</span>
+                    <span className="bg-red-100 text-red-800 px-1 rounded text-[10px] font-bold">{inv.code || 'INVALID'}</span>
+                    {inv.questionId && <span>[{inv.questionId}]</span>}
+                    <span className="text-slate-700">{inv.error}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Topic Breakdown Table */}
           {Array.isArray(previewData.topicBreakdown) && previewData.topicBreakdown.length > 0 && (
@@ -413,7 +437,8 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
               </div>
             </div>
             <div className="text-[11px] text-slate-400 sm:text-right">
-              Ready to import <strong>{previewData.validCount ?? previewData.totalRecords}</strong> questions
+              Ready to import <strong className="text-emerald-400">{previewData.validCount ?? 0}</strong> valid questions
+              {previewData.invalidCount > 0 && <span className="text-red-300 block text-[10px]">({previewData.invalidCount} invalid skipped)</span>}
             </div>
           </div>
 
@@ -427,11 +452,17 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
             </button>
             <button
               onClick={handleExecuteImport}
-              disabled={isImporting || (subjectMode === 'SELECT' && !targetSubjectId) || (subjectMode === 'CREATE' && !newSubjectName.trim())}
-              className="px-6 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded flex items-center gap-1.5 disabled:opacity-50"
+              disabled={
+                isImporting ||
+                !previewData.validCount ||
+                previewData.validCount === 0 ||
+                (subjectMode === 'SELECT' && !targetSubjectId) ||
+                (subjectMode === 'CREATE' && !newSubjectName.trim())
+              }
+              className="px-6 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              Import {previewData.totalRecords} Questions to PostgreSQL
+              Import {previewData.validCount ?? 0} Questions to PostgreSQL
             </button>
           </div>
         </section>

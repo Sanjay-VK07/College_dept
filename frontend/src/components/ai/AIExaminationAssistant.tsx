@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { aiService, AIMessage, AIConversationSummary } from '@/services/aiService';
+import { QuestionOptionContent } from '@/components/question-bank/QuestionOptionContent';
 import {
   Bot,
   Send,
@@ -724,8 +725,8 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
                         {/* MCQ Options Rendering */}
                         {q.options && q.options.length > 0 ? (
                           <div className="grid grid-cols-1 gap-2 pl-3">
-                            {q.options.map((opt: string, oIdx: number) => (
-                              <label key={oIdx} className="flex items-center space-x-2 text-xs text-slate-300 hover:text-slate-100 cursor-pointer">
+                            {q.options.map((opt: any, oIdx: number) => (
+                              <label key={oIdx} className="flex items-start space-x-2 text-xs text-slate-300 hover:text-slate-100 cursor-pointer">
                                 <input
                                   type="radio"
                                   name={`q-${qIdx}`}
@@ -737,9 +738,10 @@ export const AIExaminationAssistant: React.FC<AIExaminationAssistantProps> = ({ 
                                       return next;
                                     });
                                   }}
-                                  className="border-slate-800 bg-slate-900 text-blue-600 focus:ring-0 focus:outline-none"
+                                  className="mt-0.5 border-slate-800 bg-slate-900 text-blue-600 focus:ring-0 focus:outline-none"
                                 />
-                                <span>{String.fromCharCode(65 + oIdx)}. {opt}</span>
+                                <span className="font-mono font-bold shrink-0">{String.fromCharCode(65 + oIdx)}.</span>
+                                <QuestionOptionContent option={opt} optionIndex={oIdx} textClassName="text-xs text-slate-300" />
                               </label>
                             ))}
                           </div>

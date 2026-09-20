@@ -41,6 +41,24 @@ interface SmartQuestionPaperBuilderProps {
 
 type StepId = 'resources' | 'topics' | 'configure' | 'generate' | 'review';
 
+function renderString(val: any): string {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  if (typeof val === 'object') {
+    if (typeof val.text === 'string') return val.text;
+    if (typeof val.text === 'object') return renderString(val.text);
+    if (typeof val.title === 'string') return val.title;
+    if (typeof val.name === 'string') return val.name;
+    try {
+      return JSON.stringify(val);
+    } catch {
+      return String(val);
+    }
+  }
+  return String(val);
+}
+
 const STEPS: Array<{ id: StepId; index: string; label: string }> = [
   { id: 'resources', index: '01', label: 'Resources' },
   { id: 'topics', index: '02', label: 'Topics' },
@@ -548,9 +566,10 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
   };
 
   // Finalize Paper into MockTest DRAFT (Never auto-published!)
-  const handleFinalizePaper = async () => {
+  const handleFinalizePaper = async (orderedQs?: any[]) => {
     setErrorMsg(null);
-    const selectedIds = Array.from(selectedQuestionIds);
+    const questionsToUse = orderedQs || paperQuestions;
+    const selectedIds = questionsToUse.map((q: any) => q.id || q.questionId).filter(Boolean);
     if (selectedIds.length === 0) {
       setErrorMsg('Please select at least one question for the paper.');
       return;
@@ -576,10 +595,8 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
 
       if (res?.success) {
         setFinalizedExam(res.mockTest);
-        // The paper is now safely persisted server-side as a MockTest — the local wizard draft
-        // has served its purpose and would otherwise linger and get "restored" into a new,
-        // unrelated paper next time this screen is opened.
         clearPaperDraft();
+        setIsPreviewModalOpen(false);
         showToast('Question paper finalized! MockTest draft created in database.');
       }
     } catch (e: any) {
@@ -1397,18 +1414,18 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
                           <tbody className="divide-y divide-slate-100">
                             {paperQuestions.map((q) => (
                               <tr key={q.id}>
-                                <td className="px-3 py-2.5 font-medium text-slate-900 max-w-xs truncate" title={q.text}>
-                                  {q.customId && <span className="font-mono text-blue-700 font-bold mr-1">[{q.customId}]</span>}
-                                  {q.text}
+                                <td className="px-3 py-2.5 font-medium text-slate-900 max-w-xs truncate" title={renderString(q.text)}>
+                                  {q.customId && <span className="font-mono text-blue-700 font-bold mr-1">[{renderString(q.customId)}]</span>}
+                                  {renderString(q.text)}
                                 </td>
-                                <td className="px-3 py-2.5 text-slate-600">{q.subtopic?.topic?.name || q.sourceHeading || '—'}</td>
+                                <td className="px-3 py-2.5 text-slate-600">{renderString(q.subtopic?.topic?.name || q.sourceHeading || '—')}</td>
                                 <td className="px-3 py-2.5 font-mono text-slate-700">{q.type}</td>
                                 <td className="px-3 py-2.5 font-mono text-slate-700">{q.difficulty}</td>
                                 <td className="px-3 py-2.5 font-mono font-bold text-emerald-700">
-                                  {q.rawAnswer || JSON.stringify(q.correctAnswer)}
+                                  {renderString(q.rawAnswer || (typeof q.correctAnswer === 'object' ? JSON.stringify(q.correctAnswer) : q.correctAnswer))}
                                 </td>
                                 <td className="px-3 py-2.5 text-slate-500 font-mono">
-                                  {q.sourceDocument?.title || (q.sourceHeading ? `Heading: ${q.sourceHeading}` : '—')}
+                                  {renderString(q.sourceDocument?.title || (q.sourceHeading ? `Heading: ${q.sourceHeading}` : '—'))}
                                 </td>
                               </tr>
                             ))}
@@ -1432,14 +1449,24 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
                     </p>
                   </div>
 
-                  <button
-                    onClick={handleFinalizePaper}
-                    disabled={isFinalizing || paperQuestions.length === 0}
-                    className="px-5 py-2 bg-[#1E40AF] hover:bg-blue-800 text-white text-xs font-bold rounded flex items-center gap-1 disabled:opacity-50"
-                  >
-                    {isFinalizing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                    Approve &amp; Create Draft
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsPreviewModalOpen(true)}
+                      disabled={paperQuestions.length === 0}
+                      className="px-4 py-2 border border-blue-700 text-blue-700 hover:bg-blue-50 text-xs font-bold rounded flex items-center gap-1.5 shadow-xs"
+                    >
+                      <Eye className="w-4 h-4" />
+                      Preview Exam
+                    </button>
+                    <button
+                      onClick={() => handleFinalizePaper()}
+                      disabled={isFinalizing || paperQuestions.length === 0}
+                      className="px-5 py-2 bg-[#1E40AF] hover:bg-blue-800 text-white text-xs font-bold rounded flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {isFinalizing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                      Approve &amp; Create Draft
+                    </button>
+                  </div>
                 </header>
 
                 <div className="overflow-x-auto">
@@ -1459,21 +1486,21 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
                     <tbody className="divide-y divide-slate-100">
                       {paperQuestions.map((q) => (
                         <tr key={q.id}>
-                          <td className="px-3 py-2.5 font-medium text-slate-900 max-w-xs truncate" title={q.text}>
-                            {q.customId && <span className="font-mono text-blue-700 font-bold mr-1">[{q.customId}]</span>}
-                            {q.text}
+                          <td className="px-3 py-2.5 font-medium text-slate-900 max-w-xs truncate" title={renderString(q.text)}>
+                            {q.customId && <span className="font-mono text-blue-700 font-bold mr-1">[{renderString(q.customId)}]</span>}
+                            {renderString(q.text)}
                           </td>
-                          <td className="px-3 py-2.5 text-slate-600">{q.subtopic?.topic?.name || q.sourceHeading || '—'}</td>
+                          <td className="px-3 py-2.5 text-slate-600">{renderString(q.subtopic?.topic?.name || q.sourceHeading || '—')}</td>
                           <td className="px-3 py-2.5 font-mono text-slate-700">{q.type}</td>
                           <td className="px-3 py-2.5 font-mono text-slate-700">{q.difficulty}</td>
                           <td className="px-3 py-2.5">
                             <VerificationBadge status={q.verificationStatus} origin={q.origin} />
                           </td>
                           <td className="px-3 py-2.5 font-mono font-bold text-emerald-700">
-                            {q.rawAnswer || JSON.stringify(q.correctAnswer)}
+                            {renderString(q.rawAnswer || (typeof q.correctAnswer === 'object' ? JSON.stringify(q.correctAnswer) : q.correctAnswer))}
                           </td>
                           <td className="px-3 py-2.5 text-slate-500 font-mono">
-                            {q.sourceDocument?.title || (q.sourceHeading ? `Heading: ${q.sourceHeading}` : '—')}
+                            {renderString(q.sourceDocument?.title || (q.sourceHeading ? `Heading: ${q.sourceHeading}` : '—'))}
                           </td>
                           <td className="px-3 py-2.5">
                             <button
@@ -1511,6 +1538,8 @@ export const SmartQuestionPaperBuilder: React.FC<SmartQuestionPaperBuilderProps>
           }
         }
         initialQuestions={paperQuestions}
+        onEditDraft={() => setIsPreviewModalOpen(false)}
+        onCreateExam={(orderedQs) => handleFinalizePaper(orderedQs)}
         onPublished={() => {
           if (finalizedExam) {
             setFinalizedExam((prev: any) => ({ ...prev, isPublished: true, status: 'PUBLISHED' }));

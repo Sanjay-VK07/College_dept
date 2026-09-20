@@ -74,6 +74,14 @@ export interface MissingFigureRecord {
   reference: string;
 }
 
+export interface InvalidRecordDetail {
+  line: number;
+  error: string;
+  code: string;
+  questionId?: string;
+  raw: string;
+}
+
 export interface ImportPreviewResult {
   fileName: string;
   totalRecords: number;
@@ -93,7 +101,89 @@ export interface ImportPreviewResult {
   topicBreakdown: TopicBreakdownItem[];
   chapterName?: string;
   validRecords: JSONLRecord[];
-  invalidRecords: Array<{ line: number; error: string; raw: string }>;
+  invalidRecords: InvalidRecordDetail[];
+}
+
+/**
+ * Normalizes raw record fields from various supported dataset schemas (JSON / JSONL)
+ * into the standard JSONLRecord structure using explicit, unambiguous field aliases.
+ */
+export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
+  if (!rawObj || typeof rawObj !== 'object' || Array.isArray(rawObj)) {
+    return rawObj;
+  }
+
+  const rec: any = { ...rawObj };
+
+  // 1. Question ID alias: questionId / id / customId / question_id / code
+  if (!rec.questionId) {
+    rec.questionId = rec.id || rec.customId || rec.question_id || rec.code;
+  }
+  if (rec.questionId !== undefined && rec.questionId !== null && typeof rec.questionId !== 'string') {
+    rec.questionId = String(rec.questionId);
+  }
+
+  // 2. Question Text alias: question / question_text / text / prompt
+  if (!rec.question) {
+    rec.question = rec.question_text || rec.text || rec.prompt;
+  }
+  if (rec.question !== undefined && rec.question !== null && typeof rec.question !== 'string') {
+    rec.question = String(rec.question);
+  }
+
+  // 3. Question Type alias: questionType / type / original_type
+  if (!rec.questionType) {
+    rec.questionType = rec.type || rec.original_type;
+  }
+
+  // 4. Topic / Section / Heading aliases:
+  if (!rec.sourceHeading) {
+    rec.sourceHeading = rec.source_topic || rec.topic || rec.heading || rec.category;
+  }
+  if (!rec.sourceSection) {
+    rec.sourceSection = rec.source || rec.source_document || rec.section;
+  }
+  if (!rec.originalQuestionId) {
+    rec.originalQuestionId = rec.source_question_number || rec.originalQuestionId;
+  }
+  if (!rec.extractionNotes) {
+    rec.extractionNotes = rec.source_header || rec.extractionNotes;
+  }
+
+  // 5. Source Page alias: sourcePage / source_page_start
+  if (rec.sourcePage === undefined || rec.sourcePage === null) {
+    if (rec.source_page_start !== undefined && rec.source_page_start !== null) {
+      rec.sourcePage = Number(rec.source_page_start);
+    }
+  }
+
+  // 6. Figures / Visual Assets aliases:
+  if (!rec.figures && !rec.figure && !rec.imageUrl) {
+    if (Array.isArray(rec.visual_assets) && rec.visual_assets.length > 0) {
+      rec.figures = rec.visual_assets;
+    } else if (Array.isArray(rec.figures_assets) && rec.figures_assets.length > 0) {
+      rec.figures = rec.figures_assets;
+    } else if (typeof rec.visual_assets === 'string') {
+      rec.figure = rec.visual_assets;
+    }
+  }
+
+  // 7. Answer & Correct Answer aliases:
+  if (rec.correctAnswer === undefined && rec.correct_answer !== undefined) {
+    rec.correctAnswer = rec.correct_answer;
+  }
+  if (rec.rawAnswer === undefined && rec.raw_answer !== undefined) {
+    rec.rawAnswer = rec.raw_answer;
+  }
+
+  // 8. Verification Status alias:
+  if (!rec.verificationStatus) {
+    if (rec.verification && rec.verification.status) {
+      rec.verificationStatus = rec.verification.status;
+    }
+  }
+
+  return rec as JSONLRecord;
 }
 
 export class JSONLImportService {
@@ -164,11 +254,19 @@ export class JSONLImportService {
       if (Array.isArray(rec.options)) {
         for (const opt of rec.options) {
           if (typeof opt === 'string') extractMarkdownImages(opt);
-          else if (opt && typeof opt === 'object') extractMarkdownImages(opt.text || opt.value || opt.label);
+          else if (opt && typeof opt === 'object') {
+            extractMarkdownImages(opt.text || opt.value || opt.label);
+            const p = opt.imageUrl || opt.imagePath || opt.image || opt.path || opt.url;
+            if (typeof p === 'string') addPath(p);
+          }
         }
       } else if (typeof rec.options === 'object') {
         for (const val of Object.values(rec.options)) {
           if (typeof val === 'string') extractMarkdownImages(val);
+          else if (val && typeof val === 'object') {
+            const p = (val as any).imageUrl || (val as any).imagePath || (val as any).image || (val as any).path || (val as any).url;
+            if (typeof p === 'string') addPath(p);
+          }
         }
       }
     }
@@ -178,7 +276,7 @@ export class JSONLImportService {
 
   /**
    * Finds a figure asset in the provided figure entries map using exact path,
-   * lowercase path, basename, or stripped prefix.
+   * lowercase path, basename, or stripped prefix (figures/ or visuals/).
    */
   public static resolveFigureAsset(refPath: string, figureEntries?: Map<string, ExtractedFigureAsset>): ExtractedFigureAsset | null {
     if (!figureEntries || figureEntries.size === 0 || !refPath) return null;
@@ -190,6 +288,13 @@ export class JSONLImportService {
 
     const baseName = path.posix.basename(cleanRef);
     const withoutFigures = cleanRef.startsWith('figures/') ? cleanRef.slice('figures/'.length) : cleanRef;
+    const withoutVisuals = cleanRef.startsWith('visuals/') ? cleanRef.slice('visuals/'.length) : cleanRef;
+
+    let subPath: string | null = null;
+    const dirMatch = cleanRef.match(/(?:^|\/)(figures|visuals)\/(.+)$/i);
+    if (dirMatch) {
+      subPath = dirMatch[2];
+    }
 
     return (
       figureEntries.get(cleanRef) ||
@@ -198,14 +303,94 @@ export class JSONLImportService {
       figureEntries.get(baseName.toLowerCase()) ||
       figureEntries.get(`figures/${baseName}`) ||
       figureEntries.get(`figures/${baseName}`.toLowerCase()) ||
+      figureEntries.get(`visuals/${baseName}`) ||
+      figureEntries.get(`visuals/${baseName}`.toLowerCase()) ||
       figureEntries.get(withoutFigures) ||
       figureEntries.get(withoutFigures.toLowerCase()) ||
+      figureEntries.get(withoutVisuals) ||
+      figureEntries.get(withoutVisuals.toLowerCase()) ||
+      (subPath ? figureEntries.get(subPath) : null) ||
+      (subPath ? figureEntries.get(subPath.toLowerCase()) : null) ||
+      (subPath ? figureEntries.get(`visuals/${subPath}`) : null) ||
+      (subPath ? figureEntries.get(`figures/${subPath}`) : null) ||
       null
     );
   }
 
   /**
-   * Parses and validates a JSONL file without committing into the database.
+   * Helper to parse dataset text as JSON array, single JSON object, or line-by-line JSONL.
+   */
+  public static parseDatasetEntries(text: string): {
+    records: Array<{ obj: JSONLRecord; lineIndex: number; raw: string }>;
+    invalidRecords: InvalidRecordDetail[];
+  } {
+    const trimmed = text.trim();
+    const records: Array<{ obj: JSONLRecord; lineIndex: number; raw: string }> = [];
+    const invalidRecords: InvalidRecordDetail[] = [];
+
+    if (!trimmed) {
+      return { records, invalidRecords };
+    }
+
+    // 1. Try parsing full text as JSON array or single object
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((item, idx) => {
+            const lineNum = idx + 1;
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              const normObj = normalizeDatasetRecord(item);
+              records.push({ obj: normObj, lineIndex: lineNum, raw: JSON.stringify(item) });
+            } else {
+              invalidRecords.push({
+                line: lineNum,
+                error: 'JSON array element is not an object',
+                code: 'MALFORMED_RECORD',
+                raw: String(item),
+              });
+            }
+          });
+          return { records, invalidRecords };
+        } else if (typeof parsed === 'object' && parsed !== null) {
+          const normObj = normalizeDatasetRecord(parsed);
+          if (normObj.questionId || normObj.question || (normObj as any).text) {
+            records.push({ obj: normObj, lineIndex: 1, raw: JSON.stringify(parsed) });
+            return { records, invalidRecords };
+          }
+        }
+      } catch (e) {
+        // Fallback to line-by-line JSONL parsing if full JSON parse fails
+      }
+    }
+
+    // 2. Line-by-line JSONL parsing
+    const lines = text.split('\n');
+    let lineIndex = 0;
+    for (const rawLine of lines) {
+      lineIndex++;
+      const lineTrimmed = rawLine.trim();
+      if (!lineTrimmed) continue;
+
+      try {
+        const obj = JSON.parse(lineTrimmed);
+        const normObj = normalizeDatasetRecord(obj);
+        records.push({ obj: normObj, lineIndex, raw: lineTrimmed });
+      } catch (err: any) {
+        invalidRecords.push({
+          line: lineIndex,
+          error: `JSON Parse error: ${err.message}`,
+          code: 'MALFORMED_RECORD',
+          raw: lineTrimmed,
+        });
+      }
+    }
+
+    return { records, invalidRecords };
+  }
+
+  /**
+   * Parses and validates a JSONL/JSON file without committing into the database.
    * Cross-references figures against `availableFigures` if provided.
    */
   public static parseAndValidateJSONL(
@@ -214,10 +399,9 @@ export class JSONLImportService {
     availableFigures?: Map<string, ExtractedFigureAsset>
   ): ImportPreviewResult {
     const text = typeof fileContent === 'string' ? fileContent : fileContent.toString('utf-8');
-    const lines = text.split('\n');
+    const { records: parsedRecords, invalidRecords } = this.parseDatasetEntries(text);
 
     const validRecords: JSONLRecord[] = [];
-    const invalidRecords: Array<{ line: number; error: string; raw: string }> = [];
     const seenIds = new Set<string>();
     let duplicateCount = 0;
 
@@ -225,81 +409,87 @@ export class JSONLImportService {
     let questionsWithFigures = 0;
     const referencedAssetsFoundSet = new Set<string>();
 
-    let lineIndex = 0;
-    for (const rawLine of lines) {
-      lineIndex++;
-      const trimmed = rawLine.trim();
-      if (!trimmed) continue;
-
-      try {
-        const obj = JSON.parse(trimmed) as JSONLRecord;
-
-        if (!obj.questionId || typeof obj.questionId !== 'string') {
-          invalidRecords.push({ line: lineIndex, error: 'Missing or invalid questionId', raw: trimmed });
-          continue;
-        }
-
-        if (!obj.question || typeof obj.question !== 'string') {
-          invalidRecords.push({ line: lineIndex, error: 'Missing question text', raw: trimmed });
-          continue;
-        }
-
-        if (seenIds.has(obj.questionId)) {
-          duplicateCount++;
-          invalidRecords.push({ line: lineIndex, error: `Duplicate questionId '${obj.questionId}' in file`, raw: trimmed });
-          continue;
-        }
-
-        seenIds.add(obj.questionId);
-
-        // Check figure references & resolve against package figure entries
-        const refPaths = this.extractReferencedFigurePaths(obj);
-        let hasResolvedAssetForQuestion = false;
-
-        if (availableFigures && availableFigures.size > 0) {
-          if (refPaths.length > 0) {
-            for (const ref of refPaths) {
-              const resolved = this.resolveFigureAsset(ref, availableFigures);
-              if (resolved) {
-                hasResolvedAssetForQuestion = true;
-                referencedAssetsFoundSet.add(resolved.entryPath || resolved.fileName);
-              } else {
-                missingFigures.push({
-                  questionId: obj.questionId,
-                  reference: ref,
-                });
-              }
-            }
-          }
-        } else {
-          // Plain JSONL upload (without ZIP archive)
-          if (refPaths.length > 0) {
-            for (const ref of refPaths) {
-              // Check if static file exists under public/uploads/ or uploads/
-              const p1 = path.resolve(process.cwd(), 'public', 'uploads', ref);
-              const p2 = path.resolve(process.cwd(), 'public', ref);
-              if (fs.existsSync(p1) || fs.existsSync(p2)) {
-                hasResolvedAssetForQuestion = true;
-                referencedAssetsFoundSet.add(ref);
-              } else {
-                missingFigures.push({
-                  questionId: obj.questionId,
-                  reference: ref,
-                });
-              }
-            }
-          }
-        }
-
-        // Increment questionsWithFigures ONLY IF at least one figure reference resolves to an actual asset!
-        if (hasResolvedAssetForQuestion) {
-          questionsWithFigures++;
-        }
-
-        validRecords.push(obj);
-      } catch (err: any) {
-        invalidRecords.push({ line: lineIndex, error: `JSON Parse error: ${err.message}`, raw: trimmed });
+    for (const { obj, lineIndex, raw } of parsedRecords) {
+      if (!obj.questionId || typeof obj.questionId !== 'string' || !obj.questionId.trim()) {
+        invalidRecords.push({
+          line: lineIndex,
+          error: 'Missing or invalid questionId',
+          code: 'MISSING_QUESTION_ID',
+          questionId: obj.questionId,
+          raw,
+        });
+        continue;
       }
+
+      if (!obj.question || typeof obj.question !== 'string' || !obj.question.trim()) {
+        invalidRecords.push({
+          line: lineIndex,
+          error: 'Missing question text',
+          code: 'MISSING_QUESTION_TEXT',
+          questionId: obj.questionId,
+          raw,
+        });
+        continue;
+      }
+
+      if (seenIds.has(obj.questionId)) {
+        duplicateCount++;
+        invalidRecords.push({
+          line: lineIndex,
+          error: `Duplicate questionId '${obj.questionId}' in file`,
+          code: 'DUPLICATE_QUESTION_ID',
+          questionId: obj.questionId,
+          raw,
+        });
+        continue;
+      }
+
+      seenIds.add(obj.questionId);
+
+      // Check figure references & resolve against package figure entries
+      const refPaths = this.extractReferencedFigurePaths(obj);
+      let hasResolvedAssetForQuestion = false;
+
+      if (availableFigures && availableFigures.size > 0) {
+        if (refPaths.length > 0) {
+          for (const ref of refPaths) {
+            const resolved = this.resolveFigureAsset(ref, availableFigures);
+            if (resolved) {
+              hasResolvedAssetForQuestion = true;
+              referencedAssetsFoundSet.add(resolved.entryPath || resolved.fileName);
+            } else {
+              missingFigures.push({
+                questionId: obj.questionId,
+                reference: ref,
+              });
+            }
+          }
+        }
+      } else {
+        // Plain JSONL/JSON upload (without ZIP archive)
+        if (refPaths.length > 0) {
+          for (const ref of refPaths) {
+            const p1 = path.resolve(process.cwd(), 'public', 'uploads', ref);
+            const p2 = path.resolve(process.cwd(), 'public', ref);
+            if (fs.existsSync(p1) || fs.existsSync(p2)) {
+              hasResolvedAssetForQuestion = true;
+              referencedAssetsFoundSet.add(ref);
+            } else {
+              missingFigures.push({
+                questionId: obj.questionId,
+                reference: ref,
+              });
+            }
+          }
+        }
+      }
+
+      // Increment questionsWithFigures ONLY IF at least one figure reference resolves to an actual asset!
+      if (hasResolvedAssetForQuestion) {
+        questionsWithFigures++;
+      }
+
+      validRecords.push(obj);
     }
 
     const figureAssetsFoundCount = referencedAssetsFoundSet.size;
@@ -332,6 +522,7 @@ export class JSONLImportService {
       else if (rawType === 'MSQ') qType = QuestionType.MSQ;
       else if (rawType === 'NAT') qType = QuestionType.NAT;
       else if (rawType === 'FREE_RESPONSE') qType = QuestionType.FREE_RESPONSE;
+      else if (rawType === 'MATCH_THE_FOLLOWING') qType = QuestionType.MCQ;
       else if (rawType === 'UNKNOWN') qType = QuestionType.UNKNOWN;
 
       const refPaths = this.extractReferencedFigurePaths(rec);
@@ -603,6 +794,7 @@ export class JSONLImportService {
       else if (rawType === 'MSQ') qType = QuestionType.MSQ;
       else if (rawType === 'NAT') qType = QuestionType.NAT;
       else if (rawType === 'FREE_RESPONSE') qType = QuestionType.FREE_RESPONSE;
+      else if (rawType === 'MATCH_THE_FOLLOWING') qType = QuestionType.MCQ;
       else if (rawType === 'UNKNOWN') qType = QuestionType.UNKNOWN;
 
       const { options: normalizedOptions, correctAnswer: normalizedCorrectAnswer, needsReview, type: effectiveQType } = this.normalizeOptionsAndAnswer(rec, qType);

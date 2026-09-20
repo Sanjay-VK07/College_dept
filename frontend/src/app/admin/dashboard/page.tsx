@@ -62,6 +62,7 @@ import { SmartQuestionPaperBuilder } from '@/components/question-bank/SmartQuest
 import { QuestionBankImportPanel } from '@/components/question-bank/QuestionBankImportPanel';
 import { SearchableSubjectSelect } from '@/components/question-bank/SearchableSubjectSelect';
 import { CURRENT_INSTITUTION } from '@/config/institution';
+import { QuestionOptionContent, getOptionText } from '@/components/question-bank/QuestionOptionContent';
 
 interface College {
   id: string;
@@ -269,6 +270,7 @@ function getExamSemester(exam: any): string {
 
 export default function AdminDashboard() {
   const router = useRouter();
+  const [zoomedImage, setZoomedImage] = useState<{ url: string; title?: string } | null>(null);
   // Question Bank sub-navigation: Library (browse/filter/select), Import (JSONL/Excel/CSV/PDF —
   // one entry point), Builder (the relocated Smart Question Paper Builder).
   const [questionBankView, setQuestionBankView] = useState<'LIBRARY' | 'IMPORT' | 'BUILDER'>('LIBRARY');
@@ -3589,33 +3591,43 @@ export default function AdminDashboard() {
               </span>
             </div>
 
-            <p className="text-sm font-semibold text-slate-900 leading-relaxed whitespace-pre-wrap">{qbDetailQuestion.text}</p>
+            <p className="text-sm font-semibold text-slate-900 leading-relaxed whitespace-pre-wrap">
+              {getOptionText(qbDetailQuestion.text) || (typeof qbDetailQuestion.text === 'string' ? qbDetailQuestion.text : '')}
+            </p>
 
             {qbDetailQuestion.imageUrl && (
               <div className="flex justify-center p-3 bg-slate-50 border border-slate-200 rounded-lg">
                 <img
                   src={qbDetailQuestion.imageUrl}
                   alt="Question Diagram"
-                  className="max-h-64 object-contain rounded"
+                  className="max-h-64 object-contain rounded cursor-zoom-in"
+                  onClick={() => setZoomedImage({ url: qbDetailQuestion.imageUrl, title: 'Question Diagram' })}
                 />
               </div>
             )}
 
             {Array.isArray(qbDetailQuestion.options) && qbDetailQuestion.options.length > 0 && (
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {qbDetailQuestion.options.map((opt: any, idx: number) => {
                   const correctIndices = Array.isArray(qbDetailQuestion.correctAnswer) ? qbDetailQuestion.correctAnswer : [];
                   const isCorrect = correctIndices.includes(idx);
                   return (
                     <div
                       key={idx}
-                      className={`text-xs p-2 rounded border flex items-center gap-2 ${
+                      className={`text-xs p-2.5 rounded border flex items-start gap-2.5 ${
                         isCorrect ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold' : 'bg-slate-50 border-slate-200 text-slate-700'
                       }`}
                     >
-                      <span className="font-mono font-bold">{String.fromCharCode(65 + idx)}.</span>
-                      <span>{opt.text || opt}</span>
-                      {isCorrect && <CheckCircle className="w-3.5 h-3.5 text-emerald-600 ml-auto shrink-0" />}
+                      <span className="font-mono font-bold shrink-0 mt-0.5">{String.fromCharCode(65 + idx)}.</span>
+                      <QuestionOptionContent
+                        option={opt}
+                        optionIndex={idx}
+                        isSelected={isCorrect}
+                        onZoomImage={(url, title) => setZoomedImage({ url, title })}
+                        className="flex-1"
+                        textClassName="text-xs"
+                      />
+                      {isCorrect && <CheckCircle className="w-3.5 h-3.5 text-emerald-600 ml-auto shrink-0 mt-0.5" />}
                     </div>
                   );
                 })}
@@ -3767,6 +3779,34 @@ export default function AdminDashboard() {
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* Fullscreen Image Lightbox / Zoom Modal */}
+      {zoomedImage && (
+        <div className="fixed inset-0 z-[160] bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-4">
+          <div className="absolute top-4 right-4 flex items-center gap-3">
+            {zoomedImage.title && (
+              <span className="text-white text-xs font-semibold font-mono bg-slate-800 px-3 py-1 rounded border border-slate-700">
+                {zoomedImage.title}
+              </span>
+            )}
+            <button
+              onClick={() => setZoomedImage(null)}
+              className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-full transition-colors"
+              title="Close Image Zoom"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="max-w-5xl max-h-[85vh] overflow-auto p-3 bg-white rounded-lg shadow-2xl flex items-center justify-center border border-slate-700">
+            <img
+              src={zoomedImage.url}
+              alt={zoomedImage.title || 'Enlarged Figure'}
+              className="max-w-full max-h-[80vh] object-contain rounded"
+            />
+          </div>
+          <p className="text-slate-400 text-xs mt-3">Click X or backdrop to close zoom view</p>
         </div>
       )}
 

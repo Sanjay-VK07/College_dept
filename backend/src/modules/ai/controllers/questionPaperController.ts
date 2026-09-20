@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../../../middlewares/authMiddleware';
 import { QuestionBankService } from '../services/questionBankService';
 import { QuestionPaperService } from '../services/questionPaperService';
+import { ExamValidationService } from '../services/examValidationService';
 import { prisma } from '../../../config/prisma';
 
 export class QuestionPaperController {
@@ -55,6 +56,15 @@ export class QuestionPaperController {
     try {
       const result = await QuestionPaperService.previewQuestionPaper(req.body);
       return res.status(200).json({ success: true, data: result });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  public static async validatePreviewPayload(req: AuthRequest, res: Response) {
+    try {
+      const result = ExamValidationService.validatePreviewPayload(req.body);
+      return res.status(200).json({ success: true, validation: result });
     } catch (error: any) {
       return res.status(400).json({ success: false, message: error.message });
     }

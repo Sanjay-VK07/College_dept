@@ -40,6 +40,24 @@ export interface PrePublishValidationResult {
   }>;
 }
 
+export function computeContentRepresentation(q: any): 'TEXT' | 'IMAGE' | 'TEXT_WITH_IMAGE' {
+  if (q && q.contentRepresentation) return q.contentRepresentation;
+  const rawText = q ? (q.text || (q.questionVersion && q.questionVersion.text) || '') : '';
+  const trimmed = rawText.replace(/!\[.*?\]\((.*?)\)/g, '').trim();
+  const hasText = !!(trimmed && trimmed !== 'null' && trimmed !== '[Image Question]');
+
+  let url: string | null = (q && (q.imageUrl || (q.questionVersion && q.questionVersion.imageUrl))) || null;
+  if (!url && rawText) {
+    const match = rawText.match(/!\[.*?\]\((.*?)\)/);
+    if (match && match[1]) url = match[1];
+  }
+  const hasImage = !!(url && url.trim());
+
+  if (hasImage && hasText) return 'TEXT_WITH_IMAGE';
+  if (hasImage && !hasText) return 'IMAGE';
+  return 'TEXT';
+}
+
 export class ExamValidationService {
   /**
    * Deterministically validates an assembled exam against GATE difficulty rules, unique questions,
@@ -316,7 +334,7 @@ export class ExamValidationService {
     // 4. Marks Sum & Exam Config Validation
     const expectedMarks = Number(mockTest.totalMarks || 0);
     if (expectedMarks > 0 && Math.abs(calculatedTotalMarks - expectedMarks) > 0.01 && questionCount > 0) {
-      blocking.push(
+      warnings.push(
         `Total marks mismatch: Exam configured total marks is ${expectedMarks}, but sum of question marks is ${calculatedTotalMarks}.`
       );
     }
@@ -390,5 +408,201 @@ export class ExamValidationService {
       figureDetails,
     };
   }
+
+  /**
+   * Validates a temporary in-memory preview payload (unsaved questions list + exam metadata)
+   * before database exam creation.
+   */
+  public static validatePreviewPayload(params: {
+    title?: string;
+    durationMinutes?: number;
+    totalMarks?: number;
+    questions: any[];
+  }): PrePublishValidationResult {
+    const { title, durationMinutes, totalMarks, questions } = params;
+    const blocking: string[] = [];
+    const warnings: string[] = [];
+    const info: string[] = [];
+
+    const questionCount = questions ? questions.length : 0;
+    if (questionCount === 0) {
+      blocking.push('Examination preview contains zero questions.');
+    }
+
+    const seenIds = new Set<string>();
+    const duplicateIds = new Set<string>();
+
+    for (const q of questions || []) {
+      const qId = q.id || q.questionId;
+      if (seenIds.has(qId)) {
+        duplicateIds.add(qId);
+      } else {
+        seenIds.add(qId);
+      }
+    }
+
+    if (duplicateIds.size > 0) {
+      blocking.push(`Examination contains ${duplicateIds.size} duplicate question ID(s).`);
+    }
+
+    let calculatedTotalMarks = 0;
+    let unverifiedCount = 0;
+    let sourceCount = 0;
+    let aiGeneratedCount = 0;
+    let mcqCount = 0;
+    let msqCount = 0;
+    let natCount = 0;
+    let figureCount = 0;
+    let imageOptionCount = 0;
+
+    const diffCounts = { EASY: 0, MEDIUM: 0, HARD: 0 };
+    const topicMap = new Map<string, { topicName: string; count: number }>();
+    const figureDetails: Array<any> = [];
+
+    (questions || []).forEach((q: any, idx: number) => {
+      const qNum = idx + 1;
+      const contentRep = computeContentRepresentation(q);
+
+      // Check N/A / EXCLUDED_NA
+      const rawAnsStr = String(q.rawAnswer || JSON.stringify(q.correctAnswer || '')).toUpperCase();
+      if (rawAnsStr.includes('N/A') || rawAnsStr.includes('EXCLUDED_NA')) {
+        blocking.push(`Question #${qNum} has answer 'N/A' and is excluded from exam creation.`);
+      }
+
+      // Check verification status if defined
+      if (q.verificationStatus && q.verificationStatus !== VerificationStatus.VERIFIED) {
+        unverifiedCount++;
+        blocking.push(`Question #${qNum} has status '${q.verificationStatus}' (Only VERIFIED questions can be included).`);
+      }
+
+      // Check text / image based on contentRepresentation
+      if (contentRep === 'TEXT' || contentRep === 'TEXT_WITH_IMAGE') {
+        const textVal = (q.text || (q.questionVersion && q.questionVersion.text) || '').replace(/!\[.*?\]\((.*?)\)/g, '').trim();
+        if (!textVal) {
+          blocking.push(`Question #${qNum} text statement is missing or empty.`);
+        }
+      }
+
+      // Options check for MCQ / MSQ
+      const qType = q.type || (q.questionVersion && q.questionVersion.type) || QuestionType.MCQ;
+      if (qType === QuestionType.MCQ || qType === QuestionType.MSQ) {
+        const opts = q.options || (q.questionVersion && q.questionVersion.options) || [];
+        if (!Array.isArray(opts) || opts.length < 2) {
+          blocking.push(`Question #${qNum} (${qType}) must have at least 2 options.`);
+        } else {
+          opts.forEach((opt: any, optIdx: number) => {
+            if (opt && typeof opt === 'object' && opt.imagePath) {
+              imageOptionCount++;
+              const figCheckOpt = ExamValidationService.checkFigureIntegrity({ imageUrl: opt.imagePath }, idx);
+              if (!figCheckOpt.isValid) {
+                blocking.push(`Question #${qNum} option ${String.fromCharCode(65 + optIdx)} image asset is missing (${opt.imagePath}).`);
+              }
+            }
+          });
+        }
+      }
+
+      // Correct Answer check
+      const corrAns = q.correctAnswer ?? (q.questionVersion && q.questionVersion.correctAnswer);
+      if (corrAns === null || corrAns === undefined || corrAns === '') {
+        blocking.push(`Question #${qNum} is missing a correct answer definition.`);
+      }
+
+      // Marks check
+      const marksVal = q.marks ?? (q.questionVersion && q.questionVersion.marks) ?? 1.0;
+      if (typeof marksVal !== 'number' || marksVal <= 0 || isNaN(marksVal)) {
+        blocking.push(`Question #${qNum} has invalid marks (${marksVal}). Marks must be > 0.`);
+      } else {
+        calculatedTotalMarks += marksVal;
+      }
+
+      // Figure integrity check
+      const figCheck = ExamValidationService.checkFigureIntegrity(q, idx);
+      figureDetails.push(figCheck);
+      if (figCheck.hasFigure || contentRep === 'IMAGE' || contentRep === 'TEXT_WITH_IMAGE') {
+        figureCount++;
+        if (!figCheck.isValid) {
+          blocking.push(figCheck.error || `Question #${qNum} has a broken figure reference.`);
+        }
+      }
+
+      // Origin counting
+      if (q.origin === 'AI_GENERATED') aiGeneratedCount++;
+      else sourceCount++;
+
+      // Question Type counting
+      if (qType === QuestionType.MCQ) mcqCount++;
+      else if (qType === QuestionType.MSQ) msqCount++;
+      else if (qType === QuestionType.NAT) natCount++;
+
+      // Difficulty breakdown
+      const diff = (q.difficulty || (q.questionVersion && q.questionVersion.difficulty) || 'MEDIUM') as string;
+      if (diff === 'EASY' || diff === 'VERY_EASY') diffCounts.EASY++;
+      else if (diff === 'HARD' || diff === 'VERY_HARD') diffCounts.HARD++;
+      else diffCounts.MEDIUM++;
+
+      // Topic coverage
+      const topicId = q.subtopic?.topic?.id || q.subtopicId || 'unknown';
+      const topicName = q.subtopic?.topic?.name || 'General';
+      const existing = topicMap.get(topicId) || { topicName, count: 0 };
+      existing.count++;
+      topicMap.set(topicId, existing);
+    });
+
+    // Total marks validation
+    if (totalMarks && totalMarks > 0 && Math.abs(calculatedTotalMarks - totalMarks) > 0.01 && questionCount > 0) {
+      warnings.push(`Total marks mismatch: Exam configured total marks is ${totalMarks}, but sum of question marks is ${calculatedTotalMarks}.`);
+    }
+
+    // Duration check
+    if (durationMinutes !== undefined && durationMinutes <= 0) {
+      blocking.push('Exam duration must be greater than 0 minutes.');
+    }
+
+    // Warnings
+    if (questionCount > 0 && aiGeneratedCount / questionCount > 0.5) {
+      warnings.push(`High ratio of AI-generated questions (${Math.round((aiGeneratedCount / questionCount) * 100)}% AI_GENERATED).`);
+    }
+
+    const topicCoverage = Array.from(topicMap.entries()).map(([topicId, val]) => ({
+      topicId,
+      topicName: val.topicName,
+      questionCount: val.count,
+    }));
+
+    if (topicCoverage.length === 1 && questionCount > 5) {
+      warnings.push(`All ${questionCount} questions are concentrated on a single topic (${topicCoverage[0].topicName}).`);
+    }
+
+    // Info
+    info.push(`${sourceCount} questions from verified Question Bank (SOURCE).`);
+    if (aiGeneratedCount > 0) info.push(`${aiGeneratedCount} questions generated by AI (AI_GENERATED).`);
+    info.push(`Question Type breakdown: ${mcqCount} MCQ, ${msqCount} MSQ, ${natCount} NAT.`);
+    if (figureCount > 0) info.push(`Contains ${figureCount} question(s) with figures/diagrams.`);
+    if (imageOptionCount > 0) info.push(`Contains ${imageOptionCount} image-based option(s).`);
+
+    return {
+      canPublish: blocking.length === 0,
+      blocking,
+      warnings,
+      info,
+      summary: {
+        questionCount,
+        totalMarks: calculatedTotalMarks,
+        durationMinutes: durationMinutes || 0,
+        sourceCount,
+        aiGeneratedCount,
+        mcqCount,
+        msqCount,
+        natCount,
+        figureCount,
+        unverifiedCount,
+        difficultyBreakdown: diffCounts,
+        topicCoverage,
+      },
+      figureDetails,
+    };
+  }
 }
+
 

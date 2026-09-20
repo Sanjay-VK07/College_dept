@@ -8,6 +8,7 @@ import io from 'socket.io-client';
 import { SecurityGuard } from '@/components/exam/SecurityGuard';
 import { GateScientificCalculator } from '@/components/exam/GateScientificCalculator';
 import { QuestionPalette } from '@/components/exam/QuestionPalette';
+import { QuestionOptionContent } from '@/components/question-bank/QuestionOptionContent';
 
 export default function ExamPage() {
   const router = useRouter();
@@ -479,20 +480,26 @@ export default function ExamPage() {
                   <button
                     key={optIdx}
                     onClick={() => handleOptionSelect(optIdx)}
-                    className={`w-full text-left p-3.5 rounded-md border transition-colors flex items-center space-x-3.5 ${
+                    className={`w-full text-left p-3.5 rounded-md border transition-colors flex items-start space-x-3.5 ${
                       isSelected
                         ? 'bg-blue-50/80 border-[#1E40AF] text-slate-900 shadow-sm'
                         : 'bg-white border-slate-200 text-slate-800 hover:bg-slate-50'
                     }`}
                   >
                     <div
-                      className={`w-7 h-7 rounded flex items-center justify-center font-mono font-bold text-xs shrink-0 ${
+                      className={`w-7 h-7 rounded flex items-center justify-center font-mono font-bold text-xs shrink-0 mt-0.5 ${
                         isSelected ? 'bg-[#1E40AF] text-white' : 'bg-slate-100 text-slate-700 border border-slate-300'
                       }`}
                     >
                       {String.fromCharCode(65 + optIdx)}
                     </div>
-                    <span className="text-sm font-medium">{opt.text}</span>
+                    <QuestionOptionContent
+                      option={opt}
+                      optionIndex={optIdx}
+                      isSelected={isSelected}
+                      className="flex-1"
+                      textClassName="text-sm font-medium"
+                    />
                   </button>
                 );
               })
