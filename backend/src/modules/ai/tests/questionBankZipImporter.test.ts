@@ -338,5 +338,82 @@ describe('Question Bank ZIP Importer & Multi-Format Regression Tests', () => {
     expect(preview.validRecords[0].sourceHeading).toBe('Addressing Modes');
     expect(preview.validRecords[1].questionId).toBe('Q0002');
   });
+
+  it('11. questions.json + question_images/ with visuals/ reference pattern', () => {
+    const zip = new AdmZip();
+    const dataset = [
+      {
+        id: 'Q_QI1',
+        question_text: 'Question referencing visuals/Q_QI1.jpg when stored under question_images/',
+        options: [{ key: 'A', text: 'Opt A' }],
+        visual_assets: ['visuals/Q_QI1.jpg'],
+        question_image: 'question_images/Q_QI1.jpg',
+      },
+    ];
+
+    zip.addFile('questions.json', Buffer.from(JSON.stringify(dataset, null, 2), 'utf-8'));
+    zip.addFile('question_images/Q_QI1.jpg', Buffer.from('QUESTION_IMAGE_BYTES'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+
+    expect(preview.totalRecords).toBe(1);
+    expect(preview.validCount).toBe(1);
+    expect(preview.invalidCount).toBe(0);
+    expect(preview.questionsWithFigures).toBe(1);
+    expect(preview.figureAssetsFoundCount).toBe(1);
+    expect(preview.missingFiguresCount).toBe(0);
+  });
+
+  it('12. questions.json + visuals/ with visuals/ reference pattern', () => {
+    const zip = new AdmZip();
+    const dataset = [
+      {
+        id: 'Q_VIS1',
+        question_text: 'Question referencing visuals/Q_VIS1.jpg stored under visuals/',
+        options: [{ key: 'A', text: 'Opt A' }],
+        visual_assets: ['visuals/Q_VIS1.jpg'],
+      },
+    ];
+
+    zip.addFile('questions.json', Buffer.from(JSON.stringify(dataset, null, 2), 'utf-8'));
+    zip.addFile('visuals/Q_VIS1.jpg', Buffer.from('VISUALS_BYTES'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+
+    expect(preview.totalRecords).toBe(1);
+    expect(preview.validCount).toBe(1);
+    expect(preview.questionsWithFigures).toBe(1);
+    expect(preview.figureAssetsFoundCount).toBe(1);
+    expect(preview.missingFiguresCount).toBe(0);
+  });
+
+  it('13. Chapter_01.jsonl + figures/ with figures/ reference pattern', () => {
+    const zip = new AdmZip();
+    const mockJSONL = [
+      JSON.stringify({
+        questionId: 'Q_FIG1',
+        question: 'Question referencing figures/Q_FIG1.png stored under figures/',
+        options: { A: '1', B: '2' },
+        correctAnswer: ['A'],
+        questionType: 'MCQ',
+        figures: ['figures/Q_FIG1.png'],
+      }),
+    ].join('\n');
+
+    zip.addFile('Chapter_01.jsonl', Buffer.from(mockJSONL, 'utf-8'));
+    zip.addFile('figures/Q_FIG1.png', Buffer.from('FIGURES_BYTES'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+
+    expect(preview.totalRecords).toBe(1);
+    expect(preview.validCount).toBe(1);
+    expect(preview.questionsWithFigures).toBe(1);
+    expect(preview.figureAssetsFoundCount).toBe(1);
+    expect(preview.missingFiguresCount).toBe(0);
+  });
 });
+
 

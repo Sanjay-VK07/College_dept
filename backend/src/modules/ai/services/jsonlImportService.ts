@@ -157,8 +157,12 @@ export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
     }
   }
 
-  // 6. Figures / Visual Assets aliases:
-  if (!rec.figures && !rec.figure && !rec.imageUrl) {
+  // 6. Figures / Visual Assets / Question Image aliases:
+  if (!rec.imageUrl) {
+    rec.imageUrl = rec.question_image || rec.questionImage || rec.image_url || rec.image_path || rec.imagePath;
+  }
+
+  if (!rec.figures && !rec.figure) {
     if (Array.isArray(rec.visual_assets) && rec.visual_assets.length > 0) {
       rec.figures = rec.visual_assets;
     } else if (Array.isArray(rec.figures_assets) && rec.figures_assets.length > 0) {
@@ -189,7 +193,7 @@ export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
 export class JSONLImportService {
   /**
    * Extracts any referenced figure file paths/names from a JSONL record.
-   * Scans explicit figure fields, imageUrl, and Markdown image syntax ![alt](path).
+   * Scans explicit figure fields, imageUrl, question_image, and Markdown image syntax ![alt](path).
    */
   public static extractReferencedFigurePaths(rec: JSONLRecord): string[] {
     const paths: string[] = [];
@@ -234,8 +238,10 @@ export class JSONLImportService {
       }
     }
 
-    // 3. Check rec.imageUrl or rec.image
+    // 3. Check rec.imageUrl, rec.image, question_image, questionImage
     addPath(rec.imageUrl);
+    addPath((rec as any).question_image);
+    addPath((rec as any).questionImage);
     if (typeof rec.image === 'string') {
       addPath(rec.image);
     } else if (rec.image && typeof rec.image === 'object') {
@@ -276,7 +282,7 @@ export class JSONLImportService {
 
   /**
    * Finds a figure asset in the provided figure entries map using exact path,
-   * lowercase path, basename, or stripped prefix (figures/ or visuals/).
+   * lowercase path, basename, or directory alias resolution (visuals/, question_images/, figures/).
    */
   public static resolveFigureAsset(refPath: string, figureEntries?: Map<string, ExtractedFigureAsset>): ExtractedFigureAsset | null {
     if (!figureEntries || figureEntries.size === 0 || !refPath) return null;
@@ -286,35 +292,46 @@ export class JSONLImportService {
 
     if (cleanRef.includes('..')) return null;
 
-    const baseName = path.posix.basename(cleanRef);
-    const withoutFigures = cleanRef.startsWith('figures/') ? cleanRef.slice('figures/'.length) : cleanRef;
-    const withoutVisuals = cleanRef.startsWith('visuals/') ? cleanRef.slice('visuals/'.length) : cleanRef;
+    // 1. Exact clean ref lookup & lowercase
+    let match = figureEntries.get(cleanRef) || figureEntries.get(cleanRef.toLowerCase());
+    if (match) return match;
 
+    // 2. Known directory alias resolution
+    const knownDirs = ['visuals', 'question_images', 'figures', 'images', 'diagrams'];
     let subPath: string | null = null;
-    const dirMatch = cleanRef.match(/(?:^|\/)(figures|visuals)\/(.+)$/i);
+    const dirMatch = cleanRef.match(/(?:^|\/)(visuals|question_images|figures|images|diagrams)\/(.+)$/i);
     if (dirMatch) {
       subPath = dirMatch[2];
+    } else {
+      for (const dir of knownDirs) {
+        if (cleanRef.toLowerCase().startsWith(`${dir}/`)) {
+          subPath = cleanRef.slice(dir.length + 1);
+          break;
+        }
+      }
     }
 
-    return (
-      figureEntries.get(cleanRef) ||
-      figureEntries.get(cleanRef.toLowerCase()) ||
-      figureEntries.get(baseName) ||
-      figureEntries.get(baseName.toLowerCase()) ||
-      figureEntries.get(`figures/${baseName}`) ||
-      figureEntries.get(`figures/${baseName}`.toLowerCase()) ||
-      figureEntries.get(`visuals/${baseName}`) ||
-      figureEntries.get(`visuals/${baseName}`.toLowerCase()) ||
-      figureEntries.get(withoutFigures) ||
-      figureEntries.get(withoutFigures.toLowerCase()) ||
-      figureEntries.get(withoutVisuals) ||
-      figureEntries.get(withoutVisuals.toLowerCase()) ||
-      (subPath ? figureEntries.get(subPath) : null) ||
-      (subPath ? figureEntries.get(subPath.toLowerCase()) : null) ||
-      (subPath ? figureEntries.get(`visuals/${subPath}`) : null) ||
-      (subPath ? figureEntries.get(`figures/${subPath}`) : null) ||
-      null
-    );
+    if (subPath) {
+      match = figureEntries.get(subPath) || figureEntries.get(subPath.toLowerCase());
+      if (match) return match;
+
+      for (const dir of knownDirs) {
+        match = figureEntries.get(`${dir}/${subPath}`) || figureEntries.get(`${dir}/${subPath}`.toLowerCase());
+        if (match) return match;
+      }
+    }
+
+    // 3. Basename lookup & synthetic directory alias lookup
+    const baseName = path.posix.basename(cleanRef);
+    match = figureEntries.get(baseName) || figureEntries.get(baseName.toLowerCase());
+    if (match) return match;
+
+    for (const dir of knownDirs) {
+      match = figureEntries.get(`${dir}/${baseName}`) || figureEntries.get(`${dir}/${baseName}`.toLowerCase());
+      if (match) return match;
+    }
+
+    return null;
   }
 
   /**

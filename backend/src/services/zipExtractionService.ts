@@ -128,6 +128,8 @@ export function isQuestionDatasetContent(text: string): boolean {
   return validCount > 0;
 }
 
+const KNOWN_ASSET_DIRS = ['visuals', 'question_images', 'figures', 'images', 'diagrams'];
+
 /**
  * Registers a figure asset under all relevant normalized keys.
  */
@@ -150,17 +152,19 @@ function registerFigureAsset(
   addKey(cleanPath);
   addKey(baseName);
 
-  // Synthetic references
-  addKey(`figures/${baseName}`);
-  addKey(`visuals/${baseName}`);
+  // Synthetic references across known asset directory aliases
+  for (const dir of KNOWN_ASSET_DIRS) {
+    addKey(`${dir}/${baseName}`);
+  }
 
-  // Stripped folder prefixes (e.g. figures/ or visuals/ or GATE_questions_and_visuals/visuals/)
-  const dirMatch = cleanPath.match(/(?:^|\/)(figures|visuals)\/(.+)$/i);
+  // Stripped folder prefixes (e.g. question_images/ or visuals/ or figures/ or GATE_questions_and_visuals/question_images/)
+  const dirMatch = cleanPath.match(/(?:^|\/)(visuals|question_images|figures|images|diagrams)\/(.+)$/i);
   if (dirMatch) {
     const subPath = dirMatch[2];
     addKey(subPath);
-    addKey(`figures/${subPath}`);
-    addKey(`visuals/${subPath}`);
+    for (const dir of KNOWN_ASSET_DIRS) {
+      addKey(`${dir}/${subPath}`);
+    }
   }
 }
 
