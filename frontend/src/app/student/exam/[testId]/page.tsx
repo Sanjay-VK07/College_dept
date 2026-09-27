@@ -9,6 +9,7 @@ import { SecurityGuard } from '@/components/exam/SecurityGuard';
 import { GateScientificCalculator } from '@/components/exam/GateScientificCalculator';
 import { QuestionPalette } from '@/components/exam/QuestionPalette';
 import { QuestionOptionContent } from '@/components/question-bank/QuestionOptionContent';
+import { QuestionRenderer } from '@/components/question-bank/QuestionRenderer';
 
 export default function ExamPage() {
   const router = useRouter();
@@ -422,89 +423,21 @@ export default function ExamPage() {
             </div>
           </div>
 
-          {/* Question Statement */}
-          <div className="text-slate-900 text-base leading-relaxed mb-6 whitespace-pre-wrap font-medium">
-            {(() => {
-              const text = currentQ.text;
-              const imgRegex = /!\[.*?\]\((.*?)\)/;
-              const match = text.match(imgRegex);
-              if (match) {
-                const imageUrl = match[1];
-                const cleanText = text.replace(imgRegex, '').trim();
-                return (
-                  <div className="space-y-4">
-                    <div>{cleanText}</div>
-                    <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                      <img src={imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
-                    </div>
-                  </div>
-                );
+          {/* Image-First Question & Options Rendering */}
+          <QuestionRenderer
+            question={currentQ}
+            selectedAnswer={selectedAnswers[currentQ.id]}
+            onSelectAnswer={(ans) => {
+              if (currentQ.type === 'NAT' || currentQ.type === 'FREE_RESPONSE') {
+                handleNATChange(typeof ans === 'string' ? ans : String(ans || ''));
+              } else if (Array.isArray(ans) && currentQ.type === 'MCQ') {
+                if (ans.length > 0) handleOptionSelect(ans[0]);
+              } else {
+                setSelectedAnswers((prev) => ({ ...prev, [currentQ.id]: ans }));
               }
-              return (
-                <div className="space-y-4">
-                  <div>{text}</div>
-                  {currentQ.imageUrl && (
-                    <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                      <img src={currentQ.imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* Options Display */}
-          <div className="space-y-3 flex-1">
-            {currentQ.type === 'NAT' ? (
-              <div className="max-w-xs space-y-2">
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                  Numerical Answer Entry:
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  value={selectedAnswers[currentQ.id] || ''}
-                  onChange={(e) => handleNATChange(e.target.value)}
-                  placeholder="Enter calculated numerical answer"
-                  className="erp-input font-mono font-bold text-emerald-700"
-                />
-              </div>
-            ) : (
-              currentQ.options.map((opt: any, optIdx: number) => {
-                const isSelected =
-                  currentQ.type === 'MCQ'
-                    ? selectedAnswers[currentQ.id]?.[0] === optIdx
-                    : (selectedAnswers[currentQ.id] || []).includes(optIdx);
-
-                return (
-                  <button
-                    key={optIdx}
-                    onClick={() => handleOptionSelect(optIdx)}
-                    className={`w-full text-left p-3.5 rounded-md border transition-colors flex items-start space-x-3.5 ${
-                      isSelected
-                        ? 'bg-blue-50/80 border-[#1E40AF] text-slate-900 shadow-sm'
-                        : 'bg-white border-slate-200 text-slate-800 hover:bg-slate-50'
-                    }`}
-                  >
-                    <div
-                      className={`w-7 h-7 rounded flex items-center justify-center font-mono font-bold text-xs shrink-0 mt-0.5 ${
-                        isSelected ? 'bg-[#1E40AF] text-white' : 'bg-slate-100 text-slate-700 border border-slate-300'
-                      }`}
-                    >
-                      {String.fromCharCode(65 + optIdx)}
-                    </div>
-                    <QuestionOptionContent
-                      option={opt}
-                      optionIndex={optIdx}
-                      isSelected={isSelected}
-                      className="flex-1"
-                      textClassName="text-sm font-medium"
-                    />
-                  </button>
-                );
-              })
-            )}
-          </div>
+            }}
+            viewMode="STUDENT_EXAM"
+          />
 
           {/* Bottom Controls Bar */}
           <div className="pt-4 border-t border-slate-200 flex justify-between items-center mt-auto">

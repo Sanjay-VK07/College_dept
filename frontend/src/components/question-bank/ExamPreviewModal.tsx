@@ -26,6 +26,7 @@ import { aiService } from '@/services/aiService';
 import { GateScientificCalculator } from '@/components/exam/GateScientificCalculator';
 import { QuestionPalette } from '@/components/exam/QuestionPalette';
 import { QuestionOptionContent } from '@/components/question-bank/QuestionOptionContent';
+import { QuestionRenderer } from '@/components/question-bank/QuestionRenderer';
 
 export function renderString(val: any): string {
   if (val === null || val === undefined) return '';
@@ -560,153 +561,23 @@ export const ExamPreviewModal: React.FC<ExamPreviewModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Question Statement & Visual Asset Rendering */}
-                      <div className="mb-6 space-y-4">
-                        {(() => {
-                          const contentRep = currentQ.contentRepresentation || getContentRepresentation(currentQ);
-                          const text = currentQ.text || '';
-                          let imageUrl = currentQ.imageUrl;
-                          const match = text.match(/!\[.*?\]\((.*?)\)/);
-                          if (match && match[1]) {
-                            imageUrl = match[1];
+                      {/* Image-First Question & Options Rendering */}
+                      <QuestionRenderer
+                        question={currentQ}
+                        selectedAnswer={selectedAnswers[currentQ.id]}
+                        onSelectAnswer={(ans) => {
+                          if (currentQ.type === 'NAT' || currentQ.type === 'FREE_RESPONSE') {
+                            handleNATChange(typeof ans === 'string' ? ans : String(ans || ''));
+                          } else if (Array.isArray(ans) && currentQ.type === 'MCQ') {
+                            if (ans.length > 0) handleOptionSelect(ans[0]);
+                          } else {
+                            setSelectedAnswers((prev) => ({ ...prev, [currentQ.id]: ans }));
                           }
-                          const cleanText = text.replace(/!\[.*?\]\((.*?)\)/g, '').trim();
-
-                          if (contentRep === 'IMAGE') {
-                            return (
-                              <div className="space-y-3">
-                                {imageUrl ? (
-                                  <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg relative group">
-                                    <img
-                                      src={imageUrl}
-                                      alt="Visual Question Diagram"
-                                      className="max-h-96 w-auto object-contain cursor-zoom-in rounded"
-                                      onClick={() => setZoomedImage({ url: imageUrl!, title: `Question ${currentIndex + 1} Visual Asset` })}
-                                    />
-                                    <button
-                                      onClick={() => setZoomedImage({ url: imageUrl!, title: `Question ${currentIndex + 1} Visual Asset` })}
-                                      className="absolute top-2 right-2 px-2 py-1 bg-slate-900/80 hover:bg-slate-900 text-white rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 shadow"
-                                    >
-                                      <Maximize2 className="w-3.5 h-3.5" />
-                                      <span>Zoom</span>
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div className="p-4 bg-amber-50 border border-amber-200 rounded text-amber-800 text-xs font-semibold flex items-center gap-2">
-                                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                                    <span>⚠ Question contains a visual representation that could not be loaded.</span>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          }
-
-                          if (contentRep === 'TEXT_WITH_IMAGE') {
-                            return (
-                              <div className="space-y-4">
-                                <div className="text-slate-900 text-base leading-relaxed whitespace-pre-wrap font-medium">{cleanText}</div>
-                                {imageUrl && (
-                                  <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg relative group">
-                                    <img
-                                      src={imageUrl}
-                                      alt="Question Diagram"
-                                      className="max-h-96 w-auto object-contain cursor-zoom-in rounded"
-                                      onClick={() => setZoomedImage({ url: imageUrl!, title: `Question ${currentIndex + 1} Figure` })}
-                                    />
-                                    <button
-                                      onClick={() => setZoomedImage({ url: imageUrl!, title: `Question ${currentIndex + 1} Figure` })}
-                                      className="absolute top-2 right-2 px-2 py-1 bg-slate-900/80 hover:bg-slate-900 text-white rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 shadow"
-                                    >
-                                      <Maximize2 className="w-3.5 h-3.5" />
-                                      <span>Zoom</span>
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          }
-
-                          // Default TEXT
-                          return (
-                            <div className="text-slate-900 text-base leading-relaxed whitespace-pre-wrap font-medium">{cleanText}</div>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Options Entry Area */}
-                      <div className="space-y-3 flex-1">
-                        {currentQ.type === 'NAT' ? (
-                          <div className="max-w-xs space-y-2 bg-slate-50 p-4 border border-slate-200 rounded-lg">
-                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                              Numerical Answer Entry (NAT):
-                            </label>
-                            <input
-                              type="number"
-                              step="any"
-                              value={selectedAnswers[currentQ.id] || ''}
-                              onChange={(e) => handleNATChange(e.target.value)}
-                              placeholder="Enter numerical value"
-                              className="erp-input font-mono font-bold text-emerald-700 bg-white"
-                            />
-                            <p className="text-[11px] text-slate-500 font-mono">
-                              Enter exact calculation result. Correct answer is hidden in student preview.
-                            </p>
-                          </div>
-                        ) : currentQ.type === 'MATCH_THE_FOLLOWING' ? (
-                          <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
-                            <div className="text-xs font-bold text-slate-800 uppercase tracking-wider">Match the Following Columns:</div>
-                            <div className="grid grid-cols-2 gap-4 text-xs font-medium text-slate-800">
-                              <div className="space-y-2 p-3 bg-white border border-slate-200 rounded">
-                                <div className="font-bold text-slate-900 border-b pb-1">Group I</div>
-                                {(currentQ.options?.group1 || ['1', '2', '3']).map((item: any, i: number) => (
-                                  <div key={i} className="py-1 font-mono">{i + 1}. {renderString(item)}</div>
-                                ))}
-                              </div>
-                              <div className="space-y-2 p-3 bg-white border border-slate-200 rounded">
-                                <div className="font-bold text-slate-900 border-b pb-1">Group II</div>
-                                {(currentQ.options?.group2 || ['P', 'Q', 'R']).map((item: any, i: number) => (
-                                  <div key={i} className="py-1 font-mono">{String.fromCharCode(80 + i)}. {renderString(item)}</div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          (currentQ.options || []).map((opt: any, optIdx: number) => {
-                            const isSelected =
-                              currentQ.type === 'MCQ'
-                                ? selectedAnswers[currentQ.id]?.[0] === optIdx
-                                : (selectedAnswers[currentQ.id] || []).includes(optIdx);
-
-                            return (
-                              <button
-                                key={optIdx}
-                                onClick={() => handleOptionSelect(optIdx)}
-                                className={`w-full text-left p-3.5 rounded-md border transition-colors flex items-start space-x-3.5 ${
-                                  isSelected
-                                    ? 'bg-blue-50/80 border-[#1E40AF] text-slate-900 shadow-sm'
-                                    : 'bg-white border-slate-200 text-slate-800 hover:bg-slate-50'
-                                }`}
-                              >
-                                <div
-                                  className={`w-7 h-7 rounded flex items-center justify-center font-mono font-bold text-xs shrink-0 mt-0.5 ${
-                                    isSelected ? 'bg-[#1E40AF] text-white' : 'bg-slate-100 text-slate-700 border border-slate-300'
-                                  }`}
-                                >
-                                  {String.fromCharCode(65 + optIdx)}
-                                </div>
-                                <QuestionOptionContent
-                                  option={opt}
-                                  optionIndex={optIdx}
-                                  isSelected={isSelected}
-                                  onZoomImage={(url, title) => setZoomedImage({ url, title })}
-                                  className="flex-1"
-                                  textClassName="text-sm font-medium"
-                                />
-                              </button>
-                            );
-                          })
-                        )}
-                      </div>
+                        }}
+                        onZoomImage={(url, title) => setZoomedImage({ url, title })}
+                        viewMode="EXAM_PREVIEW"
+                        showInternalMetadata={true}
+                      />
 
                       {/* Navigation Controls */}
                       <div className="pt-4 border-t border-slate-200 flex justify-between items-center mt-auto shrink-0">

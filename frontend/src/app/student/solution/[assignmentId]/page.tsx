@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { ArrowLeft, CheckCircle, XCircle, BookOpen, Award } from 'lucide-react';
 import api from '@/lib/api';
+import { QuestionRenderer } from '@/components/question-bank/QuestionRenderer';
 
 export default function SolutionReviewPage({ params }: { params?: { assignmentId?: string } }) {
   const router = useRouter();
@@ -172,36 +173,13 @@ export default function SolutionReviewPage({ params }: { params?: { assignmentId
                   </div>
                 </div>
 
-                {/* Question Statement */}
-                <div className="text-slate-900 text-sm leading-relaxed whitespace-pre-wrap font-medium">
-                  {(() => {
-                    const text = q.text;
-                    const imgRegex = /!\[.*?\]\((.*?)\)/;
-                    const match = text.match(imgRegex);
-                    if (match) {
-                      const imageUrl = match[1];
-                      const cleanText = text.replace(imgRegex, '').trim();
-                      return (
-                        <div className="space-y-4">
-                          <div>{cleanText}</div>
-                          <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                            <img src={imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
-                          </div>
-                        </div>
-                      );
-                    }
-                    return (
-                      <div className="space-y-4">
-                        <div>{text}</div>
-                        {q.imageUrl && (
-                          <div className="flex justify-center p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                            <img src={q.imageUrl} alt="Question Diagram" className="max-h-72 object-contain" />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
+                {/* Image-First Question & Options Rendering */}
+                <QuestionRenderer
+                  question={q}
+                  selectedAnswer={q.chosenAnswer}
+                  showCorrectAnswer={true}
+                  viewMode="SOLUTION_VIEW"
+                />
 
                 {/* Answer Details */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono pt-1">

@@ -63,6 +63,7 @@ import { QuestionBankImportPanel } from '@/components/question-bank/QuestionBank
 import { SearchableSubjectSelect } from '@/components/question-bank/SearchableSubjectSelect';
 import { CURRENT_INSTITUTION } from '@/config/institution';
 import { QuestionOptionContent, getOptionText } from '@/components/question-bank/QuestionOptionContent';
+import { QuestionRenderer } from '@/components/question-bank/QuestionRenderer';
 
 interface College {
   id: string;
@@ -3591,48 +3592,14 @@ export default function AdminDashboard() {
               </span>
             </div>
 
-            <p className="text-sm font-semibold text-slate-900 leading-relaxed whitespace-pre-wrap">
-              {getOptionText(qbDetailQuestion.text) || (typeof qbDetailQuestion.text === 'string' ? qbDetailQuestion.text : '')}
-            </p>
-
-            {qbDetailQuestion.imageUrl && (
-              <div className="flex justify-center p-3 bg-slate-50 border border-slate-200 rounded-lg">
-                <img
-                  src={qbDetailQuestion.imageUrl}
-                  alt="Question Diagram"
-                  className="max-h-64 object-contain rounded cursor-zoom-in"
-                  onClick={() => setZoomedImage({ url: qbDetailQuestion.imageUrl, title: 'Question Diagram' })}
-                />
-              </div>
-            )}
-
-            {Array.isArray(qbDetailQuestion.options) && qbDetailQuestion.options.length > 0 && (
-              <div className="space-y-2">
-                {qbDetailQuestion.options.map((opt: any, idx: number) => {
-                  const correctIndices = Array.isArray(qbDetailQuestion.correctAnswer) ? qbDetailQuestion.correctAnswer : [];
-                  const isCorrect = correctIndices.includes(idx);
-                  return (
-                    <div
-                      key={idx}
-                      className={`text-xs p-2.5 rounded border flex items-start gap-2.5 ${
-                        isCorrect ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold' : 'bg-slate-50 border-slate-200 text-slate-700'
-                      }`}
-                    >
-                      <span className="font-mono font-bold shrink-0 mt-0.5">{String.fromCharCode(65 + idx)}.</span>
-                      <QuestionOptionContent
-                        option={opt}
-                        optionIndex={idx}
-                        isSelected={isCorrect}
-                        onZoomImage={(url, title) => setZoomedImage({ url, title })}
-                        className="flex-1"
-                        textClassName="text-xs"
-                      />
-                      {isCorrect && <CheckCircle className="w-3.5 h-3.5 text-emerald-600 ml-auto shrink-0 mt-0.5" />}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            {/* Image-First Question & Options Rendering */}
+            <QuestionRenderer
+              question={qbDetailQuestion}
+              showCorrectAnswer={true}
+              onZoomImage={(url, title) => setZoomedImage({ url, title })}
+              viewMode="QUESTION_BANK"
+              showInternalMetadata={true}
+            />
 
             <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-xs">
               <span className="font-bold text-slate-700">Correct Answer: </span>

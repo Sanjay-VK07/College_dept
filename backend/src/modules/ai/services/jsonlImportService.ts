@@ -173,11 +173,32 @@ export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
   }
 
   // 7. Answer & Correct Answer aliases:
-  if (rec.correctAnswer === undefined && rec.correct_answer !== undefined) {
-    rec.correctAnswer = rec.correct_answer;
+  const extractedAns =
+    rec.correctAnswer ??
+    rec.correct_answer ??
+    rec.correct_answers ??
+    rec.correct_answer_key ??
+    rec.correctOption ??
+    rec.correct_option ??
+    rec.answerKey ??
+    rec.answer_key ??
+    rec.officialAnswer ??
+    rec.official_answer ??
+    rec.sourceAnswer ??
+    rec.source_answer ??
+    rec.answer ??
+    rec.answers ??
+    rec.rawAnswer ??
+    rec.raw_answer ??
+    rec.key ??
+    rec.solution ??
+    (rec.verification && (rec.verification.correctAnswer ?? rec.verification.answer ?? rec.verification.correct_answer));
+
+  if (rec.correctAnswer === undefined && extractedAns !== undefined) {
+    rec.correctAnswer = extractedAns;
   }
-  if (rec.rawAnswer === undefined && rec.raw_answer !== undefined) {
-    rec.rawAnswer = rec.raw_answer;
+  if (rec.rawAnswer === undefined && extractedAns !== undefined) {
+    rec.rawAnswer = typeof extractedAns === 'string' ? extractedAns : JSON.stringify(extractedAns);
   }
 
   // 8. Verification Status alias:
@@ -413,7 +434,8 @@ export class JSONLImportService {
   public static parseAndValidateJSONL(
     fileContent: string | Buffer,
     fileName: string = 'Ch1_questions.jsonl',
-    availableFigures?: Map<string, ExtractedFigureAsset>
+    availableFigures?: Map<string, ExtractedFigureAsset>,
+    answerKeyMap?: Map<string, any>
   ): ImportPreviewResult {
     const text = typeof fileContent === 'string' ? fileContent : fileContent.toString('utf-8');
     const { records: parsedRecords, invalidRecords } = this.parseDatasetEntries(text);
@@ -427,6 +449,14 @@ export class JSONLImportService {
     const referencedAssetsFoundSet = new Set<string>();
 
     for (const { obj, lineIndex, raw } of parsedRecords) {
+      if (answerKeyMap && obj.questionId && answerKeyMap.has(obj.questionId)) {
+        if (obj.correctAnswer === undefined || obj.correctAnswer === null || obj.correctAnswer === '' || obj.correctAnswer === 'N/A') {
+          obj.correctAnswer = answerKeyMap.get(obj.questionId);
+          if (!obj.rawAnswer) {
+            obj.rawAnswer = typeof obj.correctAnswer === 'string' ? obj.correctAnswer : JSON.stringify(obj.correctAnswer);
+          }
+        }
+      }
       if (!obj.questionId || typeof obj.questionId !== 'string' || !obj.questionId.trim()) {
         invalidRecords.push({
           line: lineIndex,
@@ -689,9 +719,10 @@ export class JSONLImportService {
     userId: string,
     fileName: string = 'Ch1_questions.jsonl',
     target: { subjectId?: string; subjectName?: string; subjectCode?: string; department?: string; moduleName?: string } = {},
-    figureEntries?: Map<string, ExtractedFigureAsset>
+    figureEntries?: Map<string, ExtractedFigureAsset>,
+    answerKeyMap?: Map<string, any>
   ) {
-    const preview = this.parseAndValidateJSONL(fileContent, fileName, figureEntries);
+    const preview = this.parseAndValidateJSONL(fileContent, fileName, figureEntries, answerKeyMap);
 
     if (preview.validRecords.length === 0) {
       throw new Error('No valid records found in JSONL file.');
@@ -1020,18 +1051,50 @@ export class JSONLImportService {
     };
   }
 
-  private static parseNATAnswer(raw: string): { answer: any; needsReview: boolean } {
-    const trimmed = (raw || '').trim();
-    if (!trimmed || trimmed.toUpperCase() === 'N/A') {
-      return { answer: {}, needsReview: true };
+  private static parseNATAnswer(raw: any): { answer: any; needsReview: boolean } {
+    if (raw === undefined || raw === null || raw === '' || raw === 'N/A' || raw === 'UNANSWERED_IN_SOURCE') {
+      return { answer: null, needsReview: true };
     }
-    const isMultiRange = trimmed.includes(';');
-    const firstSegment = isMultiRange ? trimmed.split(';')[0].trim() : trimmed;
 
-    const rangeMatch = firstSegment.match(/^(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)$/);
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      if (typeof raw.min === 'number' && typeof raw.max === 'number') {
+        const min = Number(raw.min);
+        const max = Number(raw.max);
+        return { answer: min === max ? { value: min } : { min, max, value: raw.value }, needsReview: false };
+      }
+      if (typeof raw.value === 'number') {
+        return { answer: { value: Number(raw.value), min: raw.min ?? Number(raw.value), max: raw.max ?? Number(raw.value) }, needsReview: false };
+      }
+    }
+
+    if (Array.isArray(raw)) {
+      if (raw.length === 2 && !isNaN(Number(raw[0])) && !isNaN(Number(raw[1]))) {
+        const min = Number(raw[0]);
+        const max = Number(raw[1]);
+        return { answer: min === max ? { value: min } : { min, max }, needsReview: false };
+      }
+      if (raw.length > 0) {
+        return this.parseNATAnswer(raw[0]);
+      }
+    }
+
+    const str = String(raw).trim();
+    if (!str || str.toUpperCase() === 'N/A' || str.toUpperCase() === 'UNANSWERED_IN_SOURCE') {
+      return { answer: null, needsReview: true };
+    }
+
+    const isMultiRange = str.includes(';');
+    const firstSegment = isMultiRange ? str.split(';')[0].trim() : str;
+
+    const rangeMatch = firstSegment.match(/^(-?\d+(?:\.\d+)?)\s*(?::|to|-|;|~)\s*(-?\d+(?:\.\d+)?)$/i);
     if (rangeMatch) {
-      const min = Number(rangeMatch[1]);
-      const max = Number(rangeMatch[2]);
+      let min = Number(rangeMatch[1]);
+      let max = Number(rangeMatch[2]);
+      if (min > max) {
+        const temp = min;
+        min = max;
+        max = temp;
+      }
       const answer = min === max ? { value: min } : { min, max };
       return { answer, needsReview: isMultiRange };
     }
@@ -1041,8 +1104,7 @@ export class JSONLImportService {
       return { answer: { value: plain }, needsReview: isMultiRange };
     }
 
-    // Genuinely unparseable — flag for review
-    return { answer: {}, needsReview: true };
+    return { answer: null, needsReview: true };
   }
 
   public static normalizeOptionsAndAnswer(
@@ -1057,33 +1119,52 @@ export class JSONLImportService {
     }
 
     const extractRawChoiceTokens = (val: any): string[] => {
-      if (val === undefined || val === null || val === 'N/A') return [];
+      if (val === undefined || val === null) return [];
       if (Array.isArray(val)) {
         return val.flatMap((v) => extractRawChoiceTokens(v));
       }
+      if (typeof val === 'number') {
+        return [String(val)];
+      }
+      if (typeof val === 'object') {
+        const token = val.key ?? val.label ?? val.choice ?? val.index ?? val.value ?? val.answer ?? val.text ?? val.id;
+        if (token !== undefined && token !== null && typeof token !== 'object') {
+          return extractRawChoiceTokens(token);
+        }
+        return [];
+      }
+
       const str = String(val).trim();
-      if (!str || str === 'N/A') return [];
+      if (!str || str.toUpperCase() === 'N/A' || str.toUpperCase() === 'UNANSWERED_IN_SOURCE' || str.toUpperCase() === 'NONE') {
+        return [];
+      }
+
       if (/[,;/]/.test(str)) {
         return str.split(/[,;/]+/).map((s) => s.trim()).filter((s) => s.length > 0);
+      }
+      if (/^[A-Z](\s+[A-Z])+$ /i.test(str) || /^[A-Z]\s+[A-Z]$/i.test(str)) {
+        return str.split(/\s+/).map((s) => s.trim()).filter((s) => s.length > 0);
       }
       return [str];
     };
 
-    const rawChoices = extractRawChoiceTokens(
+    const rawChoiceSource =
       rec.correctAnswer !== undefined && rec.correctAnswer !== null
         ? rec.correctAnswer
         : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
         ? rec.answer
         : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
         ? rec.rawAnswer
-        : (rec as any).answerKey || (rec as any).answer_key
-    );
+        : (rec as any).answerKey || (rec as any).answer_key || (rec as any).officialAnswer || (rec as any).key;
 
-    const hasChoiceTokens = rawChoices.length > 0 && rawChoices.some((c) => /^[A-Z]$/i.test(c.trim()));
+    const rawChoices = extractRawChoiceTokens(rawChoiceSource);
+    const hasChoiceTokens = rawChoices.length > 0;
 
     let effectiveQType = qType;
     if (rawOptCount >= 2 && hasChoiceTokens) {
-      effectiveQType = rawChoices.length > 1 ? QuestionType.MSQ : QuestionType.MCQ;
+      if (qType !== QuestionType.NAT && qType !== QuestionType.FREE_RESPONSE) {
+        effectiveQType = rawChoices.length > 1 ? QuestionType.MSQ : QuestionType.MCQ;
+      }
     }
 
     if (effectiveQType === QuestionType.MCQ || effectiveQType === QuestionType.MSQ) {
@@ -1093,37 +1174,67 @@ export class JSONLImportService {
       if (rec.options && !Array.isArray(rec.options) && typeof rec.options === 'object') {
         const letters = Object.keys(rec.options).sort();
         optionsArray = letters.map((l) => ({ text: (rec.options as Record<string, string>)[l], label: l }));
-        const letterToIndex = new Map(letters.map((l, i) => [l.toUpperCase(), i]));
-
-        correctIndices = rawChoices
-          .map((v: any) => {
-            const trimmed = String(v).trim().toUpperCase();
-            if (letterToIndex.has(trimmed)) return letterToIndex.get(trimmed)!;
-            const n = Number(v);
-            return Number.isFinite(n) ? n : null;
-          })
-          .filter((v: any): v is number => v !== null);
       } else if (Array.isArray(rec.options)) {
         optionsArray = rec.options.map((o: any) => (typeof o === 'string' ? { text: o } : o));
+      }
 
-        const labelToIndex = new Map<string, number>();
-        optionsArray.forEach((o, idx) => {
-          if (o && typeof o === 'object' && o.label) {
-            labelToIndex.set(String(o.label).trim().toUpperCase(), idx);
+      const labelMap = new Map<string, number>();
+      optionsArray.forEach((o, idx) => {
+        if (typeof o === 'string') {
+          labelMap.set(o.trim().toLowerCase(), idx);
+        } else if (o && typeof o === 'object') {
+          const k = o.label ?? o.key ?? o.id ?? o.choice ?? o.value;
+          if (k !== undefined && k !== null) {
+            labelMap.set(String(k).trim().toUpperCase(), idx);
           }
-        });
+          if (typeof o.text === 'string' && o.text.trim()) {
+            labelMap.set(o.text.trim().toLowerCase(), idx);
+          }
+        }
+      });
 
-        correctIndices = rawChoices
-          .map((v: any) => {
-            const trimmed = String(v).trim().toUpperCase();
-            if (labelToIndex.has(trimmed)) return labelToIndex.get(trimmed)!;
-            if (/^[A-Z]$/.test(trimmed)) {
-              return trimmed.charCodeAt(0) - 65;
-            }
-            const n = Number(v);
-            return Number.isFinite(n) ? n : null;
-          })
-          .filter((v: any): v is number => v !== null);
+      const matchedIndicesSet = new Set<number>();
+
+      for (const token of rawChoices) {
+        const trimmed = String(token).trim();
+        const upper = trimmed.toUpperCase();
+        const lower = trimmed.toLowerCase();
+
+        if (labelMap.has(upper)) {
+          matchedIndicesSet.add(labelMap.get(upper)!);
+          continue;
+        }
+        if (labelMap.has(lower)) {
+          matchedIndicesSet.add(labelMap.get(lower)!);
+          continue;
+        }
+
+        // Single uppercase letter check A..Z
+        if (/^[A-Z]$/.test(upper)) {
+          const idx = upper.charCodeAt(0) - 65;
+          if (idx >= 0 && idx < optionsArray.length) {
+            matchedIndicesSet.add(idx);
+            continue;
+          }
+        }
+
+        // Numeric index check (0-based or 1-based)
+        const n = Number(trimmed);
+        if (Number.isInteger(n)) {
+          if (n >= 0 && n < optionsArray.length) {
+            matchedIndicesSet.add(n);
+            continue;
+          } else if (n >= 1 && n <= optionsArray.length) {
+            matchedIndicesSet.add(n - 1);
+            continue;
+          }
+        }
+      }
+
+      correctIndices = Array.from(matchedIndicesSet).sort((a, b) => a - b);
+
+      if (correctIndices.length > 1 && effectiveQType === QuestionType.MCQ) {
+        effectiveQType = QuestionType.MSQ;
       }
 
       const hasMissingAnswer = correctIndices.length === 0;
@@ -1134,37 +1245,125 @@ export class JSONLImportService {
     }
 
     if (effectiveQType === QuestionType.NAT) {
-      const raw = Array.isArray(rec.correctAnswer) && rec.correctAnswer.length > 0
-        ? rec.correctAnswer[0]
-        : rec.correctAnswer !== undefined && rec.correctAnswer !== null
-        ? rec.correctAnswer
-        : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
-        ? (Array.isArray(rec.answer) ? rec.answer[0] : rec.answer)
-        : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
-        ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer[0] : rec.rawAnswer)
-        : '';
+      const raw = Array.isArray(rawChoiceSource) && rawChoiceSource.length > 0
+        ? rawChoiceSource[0]
+        : rawChoiceSource;
 
-      const rawStr = typeof raw === 'string' ? raw : String(raw ?? '');
-      const parsed = this.parseNATAnswer(rawStr);
+      const parsed = this.parseNATAnswer(raw);
       return { options: [], correctAnswer: parsed.answer, needsReview: parsed.needsReview, type: effectiveQType };
     }
 
     if ((effectiveQType as string) === 'FREE_RESPONSE' || (effectiveQType as string) === 'UNKNOWN') {
-      const raw = Array.isArray(rec.correctAnswer) && rec.correctAnswer.length > 0
-        ? rec.correctAnswer[0]
-        : rec.correctAnswer !== undefined && rec.correctAnswer !== null
-        ? rec.correctAnswer
-        : rec.answer !== undefined && rec.answer !== null && rec.answer !== 'N/A'
-        ? (Array.isArray(rec.answer) ? rec.answer[0] : rec.answer)
-        : rec.rawAnswer !== undefined && rec.rawAnswer !== null && rec.rawAnswer !== 'N/A'
-        ? (Array.isArray(rec.rawAnswer) ? rec.rawAnswer[0] : rec.rawAnswer)
-        : '';
-      const hasAnswer = Boolean(raw && String(raw).trim().length > 0);
+      const raw = Array.isArray(rawChoiceSource) && rawChoiceSource.length > 0
+        ? rawChoiceSource[0]
+        : rawChoiceSource;
+
+      const hasAnswer = Boolean(raw && String(raw).trim().length > 0 && String(raw).toUpperCase() !== 'N/A');
       const needsReview = (effectiveQType as string) === 'UNKNOWN' || !hasAnswer;
       return { options: [], correctAnswer: hasAnswer ? [raw] : [], needsReview, type: effectiveQType };
     }
 
     return { options: [], correctAnswer: [], needsReview: true, type: effectiveQType };
+  }
+
+  public static async revalidateAndRepairAllQuestions() {
+    const allQuestions = await prisma.question.findMany();
+
+    let totalQuestions = allQuestions.length;
+    let answersFound = 0;
+    let answersMapped = 0;
+    let answersMissing = 0;
+    let answersInvalid = 0;
+    let msqMapped = 0;
+    let natMapped = 0;
+    let naCount = 0;
+    let unansweredInSource = 0;
+
+    for (const q of allQuestions) {
+      const vm: any = q.visualMetadata || {};
+      const rawAns =
+        q.rawAnswer ??
+        (vm.rawAnswer || vm.answer || vm.correctAnswer || vm.answerKey || vm.key || vm.sourceAnswer);
+
+      const rec: JSONLRecord = {
+        questionId: q.customId || q.id,
+        question: q.text,
+        options: q.options as any,
+        correctAnswer: rawAns,
+        questionType: q.type,
+        verificationStatus: q.verificationStatus,
+      };
+
+      const qType = (q.type || QuestionType.MCQ) as QuestionType;
+      const { options: normOptions, correctAnswer: normCorrectAnswer, needsReview, type: effectiveType } =
+        this.normalizeOptionsAndAnswer(rec, qType);
+
+      const isUnanswered =
+        q.verificationStatus === VerificationStatus.UNANSWERED_IN_SOURCE ||
+        rawAns === 'N/A' ||
+        rawAns === 'UNANSWERED_IN_SOURCE';
+
+      let effectiveVStatus: VerificationStatus = q.verificationStatus;
+
+      if (rawAns === 'N/A' || (q.correctAnswer as any) === 'N/A') {
+        naCount++;
+      }
+      if (isUnanswered) {
+        unansweredInSource++;
+        effectiveVStatus = VerificationStatus.UNANSWERED_IN_SOURCE;
+      }
+
+      const hasRaw = Boolean(rawAns && String(rawAns).trim() !== '' && String(rawAns).trim() !== 'N/A');
+      if (hasRaw) {
+        answersFound++;
+      }
+
+      let isMapped = false;
+      if (Array.isArray(normCorrectAnswer)) {
+        if (normCorrectAnswer.length > 0) isMapped = true;
+      } else if (normCorrectAnswer && typeof normCorrectAnswer === 'object') {
+        if (Object.keys(normCorrectAnswer).length > 0) isMapped = true;
+      }
+
+      if (isMapped) {
+        answersMapped++;
+        if (effectiveType === QuestionType.MSQ) msqMapped++;
+        if (effectiveType === QuestionType.NAT) natMapped++;
+        if (!isUnanswered && effectiveVStatus === VerificationStatus.NEEDS_REVIEW && !needsReview) {
+          effectiveVStatus = VerificationStatus.VERIFIED;
+        }
+      } else {
+        if (hasRaw) {
+          answersInvalid++;
+        } else {
+          answersMissing++;
+        }
+      }
+
+      // Update question in PostgreSQL DB
+      await prisma.question.update({
+        where: { id: q.id },
+        data: {
+          type: effectiveType || q.type,
+          options: normOptions,
+          correctAnswer: normCorrectAnswer as any,
+          rawAnswer: rawAns !== undefined && rawAns !== null ? (typeof rawAns === 'string' ? rawAns : JSON.stringify(rawAns)) : q.rawAnswer,
+          verificationStatus: effectiveVStatus,
+        },
+      });
+    }
+
+    return {
+      totalQuestions,
+      answersFound,
+      answersMapped,
+      answersMissing,
+      answersInvalid,
+      msqMapped,
+      natMapped,
+      naCount,
+      unansweredInSource,
+    };
   }
 }
 

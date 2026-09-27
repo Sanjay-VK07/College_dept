@@ -17,6 +17,7 @@ export interface ExtractedFigureAsset {
 export interface ExtractedQuestionPackage {
   jsonlEntries: Array<{ fileName: string; entryPath: string; buffer: Buffer; text: string }>;
   figureEntries: Map<string, ExtractedFigureAsset>;
+  answerKeyMap: Map<string, any>;
   allEntryPaths: string[];
   totalSize: number;
 }
@@ -236,6 +237,36 @@ export function extractQuestionBankZipPackage(zipBuffer: Buffer): ExtractedQuest
     }
   }
 
+  const answerKeyMap = new Map<string, any>();
+
+  // Extract external or embedded answer key maps
+  for (const c of candidateDatasets) {
+    if (/(?:answer|key)/i.test(c.fileName) || !isQuestionDatasetContent(c.text)) {
+      try {
+        const parsed = JSON.parse(c.text.trim());
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item && typeof item === 'object') {
+              const qId = item.questionId || item.id || item.customId || item.question_id;
+              const ans = item.correctAnswer ?? item.correct_answer ?? item.answer ?? item.rawAnswer ?? item.key;
+              if (qId && ans !== undefined) {
+                answerKeyMap.set(String(qId).trim(), ans);
+              }
+            }
+          }
+        } else if (typeof parsed === 'object' && parsed !== null) {
+          for (const [k, v] of Object.entries(parsed)) {
+            if (v !== undefined && v !== null) {
+              answerKeyMap.set(k.trim(), v);
+            }
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
   // Filter candidates by valid question content
   const validCandidates = candidateDatasets.filter((c) => isQuestionDatasetContent(c.text));
 
@@ -265,6 +296,7 @@ export function extractQuestionBankZipPackage(zipBuffer: Buffer): ExtractedQuest
   return {
     jsonlEntries,
     figureEntries,
+    answerKeyMap,
     allEntryPaths,
     totalSize: totalExtractedSize,
   };

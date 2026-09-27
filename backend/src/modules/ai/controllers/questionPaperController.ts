@@ -246,6 +246,7 @@ export class QuestionPaperController {
     fileContent: Buffer | string;
     fileName: string;
     figureEntries?: Map<string, any>;
+    answerKeyMap?: Map<string, any>;
   } {
     if (req.file) {
       const { isZipFile, extractQuestionBankZipPackage, extractZipEntries } = require('../../../services/zipExtractionService');
@@ -256,6 +257,7 @@ export class QuestionPaperController {
           fileContent: combined,
           fileName: req.file.originalname,
           figureEntries: pkg.figureEntries,
+          answerKeyMap: pkg.answerKeyMap,
         };
       }
       return { fileContent: req.file.buffer, fileName: req.file.originalname };
@@ -268,10 +270,10 @@ export class QuestionPaperController {
 
   public static async previewJSONLImport(req: AuthRequest, res: Response) {
     try {
-      const { fileContent, fileName, figureEntries } = QuestionPaperController.resolveQuestionBankUpload(req);
+      const { fileContent, fileName, figureEntries, answerKeyMap } = QuestionPaperController.resolveQuestionBankUpload(req);
 
       const { JSONLImportService } = require('../services/jsonlImportService');
-      const preview = JSONLImportService.parseAndValidateJSONL(fileContent, fileName, figureEntries);
+      const preview = JSONLImportService.parseAndValidateJSONL(fileContent, fileName, figureEntries, answerKeyMap);
       return res.status(200).json({ success: true, data: preview });
     } catch (error: any) {
       return res.status(400).json({ success: false, message: error.message });
@@ -284,7 +286,7 @@ export class QuestionPaperController {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
 
-      const { fileContent, fileName, figureEntries } = QuestionPaperController.resolveQuestionBankUpload(req);
+      const { fileContent, fileName, figureEntries, answerKeyMap } = QuestionPaperController.resolveQuestionBankUpload(req);
 
       const { JSONLImportService } = require('../services/jsonlImportService');
       const result = await JSONLImportService.importJSONLToDatabase(
@@ -298,7 +300,8 @@ export class QuestionPaperController {
           department: req.body.department || undefined,
           moduleName: req.body.moduleName || undefined,
         },
-        figureEntries
+        figureEntries,
+        answerKeyMap
       );
       return res.status(200).json({ success: true, data: result });
     } catch (error: any) {
