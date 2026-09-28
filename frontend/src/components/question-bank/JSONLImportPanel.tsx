@@ -338,6 +338,45 @@ export const JSONLImportPanel: React.FC<JSONLImportPanelProps> = ({ onImportComp
             )}
           </div>
 
+          {/* EXPLICIT DIAGNOSTIC SECTION FOR IMAGE-FIRST IMPORT */}
+          {previewData.diagnostics && (
+            <div className="bg-slate-900 text-slate-100 rounded-lg p-3.5 border border-slate-700 space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold border-b border-slate-700 pb-1.5 uppercase tracking-wider text-emerald-400">
+                <span className="flex items-center gap-1.5">
+                  <ImageIcon className="w-4 h-4 text-emerald-400" />
+                  Image & Asset Resolution Diagnostics
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono font-normal">Image-First Importer</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs font-mono">
+                <div className="bg-slate-800 p-2 rounded border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-sans">Images in ZIP</div>
+                  <div className="font-bold text-sky-400 text-sm mt-0.5">{previewData.diagnostics.imagesFoundInZip ?? 0}</div>
+                </div>
+                <div className="bg-slate-800 p-2 rounded border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-sans">Images Resolved</div>
+                  <div className="font-bold text-emerald-400 text-sm mt-0.5">{previewData.diagnostics.imagesSuccessfullyResolved ?? 0}</div>
+                </div>
+                <div className="bg-slate-800 p-2 rounded border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-sans">Questions w/ Images</div>
+                  <div className="font-bold text-indigo-300 text-sm mt-0.5">{previewData.diagnostics.questionsWithQuestionImages ?? 0}</div>
+                </div>
+                <div className="bg-slate-800 p-2 rounded border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-sans">Unresolved Image Refs</div>
+                  <div className={`font-bold text-sm mt-0.5 ${previewData.diagnostics.unresolvedImageReferences > 0 ? 'text-amber-400' : 'text-slate-300'}`}>
+                    {previewData.diagnostics.unresolvedImageReferences ?? 0}
+                  </div>
+                </div>
+                <div className="bg-slate-800 p-2 rounded border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-sans">No Text & No Image</div>
+                  <div className={`font-bold text-sm mt-0.5 ${previewData.diagnostics.questionsWithNeitherTextNorImage > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {previewData.diagnostics.questionsWithNeitherTextNorImage ?? 0}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Core Metrics Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-2.5 text-xs font-mono text-center">
             <div className="p-2.5 bg-slate-50 border rounded">

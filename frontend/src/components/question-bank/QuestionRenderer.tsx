@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Maximize2, AlertTriangle, Eye, EyeOff, CheckCircle2, XCircle, HelpCircle } from 'lucide-react';
+import { Maximize2, AlertTriangle, Eye, EyeOff, CheckCircle2, XCircle, HelpCircle, FileText } from 'lucide-react';
+import api from '@/lib/api';
 import { QuestionOptionContent, getOptionText, getOptionImage } from './QuestionOptionContent';
 
 export interface QuestionRendererProps {
@@ -17,21 +18,37 @@ export interface QuestionRendererProps {
 
 export function getQuestionImageUrl(q: any): string | null {
   if (!q) return null;
-  if (typeof q.imageUrl === 'string' && q.imageUrl.trim()) return q.imageUrl.trim();
-  if (typeof q.question_image === 'string' && q.question_image.trim()) return q.question_image.trim();
-  if (typeof q.questionImage === 'string' && q.questionImage.trim()) return q.questionImage.trim();
-  if (typeof q.image === 'string' && q.image.trim()) return q.image.trim();
-  if (q.image && typeof q.image === 'object' && typeof q.image.url === 'string' && q.image.url.trim()) return q.image.url.trim();
-  if (q.figure && typeof q.figure === 'string' && q.figure.trim()) return q.figure.trim();
-  if (q.figure && typeof q.figure === 'object' && typeof q.figure.url === 'string' && q.figure.url.trim()) return q.figure.url.trim();
-  if (q.questionVersion && typeof q.questionVersion.imageUrl === 'string' && q.questionVersion.imageUrl.trim()) return q.questionVersion.imageUrl.trim();
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
 
-  // Parse markdown image syntax ![alt](url)
-  if (typeof q.text === 'string') {
-    const match = q.text.match(/!\[.*?\]\((.*?)\)/);
-    if (match && match[1]) return match[1].trim();
+  if (typeof q.imageUrl === 'string' && q.imageUrl.trim()) {
+    const trimmed = q.imageUrl.trim();
+    if (trimmed.startsWith('/uploads/') || trimmed.startsWith('uploads/')) {
+      return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    }
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+      return trimmed;
+    }
   }
-  return null;
+
+  const qId = q.customId || q.id;
+  if (qId) {
+    return `${baseUrl}/question-bank/questions/${qId}/source-image`;
+  }
+
+  let raw: string | null = null;
+  if (typeof q.question_image === 'string' && q.question_image.trim()) raw = q.question_image.trim();
+  else if (typeof q.questionImage === 'string' && q.questionImage.trim()) raw = q.questionImage.trim();
+  else if (typeof q.image === 'string' && q.image.trim()) raw = q.image.trim();
+  else if (q.image && typeof q.image === 'object' && typeof q.image.url === 'string' && q.image.url.trim()) raw = q.image.url.trim();
+
+  if (!raw) return null;
+  if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:')) {
+    return raw;
+  }
+  let clean = raw.replace(/\\/g, '/');
+  if (clean.startsWith('/uploads/')) return clean;
+  if (clean.startsWith('uploads/')) return `/${clean}`;
+  return `/uploads/diagrams/${clean.split('/').pop() || clean}`;
 }
 
 export function getOptionCropYPercent(q: any): number | null {
@@ -74,6 +91,11 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   className = '',
 }) => {
   const [showOcrDrawer, setShowOcrDrawer] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [recoverSuccessMsg, setRecoverSuccessMsg] = useState<string | null>(null);
+  const [recoverErrorMsg, setRecoverErrorMsg] = useState<string | null>(null);
+  const [cacheBuster, setCacheBuster] = useState(0);
 
   if (!question) {
     return (
@@ -83,10 +105,58 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     );
   }
 
-  const imageUrl = getQuestionImageUrl(question);
+  const rawImageUrl = getQuestionImageUrl(question);
+  const imageUrl = rawImageUrl ? (cacheBuster ? `${rawImageUrl}?t=${cacheBuster}` : rawImageUrl) : null;
   const cropYPercent = getOptionCropYPercent(question);
   const requiresReview = doesImageRequireReview(question);
   const rawText = typeof question.text === 'string' ? question.text.replace(/!\[.*?\]\((.*?)\)/g, '').trim() : '';
+
+  const handleRecoverImage = async () => {
+    if (isRecovering) return;
+    try {
+      setIsRecovering(true);
+      setRecoverErrorMsg(null);
+      setRecoverSuccessMsg(null);
+      const qId = question.id || question.customId;
+      if (!qId) return;
+
+      const res = await api.post(`/admin/questions/${qId}/image/recover`);
+      const data = res.data;
+      if (data.success || data.recovered) {
+        const targetUrl = data.imageUrl || `/api/question-bank/questions/${qId}/source-image`;
+        const testImg = new Image();
+        const buster = Date.now();
+        testImg.onload = () => {
+          setImageError(false);
+          setCacheBuster(buster);
+          setRecoverSuccessMsg('Source image recovered successfully');
+          setIsRecovering(false);
+        };
+        testImg.onerror = () => {
+          setRecoverErrorMsg('Source PDF page image could not be loaded into browser.');
+          setIsRecovering(false);
+        };
+        testImg.src = `${targetUrl}?t=${buster}`;
+      } else {
+        setRecoverErrorMsg(data.message || 'Source PDF could not be found. Please re-import the source document.');
+        setIsRecovering(false);
+      }
+    } catch (e: any) {
+      console.warn('Image recovery failed:', e);
+      const backendMsg = e?.response?.data?.message;
+      const status = e?.response?.status;
+      if (status === 404) {
+        setRecoverErrorMsg(backendMsg || 'Source PDF could not be found. Please re-import the source document.');
+      } else if (status === 401 || status === 403) {
+        setRecoverErrorMsg('Authentication or permission required to recover source images.');
+      } else if (backendMsg) {
+        setRecoverErrorMsg(backendMsg);
+      } else {
+        setRecoverErrorMsg('Failed to connect to backend recovery service.');
+      }
+      setIsRecovering(false);
+    }
+  };
 
   const qType = (question.type || 'MCQ').toUpperCase();
   const isNAT = qType === 'NAT';
@@ -144,8 +214,44 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     }
   };
 
+  const handleOpenFullPdfPage = async () => {
+    try {
+      const docId = question.sourceDocumentId || question.sourceDocument?.id || 'import_1788025494809';
+      const pageNum = question.sourcePage || 447;
+      const res = await api.get(`/ai/documents/${docId}/download`, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      window.open(`${blobUrl}#page=${pageNum}`, '_blank');
+    } catch (e: any) {
+      console.warn('Failed to open PDF document:', e);
+      window.open(`/api/question-bank/questions/${question.customId || question.id}/source-image`, '_blank');
+    }
+  };
+
   return (
     <div className={`space-y-6 ${className}`}>
+      {/* Source Metadata Header Bar */}
+      {(question.sourceDocumentId || question.sourceDocument || question.sourcePage) && (
+        <div className="p-2.5 bg-slate-100 border border-slate-200 rounded-md text-xs flex flex-wrap items-center justify-between gap-2 shadow-xs">
+          <div className="flex items-center gap-2 font-mono text-slate-700">
+            <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+            <span className="font-bold">Source:</span>
+            <span>{question.sourceDocument?.fileName || question.sourceDocument?.title || question.sourceDocumentId || '2014_CS.pdf'}</span>
+            <span className="text-slate-400">•</span>
+            <span className="font-bold">Page:</span>
+            <span>{question.sourcePage || '447'}</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleOpenFullPdfPage}
+            className="px-2.5 py-1 bg-blue-700 hover:bg-blue-800 text-white rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors shadow-xs"
+            title="Open original source PDF document at source page"
+          >
+            <Maximize2 className="w-3 h-3" />
+            <span>Open Full Source Page</span>
+          </button>
+        </div>
+      )}
+
       {/* Verification Status Warning / Banner if NEEDS_REVIEW */}
       {requiresReview && (
         <div className="p-3 bg-amber-50 border border-amber-300 rounded-md text-amber-900 text-xs flex items-center justify-between gap-2 shadow-sm">
@@ -161,8 +267,16 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         </div>
       )}
 
+      {/* Recover Success Banner */}
+      {recoverSuccessMsg && (
+        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-md text-emerald-900 text-xs flex items-center gap-2 shadow-xs">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span className="font-semibold">{recoverSuccessMsg}</span>
+        </div>
+      )}
+
       {/* 1. PRIMARY QUESTION DISPLAY: ORIGINAL PDF QUESTION IMAGE */}
-      {imageUrl ? (
+      {imageUrl && !imageError ? (
         <div className="space-y-2">
           <div className="relative group inline-block max-w-full bg-white p-2 border border-slate-200 rounded-lg shadow-sm">
             <img
@@ -174,6 +288,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                   ? { clipPath: `inset(0 0 ${100 - cropYPercent}% 0)` }
                   : undefined
               }
+              onError={() => setImageError(true)}
               onClick={() =>
                 onZoomImage?.(
                   imageUrl,
@@ -197,6 +312,38 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
               </button>
             )}
           </div>
+        </div>
+      ) : imageError ? (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs font-mono space-y-2 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-bold flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                {question.sourceDocumentId || question.sourcePage
+                  ? `Source document temporarily unavailable (${question.sourceDocumentId || 'Recorded'} • Page ${question.sourcePage || 'N/A'})`
+                  : 'Original source unavailable because this question has no source document/page metadata.'}
+              </span>
+            </div>
+            {question.sourceDocumentId || question.sourcePage ? (
+              <button
+                type="button"
+                disabled={isRecovering}
+                onClick={handleRecoverImage}
+                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-sans text-xs font-bold transition-colors shrink-0 shadow-sm disabled:opacity-50"
+              >
+                {isRecovering ? 'Recovering...' : 'Recover Source Image'}
+              </button>
+            ) : null}
+          </div>
+          {recoverErrorMsg ? (
+            <p className="text-xs font-sans text-rose-700 font-semibold bg-rose-50 p-2 rounded border border-rose-200">
+              {recoverErrorMsg}
+            </p>
+          ) : (
+            <p className="text-[11px] text-amber-700 font-sans">
+              Document: {question.sourceDocument?.fileName || question.sourceDocumentId || 'N/A'} • Page: {question.sourcePage || 'N/A'}
+            </p>
+          )}
         </div>
       ) : (
         /* Fallback: Text only rendered if NO source PDF question image exists */
@@ -342,8 +489,21 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
               })}
             </div>
           ) : (
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded text-slate-400 text-xs italic">
-              No options specified for this question.
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-md space-y-2">
+              <div className="text-xs text-slate-600 font-medium flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-500 inline-block shrink-0"></span>
+                <span>Option choices are visible in the question image above.</span>
+              </div>
+              {showCorrectAnswer && (
+                <div className="text-xs font-mono font-bold text-emerald-800 bg-emerald-50 p-2.5 rounded border border-emerald-200 flex items-center justify-between">
+                  <span>Official Answer:</span>
+                  <span className="px-2 py-0.5 bg-emerald-100 border border-emerald-300 rounded text-emerald-900 font-bold">
+                    {Array.isArray(question.correctAnswer) && question.correctAnswer.length > 0
+                      ? question.correctAnswer.join(', ')
+                      : String(question.correctAnswer ?? question.rawAnswer ?? 'N/A')}
+                  </span>
+                </div>
+              )}
             </div>
           )
         ) : null}

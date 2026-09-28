@@ -60,6 +60,7 @@ import { exportToCSV, printOrExportPDF } from '@/lib/exportUtils';
 import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 import { SmartQuestionPaperBuilder } from '@/components/question-bank/SmartQuestionPaperBuilder';
 import { QuestionBankImportPanel } from '@/components/question-bank/QuestionBankImportPanel';
+import { QuestionBankReviewQueuePanel } from '@/components/question-bank/QuestionBankReviewQueuePanel';
 import { SearchableSubjectSelect } from '@/components/question-bank/SearchableSubjectSelect';
 import { CURRENT_INSTITUTION } from '@/config/institution';
 import { QuestionOptionContent, getOptionText } from '@/components/question-bank/QuestionOptionContent';
@@ -274,7 +275,7 @@ export default function AdminDashboard() {
   const [zoomedImage, setZoomedImage] = useState<{ url: string; title?: string } | null>(null);
   // Question Bank sub-navigation: Library (browse/filter/select), Import (JSONL/Excel/CSV/PDF —
   // one entry point), Builder (the relocated Smart Question Paper Builder).
-  const [questionBankView, setQuestionBankView] = useState<'LIBRARY' | 'IMPORT' | 'BUILDER'>('LIBRARY');
+  const [questionBankView, setQuestionBankView] = useState<'LIBRARY' | 'REVIEW_QUEUE' | 'IMPORT' | 'BUILDER'>('LIBRARY');
   const [builderInitialQuestions, setBuilderInitialQuestions] = useState<any[] | undefined>(undefined);
 
   const [activeTab, setActiveTab] = useState<
@@ -588,7 +589,7 @@ export default function AdminDashboard() {
       }
 
       // Group 2: Management directories
-      const [studentsRes, facultyRes, questionsRes, examsRes, questionBankDocsRes] = await Promise.all([
+      const [studentsRes, facultyRes, questionsRes, examsRes, questionBankDocsRes] = await Promise.allSettled([
         api.get('/admin/students'),
         api.get('/admin/faculty'),
         api.get('/admin/questions'),
@@ -596,27 +597,27 @@ export default function AdminDashboard() {
         api.get('/admin/question-bank-documents'),
       ]);
 
-      if (studentsRes.data?.success) setStudents(studentsRes.data.data);
-      if (facultyRes.data?.success) setFaculty(facultyRes.data.data);
-      if (questionsRes.data?.success) setQuestions(questionsRes.data.data);
-      if (examsRes.data?.success) setExams(examsRes.data.data);
-      if (questionBankDocsRes.data?.success) setQuestionBankDocuments(questionBankDocsRes.data.data);
+      if (studentsRes.status === 'fulfilled' && studentsRes.value.data?.success) setStudents(studentsRes.value.data.data);
+      if (facultyRes.status === 'fulfilled' && facultyRes.value.data?.success) setFaculty(facultyRes.value.data.data);
+      if (questionsRes.status === 'fulfilled' && questionsRes.value.data?.success) setQuestions(questionsRes.value.data.data);
+      if (examsRes.status === 'fulfilled' && examsRes.value.data?.success) setExams(examsRes.value.data.data);
+      if (questionBankDocsRes.status === 'fulfilled' && questionBankDocsRes.value.data?.success) setQuestionBankDocuments(questionBankDocsRes.value.data.data);
 
       // Group 3: System settings, ledger, colleges & departments
-      const [resultsRes, settingsRes, collegesRes, deptsRes] = await Promise.all([
+      const [resultsRes, settingsRes, collegesRes, deptsRes] = await Promise.allSettled([
         api.get('/admin/results-ledger'),
         api.get('/admin/settings'),
         api.get('/admin/colleges'),
         api.get('/admin/departments'),
       ]);
 
-      if (resultsRes.data?.success) setResultsLedger(resultsRes.data.data);
-      if (settingsRes.data?.success) setSystemSettings(settingsRes.data.data);
-      if (collegesRes?.data?.success && collegesRes.data.data?.length > 0) {
-        setColleges(collegesRes.data.data);
+      if (resultsRes.status === 'fulfilled' && resultsRes.value.data?.success) setResultsLedger(resultsRes.value.data.data);
+      if (settingsRes.status === 'fulfilled' && settingsRes.value.data?.success) setSystemSettings(settingsRes.value.data.data);
+      if (collegesRes.status === 'fulfilled' && collegesRes.value.data?.success && collegesRes.value.data.data?.length > 0) {
+        setColleges(collegesRes.value.data.data);
       }
-      if (deptsRes?.data?.success && deptsRes.data.data?.length > 0) {
-        setDepartmentsList(deptsRes.data.data);
+      if (deptsRes.status === 'fulfilled' && deptsRes.value.data?.success && deptsRes.value.data.data?.length > 0) {
+        setDepartmentsList(deptsRes.value.data.data);
       }
     } catch (err: any) {
       console.error('Error fetching admin dashboard data:', err);
@@ -1257,7 +1258,18 @@ export default function AdminDashboard() {
   ).sort((a: any, b: any) => a.name.localeCompare(b.name));
 
   const individualQuestions = questions.filter((q: any) => {
-    if (qbSearch && !q.text?.toLowerCase().includes(qbSearch.toLowerCase()) && !(q.customId || '').toLowerCase().includes(qbSearch.toLowerCase())) return false;
+    if (qbSearch) {
+      const searchLower = qbSearch.toLowerCase().trim();
+      const matchText = q.text?.toLowerCase().includes(searchLower);
+      const matchCustomId = (q.customId || q.id || '').toLowerCase().includes(searchLower);
+      const matchExplanation = q.explanation?.toLowerCase().includes(searchLower);
+      const matchHeading = q.sourceHeading?.toLowerCase().includes(searchLower);
+      const matchSubject = q.subtopic?.topic?.module?.subject?.name?.toLowerCase().includes(searchLower);
+      const matchTopic = q.subtopic?.topic?.name?.toLowerCase().includes(searchLower);
+      if (!matchText && !matchCustomId && !matchExplanation && !matchHeading && !matchSubject && !matchTopic) {
+        return false;
+      }
+    }
     if (qbSubjectFilter !== 'ALL' && q.subtopic?.topic?.module?.subject?.id !== qbSubjectFilter) return false;
     if (qbTopicFilter !== 'ALL' && q.subtopic?.topic?.id !== qbTopicFilter) return false;
     if (qbTypeFilter !== 'ALL' && q.type !== qbTypeFilter) return false;
@@ -2219,6 +2231,7 @@ export default function AdminDashboard() {
                 <div className="flex items-center gap-1 border-b border-slate-200">
                   {([
                     { id: 'LIBRARY', label: 'Questions' },
+                    { id: 'REVIEW_QUEUE', label: `Review Queue (${questions.filter((q: any) => q.verificationStatus === 'NEEDS_REVIEW').length})` },
                     { id: 'IMPORT', label: 'Import / Extract' },
                     { id: 'BUILDER', label: 'Build Examination' },
                   ] as const).map((v) => (
@@ -2258,6 +2271,16 @@ export default function AdminDashboard() {
                   role="ADMIN"
                   initialSelectedQuestions={builderInitialQuestions}
                   onExitToQuestionBank={() => { setBuilderInitialQuestions(undefined); setQuestionBankView('LIBRARY'); }}
+                />
+              )}
+
+              {questionBankView === 'REVIEW_QUEUE' && (
+                <QuestionBankReviewQueuePanel
+                  questions={questions}
+                  onRefreshData={fetchInitialData}
+                  onSelectQuestion={(q) => setQbDetailQuestion(q)}
+                  showToast={showToast}
+                  onZoomImage={(url, title) => setZoomedImage({ url, title })}
                 />
               )}
 
@@ -2619,7 +2642,13 @@ export default function AdminDashboard() {
                                   FIG
                                 </span>
                               )}
-                              <span className="truncate">{q.text}</span>
+                              <span className="truncate">
+                                {typeof q.text === 'string' && q.text.trim() ? (
+                                  q.text.trim()
+                                ) : (
+                                  <span className="italic text-slate-500 font-normal">[Image-First Question]</span>
+                                )}
+                              </span>
                             </div>
                           </td>
                           <td className="text-xs text-slate-600 max-w-[10rem] truncate">
@@ -3601,9 +3630,13 @@ export default function AdminDashboard() {
               showInternalMetadata={true}
             />
 
-            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-xs">
+            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-xs flex items-center justify-between">
               <span className="font-bold text-slate-700">Correct Answer: </span>
-              <span className="font-mono text-emerald-700">{JSON.stringify(qbDetailQuestion.correctAnswer)}</span>
+              <span className="font-mono text-emerald-700 font-bold">
+                {Array.isArray(qbDetailQuestion.correctAnswer) && qbDetailQuestion.correctAnswer.length > 0
+                  ? JSON.stringify(qbDetailQuestion.correctAnswer)
+                  : String(qbDetailQuestion.correctAnswer ?? qbDetailQuestion.rawAnswer ?? 'N/A')}
+              </span>
             </div>
 
             {qbDetailQuestion.explanation && (
@@ -3616,11 +3649,58 @@ export default function AdminDashboard() {
             <div className="grid grid-cols-2 gap-3 text-xs pt-2 border-t border-slate-200">
               <div><span className="font-bold text-slate-700">Marks: </span>{qbDetailQuestion.marks}</div>
               <div><span className="font-bold text-slate-700">Negative Marks: </span>{qbDetailQuestion.negativeMarks ?? 0}</div>
-              <div><span className="font-bold text-slate-700">Source Document: </span>{qbDetailQuestion.sourceDocument?.title || qbDetailQuestion.sourceDocument?.fileName || '—'}</div>
+              <div><span className="font-bold text-slate-700">Source Document: </span>{qbDetailQuestion.sourceDocument?.title || qbDetailQuestion.sourceDocument?.fileName || qbDetailQuestion.sourceDocumentId || '—'}</div>
               <div><span className="font-bold text-slate-700">Source Page: </span>{qbDetailQuestion.sourcePage || '—'}</div>
               <div><span className="font-bold text-slate-700">Source Chapter: </span>{qbDetailQuestion.sourceChapter || '—'}</div>
               <div><span className="font-bold text-slate-700">Source Section: </span>{qbDetailQuestion.sourceSection || '—'}</div>
               <div className="col-span-2"><span className="font-bold text-slate-700">Source Heading: </span>{qbDetailQuestion.sourceHeading || '—'}</div>
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setQbDetailQuestion(null)}
+                className="erp-btn-secondary py-1.5 px-4 text-xs"
+              >
+                Close
+              </button>
+              <div className="flex items-center gap-2">
+                {qbDetailQuestion.verificationStatus !== 'VERIFIED' ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await api.post('/admin/questions/bulk-status', { ids: [qbDetailQuestion.id], verificationStatus: 'VERIFIED' });
+                        showToast('Question marked VERIFIED');
+                        setQbDetailQuestion({ ...qbDetailQuestion, verificationStatus: 'VERIFIED' });
+                        fetchInitialData();
+                      } catch {
+                        showToast('Failed to update verification status');
+                      }
+                    }}
+                    className="erp-btn-primary py-1.5 px-4 text-xs bg-emerald-700 hover:bg-emerald-800"
+                  >
+                    ✓ Approve & Mark VERIFIED
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await api.post('/admin/questions/bulk-status', { ids: [qbDetailQuestion.id], verificationStatus: 'NEEDS_REVIEW' });
+                        showToast('Question marked NEEDS_REVIEW');
+                        setQbDetailQuestion({ ...qbDetailQuestion, verificationStatus: 'NEEDS_REVIEW' });
+                        fetchInitialData();
+                      } catch {
+                        showToast('Failed to update verification status');
+                      }
+                    }}
+                    className="erp-btn-secondary py-1.5 px-4 text-xs text-amber-800 bg-amber-50 border-amber-300"
+                  >
+                    Mark Needs Review
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

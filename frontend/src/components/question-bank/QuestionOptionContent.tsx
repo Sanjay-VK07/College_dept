@@ -6,19 +6,29 @@ import { QuestionOption } from '@/types/question';
 
 export function getOptionText(option: QuestionOption): string {
   if (option === null || option === undefined) return '';
-  if (typeof option === 'string') return option;
-  if (typeof option === 'number' || typeof option === 'boolean') return String(option);
-  if (typeof option === 'object') {
-    if (typeof option.text === 'string') return option.text;
-    if (typeof option.text === 'object' && option.text !== null) {
-      return getOptionText(option.text as any);
-    }
-    if (typeof option.label === 'string') return option.label;
-    if (typeof option.value === 'string' && !option.imagePath && !option.imageUrl && !option.image) {
-      return option.value;
+  let raw = '';
+  if (typeof option === 'string') raw = option;
+  else if (typeof option === 'number' || typeof option === 'boolean') raw = String(option);
+  else if (typeof option === 'object') {
+    if (typeof option.text === 'string') raw = option.text;
+    else if (typeof option.text === 'object' && option.text !== null) {
+      raw = getOptionText(option.text as any);
+    } else if (typeof option.label === 'string') raw = option.label;
+    else if (typeof option.value === 'string' && !option.imagePath && !option.imageUrl && !option.image) {
+      raw = option.value;
     }
   }
-  return '';
+  if (!raw) return '';
+
+  // Clean leading A., B., C., D., (A), (B), (C), (D), A), B), C), D) prefixes
+  let cleaned = raw.trim();
+  cleaned = cleaned.replace(/^(?:[A-D][\.\:\)]|\([A-D]\))\s*/i, '');
+
+  // If the cleaned text is just the option letter itself (e.g. 'A' or 'Option A'), return empty so badge alone renders
+  if (/^(?:[A-D]|Option\s+[A-D])$/i.test(cleaned)) {
+    return '';
+  }
+  return cleaned;
 }
 
 export function getOptionImage(option: QuestionOption): string | null {

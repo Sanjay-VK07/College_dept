@@ -17,12 +17,13 @@ export interface ExtractedFigureAsset {
 export interface ExtractedQuestionPackage {
   jsonlEntries: Array<{ fileName: string; entryPath: string; buffer: Buffer; text: string }>;
   figureEntries: Map<string, ExtractedFigureAsset>;
+  physicalFigureAssetsCount: number;
   answerKeyMap: Map<string, any>;
   allEntryPaths: string[];
   totalSize: number;
 }
 
-const ALLOWED_FIGURE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.svg', '.webp', '.gif']);
+const ALLOWED_FIGURE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.svg', '.webp', '.gif', '.bmp', '.tiff', '.tif']);
 const DANGEROUS_EXTENSIONS = new Set(['.exe', '.bat', '.cmd', '.sh', '.dll', '.so', '.dylib', '.ps1', '.vbs', '.js', '.ts', '.bin', '.com', '.msi']);
 const MAX_TOTAL_EXTRACTED_BYTES = 150 * 1024 * 1024; // 150 MB safety ceiling
 const MAX_ENTRY_COUNT = 5000;
@@ -36,6 +37,9 @@ function inferImageMimeType(fileName: string): string {
     case '.svg': return 'image/svg+xml';
     case '.webp': return 'image/webp';
     case '.gif': return 'image/gif';
+    case '.bmp': return 'image/bmp';
+    case '.tiff':
+    case '.tif': return 'image/tiff';
     default: return 'application/octet-stream';
   }
 }
@@ -85,13 +89,33 @@ function hasQuestionFields(obj: any): boolean {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
   return Boolean(
     obj.questionId ||
+    obj.id ||
+    obj.customId ||
+    obj.question_id ||
+    obj.code ||
     obj.question ||
+    obj.question_text ||
     obj.text ||
+    obj.prompt ||
     obj.options ||
     obj.questionType ||
+    obj.type ||
     obj.rawAnswer ||
     obj.correctAnswer ||
-    obj.chapter
+    obj.answer ||
+    obj.chapter ||
+    obj.question_image ||
+    obj.questionImage ||
+    obj.image_url ||
+    obj.imageUrl ||
+    obj.image_path ||
+    obj.imagePath ||
+    obj.image ||
+    obj.visuals ||
+    obj.figures ||
+    obj.figure ||
+    obj.visual_assets ||
+    obj.figures_assets
   );
 }
 
@@ -158,7 +182,13 @@ function registerFigureAsset(
     addKey(`${dir}/${baseName}`);
   }
 
-  // Stripped folder prefixes (e.g. question_images/ or visuals/ or figures/ or GATE_questions_and_visuals/question_images/)
+  // Strip root folder prefixes (e.g. Chapter_01/figures/Q0001.jpg or GATE_visuals/question_images/Q0001.jpg)
+  const segments = cleanPath.split('/');
+  if (segments.length > 1) {
+    const subFromSecond = segments.slice(1).join('/');
+    addKey(subFromSecond);
+  }
+
   const dirMatch = cleanPath.match(/(?:^|\/)(visuals|question_images|figures|images|diagrams)\/(.+)$/i);
   if (dirMatch) {
     const subPath = dirMatch[2];
@@ -191,6 +221,7 @@ export function extractQuestionBankZipPackage(zipBuffer: Buffer): ExtractedQuest
   }> = [];
 
   const figureEntries = new Map<string, ExtractedFigureAsset>();
+  const physicalFigurePathsSet = new Set<string>();
   const allEntryPaths: string[] = [];
 
   for (const entry of zipEntries) {
@@ -226,6 +257,7 @@ export function extractQuestionBankZipPackage(zipBuffer: Buffer): ExtractedQuest
         ext,
       });
     } else if (ALLOWED_FIGURE_EXTENSIONS.has(ext)) {
+      physicalFigurePathsSet.add(entryName);
       const figureAsset: ExtractedFigureAsset = {
         fileName: baseName,
         entryPath: entryName,
@@ -296,6 +328,7 @@ export function extractQuestionBankZipPackage(zipBuffer: Buffer): ExtractedQuest
   return {
     jsonlEntries,
     figureEntries,
+    physicalFigureAssetsCount: physicalFigurePathsSet.size,
     answerKeyMap,
     allEntryPaths,
     totalSize: totalExtractedSize,

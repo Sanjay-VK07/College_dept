@@ -62,6 +62,7 @@ app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/exam', examRoutes);
 app.use('/api/questions', questionRoutes);
+app.use('/api/question-bank', questionRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/admin', adminRoutes);

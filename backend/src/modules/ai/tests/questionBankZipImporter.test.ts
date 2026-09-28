@@ -414,6 +414,177 @@ describe('Question Bank ZIP Importer & Multi-Format Regression Tests', () => {
     expect(preview.figureAssetsFoundCount).toBe(1);
     expect(preview.missingFiguresCount).toBe(0);
   });
+
+  it('14. Image-only questions with empty question_text are marked VALID when question image exists', () => {
+    const zip = new AdmZip();
+    const dataset = [
+      {
+        questionId: 'IMG_ONLY_1',
+        question: '', // Empty question text
+        question_image: 'question_images/IMG_ONLY_1.png',
+        options: { A: 'A', B: 'B', C: 'C', D: 'D' },
+        correctAnswer: 'A',
+      },
+      {
+        questionId: 'IMG_ONLY_2',
+        question_text: '   ', // Whitespace text
+        visuals: ['visuals/IMG_ONLY_2.jpg'],
+        options: { A: '1', B: '2' },
+        correctAnswer: 'B',
+      },
+    ];
+
+    zip.addFile('Chapter_01.jsonl', Buffer.from(dataset.map((d) => JSON.stringify(d)).join('\n'), 'utf-8'));
+    zip.addFile('question_images/IMG_ONLY_1.png', Buffer.from('IMAGE_1_BYTES'));
+    zip.addFile('visuals/IMG_ONLY_2.jpg', Buffer.from('IMAGE_2_BYTES'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+
+    expect(preview.totalRecords).toBe(2);
+    expect(preview.validCount).toBe(2);
+    expect(preview.invalidCount).toBe(0);
+    expect(preview.questionsWithFigures).toBe(2);
+    expect(preview.validRecords[0].imageUrl).toBeDefined();
+    expect(preview.validRecords[1].imageUrl).toBeDefined();
+
+    // Verify diagnostics block
+    expect(preview.diagnostics).toBeDefined();
+    expect(preview.diagnostics.imagesFoundInZip).toBe(2);
+    expect(preview.diagnostics.imagesSuccessfullyResolved).toBe(2);
+    expect(preview.diagnostics.questionsWithQuestionImages).toBe(2);
+    expect(preview.diagnostics.unresolvedImageReferences).toBe(0);
+    expect(preview.diagnostics.questionsWithNeitherTextNorImage).toBe(0);
+  });
+
+  it('15. Record with neither question text nor image is marked MISSING_QUESTION_CONTENT', () => {
+    const zip = new AdmZip();
+    const dataset = [
+      {
+        questionId: 'NO_CONTENT_1',
+        question: '',
+        options: { A: 'A', B: 'B' },
+        correctAnswer: 'A',
+      },
+    ];
+
+    zip.addFile('Chapter_01.jsonl', Buffer.from(JSON.stringify(dataset[0]), 'utf-8'));
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+
+    expect(preview.totalRecords).toBe(1);
+    expect(preview.validCount).toBe(0);
+    expect(preview.invalidCount).toBe(1);
+    expect(preview.invalidRecords[0].code).toBe('MISSING_QUESTION_CONTENT');
+    expect(preview.diagnostics.questionsWithNeitherTextNorImage).toBe(1);
+  });
+
+  it('16. image + no OCR question text -> VALID', () => {
+    const zip = new AdmZip();
+    const dataset = [{ questionId: 'REQ_1', question: '', question_image: 'question_images/REQ_1.png' }];
+    zip.addFile('data.jsonl', Buffer.from(JSON.stringify(dataset[0]), 'utf-8'));
+    zip.addFile('question_images/REQ_1.png', Buffer.from('IMAGE_BYTES'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+    expect(preview.validCount).toBe(1);
+    expect(preview.invalidCount).toBe(0);
+    expect(preview.validRecords[0].question).toBe('');
+    expect(preview.validRecords[0].imageUrl).toContain('REQ_1.png');
+  });
+
+  it('17. image + OCR question text -> VALID, image remains primary', () => {
+    const zip = new AdmZip();
+    const dataset = [{ questionId: 'REQ_2', question: 'Some OCR text', question_image: 'question_images/REQ_2.png' }];
+    zip.addFile('data.jsonl', Buffer.from(JSON.stringify(dataset[0]), 'utf-8'));
+    zip.addFile('question_images/REQ_2.png', Buffer.from('IMAGE_BYTES'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+    expect(preview.validCount).toBe(1);
+    expect(preview.questionsWithFigures).toBe(1);
+    expect(preview.validRecords[0].imageUrl).toContain('REQ_2.png');
+  });
+
+  it('18. no image + text -> VALID', () => {
+    const preview = JSONLImportService.parseAndValidateJSONL(JSON.stringify({ questionId: 'REQ_3', question: 'Text only question' }), 'data.jsonl');
+    expect(preview.validCount).toBe(1);
+    expect(preview.invalidCount).toBe(0);
+  });
+
+  it('19. no image + no text -> INVALID (MISSING_QUESTION_CONTENT)', () => {
+    const preview = JSONLImportService.parseAndValidateJSONL(JSON.stringify({ questionId: 'REQ_4', question: '' }), 'data.jsonl');
+    expect(preview.validCount).toBe(0);
+    expect(preview.invalidCount).toBe(1);
+    expect(preview.invalidRecords[0].code).toBe('MISSING_QUESTION_CONTENT');
+  });
+
+  it('20. image + options + answer key -> VALID and answer key preserved', () => {
+    const zip = new AdmZip();
+    const dataset = [{
+      questionId: 'REQ_5',
+      question: '',
+      question_image: 'question_images/REQ_5.png',
+      options: ['A. Opt A', 'B. Opt B'],
+      correctAnswer: 'A',
+      rawAnswer: 'A',
+    }];
+    zip.addFile('data.jsonl', Buffer.from(JSON.stringify(dataset[0]), 'utf-8'));
+    zip.addFile('question_images/REQ_5.png', Buffer.from('IMAGE_BYTES'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+    expect(preview.validCount).toBe(1);
+    expect(preview.validRecords[0].correctAnswer).toBe('A');
+    expect(preview.validRecords[0].rawAnswer).toBe('A');
+  });
+
+  it('21. image exists + empty questionText => VALID', () => {
+    const zip = new AdmZip();
+    const dataset = [{
+      questionId: 'Q_EMPTY_TEXT_IMG',
+      questionText: '', // Empty questionText field
+      question: '',     // Empty question field
+      imageUrl: 'figures/Q_EMPTY_TEXT_IMG.png',
+      options: ['A', 'B', 'C', 'D'],
+      correctAnswer: 'B'
+    }];
+    zip.addFile('questions.json', Buffer.from(JSON.stringify(dataset, null, 2), 'utf-8'));
+    zip.addFile('figures/Q_EMPTY_TEXT_IMG.png', Buffer.from('TEST_PNG_CONTENT'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+
+    expect(preview.totalRecords).toBe(1);
+    expect(preview.validCount).toBe(1);
+    expect(preview.invalidCount).toBe(0);
+    expect(preview.questionsWithFigures).toBe(1);
+    expect(preview.validRecords[0].imageUrl).toContain('Q_EMPTY_TEXT_IMG.png');
+    expect(preview.diagnostics.questionsWithNeitherTextNorImage).toBe(0);
+  });
+
+  it('22. Complex dot/extension image reference (e.g. question_images/5.25.6.jpg vs figures/Q_5_25_6_question.png) + empty text => VALID', () => {
+    const zip = new AdmZip();
+    const dataset = [{
+      questionId: '5.25.6',
+      question: '',
+      question_image: 'question_images/5.25.6.jpg', // dot in ID, different extension and dir alias
+      options: ['A', 'B'],
+      correctAnswer: 'A'
+    }];
+    zip.addFile('questions.json', Buffer.from(JSON.stringify(dataset, null, 2), 'utf-8'));
+    zip.addFile('figures/Q_5_25_6_question.png', Buffer.from('TEST_PNG_CONTENT'));
+
+    const pkg = extractQuestionBankZipPackage(zip.toBuffer());
+    const preview = JSONLImportService.parseAndValidateJSONL(pkg.jsonlEntries[0].text, pkg.jsonlEntries[0].fileName, pkg.figureEntries);
+
+    expect(preview.totalRecords).toBe(1);
+    expect(preview.validCount).toBe(1);
+    expect(preview.invalidCount).toBe(0);
+    expect(preview.questionsWithFigures).toBe(1);
+    expect(preview.validRecords[0].imageUrl).toBeDefined();
+    expect(preview.diagnostics.questionsWithNeitherTextNorImage).toBe(0);
+  });
 });
 
 

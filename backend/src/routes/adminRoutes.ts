@@ -38,6 +38,13 @@ router.put('/users/:id/role', requireRoles(Role.ADMIN), AdminController.updateUs
 // Question Bank Management
 router.get('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getQuestions);
 router.post('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.createQuestion);
+router.get('/questions/review-queue', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getReviewQueue);
+router.post('/questions/bulk-recovery', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.bulkRecoveryQuestions);
+router.post('/questions/image-recovery/bulk', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.bulkRecoveryQuestions);
+router.post('/questions/recover-source-images', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.recoverSourceImagesBulk);
+router.post('/questions/:id/image/recover', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.recoverSingleQuestionImage);
+router.post('/questions/repair-images', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.repairQuestionImages);
+router.post('/questions/bulk-status', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.bulkUpdateQuestionStatus);
 // Registered before '/questions/:id' — otherwise Express would match "bulk" as the :id param.
 router.delete('/questions/bulk', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.bulkDeleteQuestions);
 router.delete('/questions/:id', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.deleteQuestion);

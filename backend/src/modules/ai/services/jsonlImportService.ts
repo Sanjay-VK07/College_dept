@@ -102,6 +102,17 @@ export interface ImportPreviewResult {
   chapterName?: string;
   validRecords: JSONLRecord[];
   invalidRecords: InvalidRecordDetail[];
+
+  /**
+   * Diagnostic section for ZIP asset resolution and content state (Requirement 13)
+   */
+  diagnostics: {
+    imagesFoundInZip: number;
+    imagesSuccessfullyResolved: number;
+    questionsWithQuestionImages: number;
+    unresolvedImageReferences: number;
+    questionsWithNeitherTextNorImage: number;
+  };
 }
 
 /**
@@ -124,10 +135,10 @@ export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
   }
 
   // 2. Question Text alias: question / question_text / text / prompt
-  if (!rec.question) {
-    rec.question = rec.question_text || rec.text || rec.prompt;
+  if (rec.question === undefined || rec.question === null) {
+    rec.question = rec.question_text ?? rec.text ?? rec.prompt ?? '';
   }
-  if (rec.question !== undefined && rec.question !== null && typeof rec.question !== 'string') {
+  if (typeof rec.question !== 'string') {
     rec.question = String(rec.question);
   }
 
@@ -157,18 +168,67 @@ export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
     }
   }
 
-  // 6. Figures / Visual Assets / Question Image aliases:
-  if (!rec.imageUrl) {
-    rec.imageUrl = rec.question_image || rec.questionImage || rec.image_url || rec.image_path || rec.imagePath;
+  // 6. Figures / Visual Assets / Question Image aliases (Requirement 10 & 11):
+  const rawImageCandidate =
+    rec.imageUrl ||
+    rec.question_image ||
+    rec.questionImage ||
+    rec.question_images ||
+    rec.questionImages ||
+    rec.image_url ||
+    rec.image_path ||
+    rec.imagePath ||
+    rec.image ||
+    rec.images ||
+    rec.visuals ||
+    rec.visual ||
+    rec.figures ||
+    rec.figure ||
+    rec.diagrams ||
+    rec.diagram ||
+    rec.visual_assets ||
+    rec.visualAssets ||
+    rec.visual_asset ||
+    rec.figures_assets ||
+    rec.figure_assets ||
+    rec.primary_image ||
+    rec.primaryImage ||
+    rec.crop_image ||
+    rec.cropImage ||
+    rec.crop_path ||
+    rec.cropPath ||
+    (rec.visualMetadata && (rec.visualMetadata.imageUrl || rec.visualMetadata.question_image || rec.visualMetadata.imagePath || rec.visualMetadata.visual_assets || rec.visualMetadata.figures)) ||
+    (rec.verification && (rec.verification.visual_assets || rec.verification.imageUrl || rec.verification.question_image)) ||
+    (rec.metadata && (rec.metadata.imageUrl || rec.metadata.image || rec.metadata.visuals));
+
+  if (Array.isArray(rawImageCandidate)) {
+    rec.imageUrl = typeof rawImageCandidate[0] === 'string'
+      ? rawImageCandidate[0]
+      : (rawImageCandidate[0]?.imagePath || rawImageCandidate[0]?.url || rawImageCandidate[0]?.path || rawImageCandidate[0]?.file || null);
+    if (!rec.figures) {
+      rec.figures = rawImageCandidate;
+    }
+  } else if (typeof rawImageCandidate === 'string') {
+    rec.imageUrl = rawImageCandidate;
+  } else if (rawImageCandidate && typeof rawImageCandidate === 'object') {
+    rec.imageUrl = (rawImageCandidate as any).imagePath || (rawImageCandidate as any).url || (rawImageCandidate as any).path || (rawImageCandidate as any).file || null;
   }
 
   if (!rec.figures && !rec.figure) {
-    if (Array.isArray(rec.visual_assets) && rec.visual_assets.length > 0) {
+    if (Array.isArray(rec.visuals) && rec.visuals.length > 0) {
+      rec.figures = rec.visuals;
+    } else if (Array.isArray(rec.visual_assets) && rec.visual_assets.length > 0) {
       rec.figures = rec.visual_assets;
     } else if (Array.isArray(rec.figures_assets) && rec.figures_assets.length > 0) {
       rec.figures = rec.figures_assets;
     } else if (typeof rec.visual_assets === 'string') {
       rec.figure = rec.visual_assets;
+    } else if (typeof rec.visuals === 'string') {
+      rec.figure = rec.visuals;
+    } else if (typeof rec.question_image === 'string') {
+      rec.figure = rec.question_image;
+    } else if (typeof rec.questionImage === 'string') {
+      rec.figure = rec.questionImage;
     }
   }
 
@@ -219,11 +279,15 @@ export class JSONLImportService {
   public static extractReferencedFigurePaths(rec: JSONLRecord): string[] {
     const paths: string[] = [];
 
-    const addPath = (p?: string) => {
+    const addPath = (p?: any) => {
       if (typeof p === 'string' && p.trim()) {
         const cleaned = p.trim();
         if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://') && !cleaned.startsWith('/uploads/')) {
           paths.push(cleaned);
+        }
+      } else if (Array.isArray(p)) {
+        for (const item of p) {
+          addPath(item);
         }
       }
     };
@@ -259,10 +323,48 @@ export class JSONLImportService {
       }
     }
 
-    // 3. Check rec.imageUrl, rec.image, question_image, questionImage
+    // 3. Check all image aliases and nested metadata objects
     addPath(rec.imageUrl);
     addPath((rec as any).question_image);
     addPath((rec as any).questionImage);
+    addPath((rec as any).question_images);
+    addPath((rec as any).questionImages);
+    addPath((rec as any).image_url);
+    addPath((rec as any).image_path);
+    addPath((rec as any).imagePath);
+    addPath((rec as any).visuals);
+    addPath((rec as any).visual);
+    addPath((rec as any).visual_assets);
+    addPath((rec as any).visualAssets);
+    addPath((rec as any).visual_asset);
+    addPath((rec as any).diagrams);
+    addPath((rec as any).diagram);
+    addPath((rec as any).crop_image);
+    addPath((rec as any).cropImage);
+    addPath((rec as any).crop_path);
+    addPath((rec as any).cropPath);
+    addPath((rec as any).primary_image);
+    addPath((rec as any).primaryImage);
+
+    const r = rec as any;
+    if (r.visualMetadata && typeof r.visualMetadata === 'object') {
+      addPath(r.visualMetadata.imageUrl);
+      addPath(r.visualMetadata.question_image);
+      addPath(r.visualMetadata.imagePath);
+      addPath(r.visualMetadata.visual_assets);
+      addPath(r.visualMetadata.figures);
+    }
+    if (r.verification && typeof r.verification === 'object') {
+      addPath(r.verification.visual_assets);
+      addPath(r.verification.imageUrl);
+      addPath(r.verification.question_image);
+    }
+    if (r.metadata && typeof r.metadata === 'object') {
+      addPath(r.metadata.imageUrl);
+      addPath(r.metadata.image);
+      addPath(r.metadata.visuals);
+    }
+
     if (typeof rec.image === 'string') {
       addPath(rec.image);
     } else if (rec.image && typeof rec.image === 'object') {
@@ -350,6 +452,80 @@ export class JSONLImportService {
     for (const dir of knownDirs) {
       match = figureEntries.get(`${dir}/${baseName}`) || figureEntries.get(`${dir}/${baseName}`.toLowerCase());
       if (match) return match;
+    }
+
+    // 4. Case-insensitive suffix match on baseName across registered keys
+    const lowerBaseName = baseName.toLowerCase();
+    for (const [key, asset] of figureEntries.entries()) {
+      const keyBaseName = path.posix.basename(key).toLowerCase();
+      if (keyBaseName === lowerBaseName) {
+        return asset;
+      }
+    }
+
+    // 5. Rich Candidate & Normalization Lookup (Dot vs Underscore, Prefix Q_, Suffix _question/_stem/_crop, Extension variations)
+    const dotExtIdx = baseName.lastIndexOf('.');
+    const nameWithoutExt = dotExtIdx > 0 ? baseName.slice(0, dotExtIdx) : baseName;
+
+    const cleanStem = nameWithoutExt.replace(/[\.\-\s]/g, '_');
+    const pureId = cleanStem
+      .replace(/^Q_/i, '')
+      .replace(/^question_/i, '')
+      .replace(/^fig_/i, '')
+      .replace(/^visual_/i, '')
+      .replace(/_(question|stem|crop|fig|visual|image|assets?)$/i, '');
+
+    const candidatesToTry: string[] = [
+      nameWithoutExt,
+      cleanStem,
+      pureId,
+      `Q_${pureId}`,
+      `Q_${cleanStem}`,
+      `Q_${pureId}_question`,
+      `Q_${cleanStem}_question`,
+      `${pureId}_question`,
+      `${cleanStem}_question`,
+      `Q_${pureId}_crop`,
+      `Q_${pureId}_stem`,
+      `question_${pureId}`,
+      `fig_${pureId}`,
+    ];
+
+    const exts = ['.png', '.jpg', '.jpeg', '.webp', '.svg', '.gif'];
+
+    for (const candStem of candidatesToTry) {
+      for (const ext of exts) {
+        const candFile = `${candStem}${ext}`;
+        match = figureEntries.get(candFile) || figureEntries.get(candFile.toLowerCase());
+        if (match) return match;
+
+        for (const dir of knownDirs) {
+          match = figureEntries.get(`${dir}/${candFile}`) || figureEntries.get(`${dir}/${candFile}`.toLowerCase());
+          if (match) return match;
+        }
+      }
+    }
+
+    // 6. Deep Normalization Fallback Scan across all registered keys in figureEntries
+    const lowerPureId = pureId.toLowerCase();
+    if (lowerPureId) {
+      for (const [key, asset] of figureEntries.entries()) {
+        const keyBaseName = path.posix.basename(key);
+        const kDotExtIdx = keyBaseName.lastIndexOf('.');
+        const keyStem = kDotExtIdx > 0 ? keyBaseName.slice(0, kDotExtIdx) : keyBaseName;
+        const keyPureId = keyStem
+          .replace(/[\.\-\s]/g, '_')
+          .replace(/^Q_/i, '')
+          .replace(/^question_/i, '')
+          .replace(/^fig_/i, '')
+          .replace(/^visual_/i, '')
+          .replace(/_(question|stem|crop|fig|visual|image|assets?)$/i, '')
+          .toLowerCase();
+
+        if (keyPureId === lowerPureId) {
+          return asset;
+        }
+      }
     }
 
     return null;
@@ -446,6 +622,7 @@ export class JSONLImportService {
 
     const missingFigures: MissingFigureRecord[] = [];
     let questionsWithFigures = 0;
+    let questionsWithNeitherTextNorImageCount = 0;
     const referencedAssetsFoundSet = new Set<string>();
 
     for (const { obj, lineIndex, raw } of parsedRecords) {
@@ -457,22 +634,12 @@ export class JSONLImportService {
           }
         }
       }
+
       if (!obj.questionId || typeof obj.questionId !== 'string' || !obj.questionId.trim()) {
         invalidRecords.push({
           line: lineIndex,
           error: 'Missing or invalid questionId',
           code: 'MISSING_QUESTION_ID',
-          questionId: obj.questionId,
-          raw,
-        });
-        continue;
-      }
-
-      if (!obj.question || typeof obj.question !== 'string' || !obj.question.trim()) {
-        invalidRecords.push({
-          line: lineIndex,
-          error: 'Missing question text',
-          code: 'MISSING_QUESTION_TEXT',
           questionId: obj.questionId,
           raw,
         });
@@ -491,11 +658,10 @@ export class JSONLImportService {
         continue;
       }
 
-      seenIds.add(obj.questionId);
-
-      // Check figure references & resolve against package figure entries
-      const refPaths = this.extractReferencedFigurePaths(obj);
+      // Check figure references & resolve against package figure entries FIRST
+      let refPaths = this.extractReferencedFigurePaths(obj);
       let hasResolvedAssetForQuestion = false;
+      let primaryResolvedAssetPath: string | null = null;
 
       if (availableFigures && availableFigures.size > 0) {
         if (refPaths.length > 0) {
@@ -503,12 +669,59 @@ export class JSONLImportService {
             const resolved = this.resolveFigureAsset(ref, availableFigures);
             if (resolved) {
               hasResolvedAssetForQuestion = true;
-              referencedAssetsFoundSet.add(resolved.entryPath || resolved.fileName);
+              const resolvedKey = resolved.entryPath || resolved.fileName;
+              referencedAssetsFoundSet.add(resolvedKey);
+              if (!primaryResolvedAssetPath) {
+                primaryResolvedAssetPath = resolvedKey;
+              }
             } else {
               missingFigures.push({
                 questionId: obj.questionId,
                 reference: ref,
               });
+            }
+          }
+        }
+
+        // Direct imageUrl fallback lookup if not resolved yet
+        if (!hasResolvedAssetForQuestion && typeof obj.imageUrl === 'string' && obj.imageUrl.trim().length > 0) {
+          const resolvedDirect = this.resolveFigureAsset(obj.imageUrl, availableFigures);
+          if (resolvedDirect) {
+            hasResolvedAssetForQuestion = true;
+            primaryResolvedAssetPath = resolvedDirect.entryPath || resolvedDirect.fileName;
+            referencedAssetsFoundSet.add(primaryResolvedAssetPath);
+          }
+        }
+
+        // Fallback candidate lookup by questionId if not resolved yet
+        if (!hasResolvedAssetForQuestion && obj.questionId) {
+          const qidStr = String(obj.questionId).trim();
+          const cleanQid = qidStr.replace(/\./g, '_');
+          const candidates = [
+            qidStr,
+            `${qidStr}.png`,
+            `${qidStr}.jpg`,
+            `${qidStr}.jpeg`,
+            `${qidStr}.webp`,
+            `${qidStr}.svg`,
+            `Q_${cleanQid}_question.png`,
+            `Q_${cleanQid}.png`,
+            `Q_${cleanQid}.jpg`,
+            `Q_${cleanQid}.jpeg`,
+            `figures/Q_${cleanQid}_question.png`,
+            `question_images/${cleanQid}.png`,
+            `visuals/${cleanQid}.jpg`,
+            `images/${cleanQid}.png`,
+            `diagrams/${cleanQid}.png`,
+            `figures/${cleanQid}.png`
+          ];
+          for (const cand of candidates) {
+            const resolvedCand = this.resolveFigureAsset(cand, availableFigures);
+            if (resolvedCand) {
+              hasResolvedAssetForQuestion = true;
+              primaryResolvedAssetPath = resolvedCand.entryPath || resolvedCand.fileName;
+              referencedAssetsFoundSet.add(primaryResolvedAssetPath);
+              break;
             }
           }
         }
@@ -521,6 +734,9 @@ export class JSONLImportService {
             if (fs.existsSync(p1) || fs.existsSync(p2)) {
               hasResolvedAssetForQuestion = true;
               referencedAssetsFoundSet.add(ref);
+              if (!primaryResolvedAssetPath) {
+                primaryResolvedAssetPath = ref.startsWith('/') ? ref : `/${ref}`;
+              }
             } else {
               missingFigures.push({
                 questionId: obj.questionId,
@@ -531,17 +747,72 @@ export class JSONLImportService {
         }
       }
 
-      // Increment questionsWithFigures ONLY IF at least one figure reference resolves to an actual asset!
-      if (hasResolvedAssetForQuestion) {
+      // Direct imageUrl check (e.g. remote HTTP URL or pre-stored /uploads/ path or direct reference)
+      const isRemoteOrUploadsUrl = typeof obj.imageUrl === 'string' &&
+        (obj.imageUrl.startsWith('/uploads/') || obj.imageUrl.startsWith('http://') || obj.imageUrl.startsWith('https://'));
+
+      if (isRemoteOrUploadsUrl && !primaryResolvedAssetPath) {
+        primaryResolvedAssetPath = (obj.imageUrl as string).trim();
+      }
+
+      if (!hasResolvedAssetForQuestion && availableFigures && availableFigures.size > 0 && typeof obj.imageUrl === 'string' && obj.imageUrl.trim().length > 0) {
+        const resolvedDirect = this.resolveFigureAsset(obj.imageUrl, availableFigures);
+        if (resolvedDirect) {
+          hasResolvedAssetForQuestion = true;
+          primaryResolvedAssetPath = resolvedDirect.entryPath || resolvedDirect.fileName;
+          referencedAssetsFoundSet.add(primaryResolvedAssetPath);
+        }
+      }
+
+      // If availableFigures was provided, hasResolvedAssetForQuestion indicates if a matching figure file exists.
+      // If availableFigures was NOT provided (e.g. direct JSONL file upload without ZIP archive), any non-empty obj.imageUrl counts.
+      const hasQuestionImage = Boolean(
+        hasResolvedAssetForQuestion ||
+        isRemoteOrUploadsUrl ||
+        (!availableFigures && typeof obj.imageUrl === 'string' && obj.imageUrl.trim().length > 0)
+      );
+
+      const hasQuestionText = Boolean(typeof obj.question === 'string' && obj.question.trim().length > 0);
+      const hasQuestionContent = hasQuestionText || hasQuestionImage;
+
+      // RULE 4 & 5: Only report MISSING_QUESTION_CONTENT when BOTH no usable question image AND no question text exist!
+      if (!hasQuestionContent) {
+        questionsWithNeitherTextNorImageCount++;
+        invalidRecords.push({
+          line: lineIndex,
+          error: 'Missing question content (neither question text nor valid question image found)',
+          code: 'MISSING_QUESTION_CONTENT',
+          questionId: obj.questionId,
+          raw,
+        });
+        continue;
+      }
+
+      seenIds.add(obj.questionId);
+
+      // If text is empty but valid image exists, assign clean string
+      if (!hasQuestionText) {
+        obj.question = '';
+      }
+
+      if (hasQuestionImage) {
         questionsWithFigures++;
+        obj.containsFigure = true;
+        if (primaryResolvedAssetPath && (typeof obj.imageUrl !== 'string' || !obj.imageUrl.trim())) {
+          obj.imageUrl = primaryResolvedAssetPath;
+        }
       }
 
       validRecords.push(obj);
     }
 
-    const figureAssetsFoundCount = referencedAssetsFoundSet.size;
+    const totalPhysicalAssetsInZip = availableFigures && availableFigures.size > 0
+      ? new Set(Array.from(availableFigures.values()).map((a) => a.entryPath || a.fileName)).size
+      : 0;
 
-    // Calculate unused physical assets present in ZIP archive (e.g. PDF page renders)
+    const figureAssetsFoundCount = totalPhysicalAssetsInZip > 0 ? totalPhysicalAssetsInZip : referencedAssetsFoundSet.size;
+
+    // Calculate unused physical assets present in ZIP archive
     let unusedFigureAssetsCount = 0;
     if (availableFigures && availableFigures.size > 0) {
       const allZipPhysicalAssets = new Set(
@@ -586,7 +857,13 @@ export class JSONLImportService {
         }
       }
 
-      const isContentValid = typeof rec.question === 'string' && rec.question.trim().length > 0;
+      const isContentValid = Boolean(
+        (typeof rec.question === 'string' && rec.question.trim().length > 0) ||
+        (typeof rec.imageUrl === 'string' && rec.imageUrl.trim().length > 0) ||
+        (Array.isArray(rec.figures) && rec.figures.length > 0) ||
+        Boolean(rec.figure)
+      );
+
       const passesValidation = isContentValid && !needsReview && !hasMissingFigureRef;
 
       const rawVStatus = (rec.verificationStatus || '').toUpperCase();
@@ -646,6 +923,14 @@ export class JSONLImportService {
       }
     }
 
+    const diagnostics = {
+      imagesFoundInZip: totalPhysicalAssetsInZip,
+      imagesSuccessfullyResolved: referencedAssetsFoundSet.size,
+      questionsWithQuestionImages: questionsWithFigures,
+      unresolvedImageReferences: missingFigures.length,
+      questionsWithNeitherTextNorImage: questionsWithNeitherTextNorImageCount,
+    };
+
     return {
       fileName,
       chapterName: detectedChapter || 'Chapter 1',
@@ -666,6 +951,7 @@ export class JSONLImportService {
       topicBreakdown,
       validRecords,
       invalidRecords,
+      diagnostics,
     };
   }
 
@@ -860,7 +1146,11 @@ export class JSONLImportService {
         }
       }
 
-      const isContentValid = typeof rec.question === 'string' && rec.question.trim().length > 0;
+      const isContentValid = Boolean(
+        (typeof rec.question === 'string' && rec.question.trim().length > 0) ||
+        (typeof rec.imageUrl === 'string' && rec.imageUrl.trim().length > 0) ||
+        (refPaths.length > 0)
+      );
       const rawVStatus = (rec.verificationStatus || '').toUpperCase();
       const missingFigRefs = hasMissingFigureRef ? 1 : 0;
       const passesValidation = isContentValid && !needsReview && missingFigRefs === 0;
@@ -943,28 +1233,44 @@ export class JSONLImportService {
 
       // Resolve and save figures for new questions
       let imageUrl: string | null = null;
-      if (figureEntries && refPaths.length > 0) {
-        for (const ref of refPaths) {
-          const asset = this.resolveFigureAsset(ref, figureEntries);
-          if (asset) {
-            const { url, newlyCreated } = await this.saveFigureAsset(asset);
-            if (!imageUrl) {
-              imageUrl = url;
-            }
-            if (newlyCreated) {
-              savedNewAssetUrls.add(url);
-            } else {
-              savedReusedAssetUrls.add(url);
-            }
-          } else {
-            missingFiguresMap.set(`${rec.questionId}:${ref}`, { questionId: rec.questionId, reference: ref });
+      if (figureEntries && figureEntries.size > 0) {
+        let asset: ExtractedFigureAsset | null = null;
+        if (refPaths.length > 0) {
+          for (const ref of refPaths) {
+            asset = this.resolveFigureAsset(ref, figureEntries);
+            if (asset) break;
           }
         }
-      } else if (rec.imageUrl && (rec.imageUrl.startsWith('/uploads/') || rec.imageUrl.startsWith('http'))) {
-        imageUrl = rec.imageUrl;
+        if (!asset && typeof rec.imageUrl === 'string' && rec.imageUrl.trim().length > 0) {
+          asset = this.resolveFigureAsset(rec.imageUrl, figureEntries);
+        }
+        if (!asset && rec.questionId) {
+          asset = this.resolveFigureAsset(rec.questionId, figureEntries);
+        }
+
+        if (asset) {
+          const { url, newlyCreated } = await this.saveFigureAsset(asset);
+          imageUrl = url;
+          if (newlyCreated) {
+            savedNewAssetUrls.add(url);
+          } else {
+            savedReusedAssetUrls.add(url);
+          }
+        }
       }
 
-      const containsFigureFlag = Boolean(imageUrl || (rec.imageUrl && (rec.imageUrl.startsWith('/uploads/') || rec.imageUrl.startsWith('http'))));
+      if (!imageUrl && typeof rec.imageUrl === 'string' && rec.imageUrl.trim().length > 0) {
+        const clean = rec.imageUrl.trim().replace(/\\/g, '/');
+        if (clean.startsWith('/uploads/') || clean.startsWith('http://') || clean.startsWith('https://')) {
+          imageUrl = clean;
+        } else if (clean.startsWith('uploads/')) {
+          imageUrl = `/${clean}`;
+        } else {
+          imageUrl = `/uploads/diagrams/${path.posix.basename(clean)}`;
+        }
+      }
+
+      const containsFigureFlag = Boolean(imageUrl || (rec.imageUrl && rec.imageUrl.trim().length > 0));
 
       const visualMetadata: any = {
         visualExtractionReason: rec.visualExtractionReason || null,
@@ -981,7 +1287,7 @@ export class JSONLImportService {
 
       questionsToCreate.push({
         customId: rec.questionId,
-        text: rec.question,
+        text: rec.question || '',
         type: qType,
         difficulty: Difficulty.MEDIUM,
         marks: qType === QuestionType.NAT ? 2.0 : 1.0,
@@ -1237,11 +1543,17 @@ export class JSONLImportService {
         effectiveQType = QuestionType.MSQ;
       }
 
-      const hasMissingAnswer = correctIndices.length === 0;
+      const hasMissingAnswer = correctIndices.length === 0 && rawChoices.length === 0;
       const hasInvalidOptions = optionsArray.length < 2;
       const needsReview = hasMissingAnswer || hasInvalidOptions;
 
-      return { options: optionsArray, correctAnswer: correctIndices, needsReview, type: effectiveQType };
+      // PRESERVE CORRECT ANSWER: If optionsArray is empty but rawChoices/rawChoiceSource exist, preserve rawChoices instead of returning []!
+      const finalCorrectAnswer =
+        correctIndices.length === 0 && rawChoices.length > 0
+          ? rawChoices
+          : correctIndices;
+
+      return { options: optionsArray, correctAnswer: finalCorrectAnswer, needsReview, type: effectiveQType };
     }
 
     if (effectiveQType === QuestionType.NAT) {

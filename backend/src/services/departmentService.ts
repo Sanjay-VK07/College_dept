@@ -247,26 +247,31 @@ export class DepartmentService {
       filtered = filtered.filter((d) => d.active);
     }
 
-    // Query live student counts from database
-    const enriched = await Promise.all(
-      filtered.map(async (dept) => {
-        const count = await prisma.user.count({
-          where: {
-            role: Role.STUDENT,
-            OR: [
-              { department: { equals: dept.name, mode: 'insensitive' } },
-              { department: { equals: dept.code, mode: 'insensitive' } },
-              { department: { equals: dept.id, mode: 'insensitive' } },
-            ],
-          },
-        });
+    // Query live student counts from database in a single query
+    const studentCounts = await prisma.user.groupBy({
+      by: ['department'],
+      where: { role: Role.STUDENT },
+      _count: { id: true },
+    });
 
-        return {
-          ...dept,
-          studentCount: count,
-        };
-      })
-    );
+    const countMap = new Map<string, number>();
+    for (const item of studentCounts) {
+      if (item.department) {
+        countMap.set(item.department.toLowerCase(), item._count.id);
+      }
+    }
+
+    const enriched = filtered.map((dept) => {
+      const count =
+        (countMap.get(dept.name.toLowerCase()) || 0) +
+        (countMap.get(dept.code.toLowerCase()) || 0) +
+        (countMap.get(dept.id.toLowerCase()) || 0);
+
+      return {
+        ...dept,
+        studentCount: count,
+      };
+    });
 
     return enriched;
   }
