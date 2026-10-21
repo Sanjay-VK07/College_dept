@@ -24,6 +24,7 @@ export interface QuestionSourceMetadata {
   page?: number;
   chapter?: string | number;
   heading?: string;
+  section?: string | null;
 }
 
 export type CanonicalQuestionType = 'MCQ' | 'MSQ' | 'NAT';
@@ -277,13 +278,17 @@ export function validateGateQuestion(q: GateQuestion): GateQuestionValidationRes
     if (Array.isArray(ca)) {
       if (
         ca.length === 0 ||
-        (ca.length === 1 && (ca[0] === 'N/A' || ca[0] === 'NA' || ca[0] === 'needs_review'))
+        (ca.length === 1 && (ca[0] === 'N/A' || ca[0] === 'NA' || ca[0] === 'needs_review' || ca[0] === ''))
       ) {
         isAnswerMissing = true;
       }
     } else {
-      // NAT object format: { value: 12.5 }
-      if (ca.value === undefined || ca.value === null || isNaN(Number(ca.value))) {
+      // NAT object format: { value: 12.5 } or { min: 10, max: 12 } or { range: { from: 10, to: 12 } }
+      const hasValue = ca.value !== undefined && ca.value !== null && !isNaN(Number(ca.value));
+      const hasRange =
+        (ca.range && typeof ca.range.from === 'number' && typeof ca.range.to === 'number' && !isNaN(ca.range.from) && !isNaN(ca.range.to)) ||
+        (typeof ca.min === 'number' && typeof ca.max === 'number' && !isNaN(ca.min) && !isNaN(ca.max));
+      if (!hasValue && !hasRange) {
         isAnswerMissing = true;
       }
     }
@@ -400,30 +405,69 @@ export function normalizeGateQuestion(q: any): GateQuestion {
 
   // Correct Answer Normalization
   let correctAnswer: any = undefined;
-  const rawCa = q.correctAnswer !== undefined ? q.correctAnswer : q.rawAnswer;
+  let rawCa = q.correctAnswer;
 
-  if (rawCa !== undefined && rawCa !== null) {
+  // Fall back to rawAnswer or answer if correctAnswer is empty/undefined
+  if (
+    rawCa === undefined ||
+    rawCa === null ||
+    rawCa === '' ||
+    (Array.isArray(rawCa) && rawCa.length === 0)
+  ) {
+    rawCa = q.rawAnswer !== undefined && q.rawAnswer !== null && q.rawAnswer !== '' ? q.rawAnswer : q.answer;
+  }
+
+  // Fallback to structured options with isCorrect flag if present and answer still missing
+  if (
+    (rawCa === undefined || rawCa === null || rawCa === '' || (Array.isArray(rawCa) && rawCa.length === 0)) &&
+    Array.isArray(q.options) &&
+    q.options.length > 0
+  ) {
+    const correctOpts = q.options.filter((o: any) => o && (o.isCorrect === true || o.correct === true));
+    if (correctOpts.length > 0) {
+      if (questionType === 'MSQ') {
+        rawCa = correctOpts.map((o: any, idx: number) => o.key || o.label || String.fromCharCode(65 + idx));
+      } else {
+        rawCa = correctOpts[0].key || correctOpts[0].label || 'A';
+      }
+    }
+  }
+
+  if (rawCa !== undefined && rawCa !== null && rawCa !== '') {
     if (questionType === 'NAT') {
       if (typeof rawCa === 'object' && !Array.isArray(rawCa)) {
-        if (rawCa.value !== undefined && rawCa.value !== null) {
-          const num = typeof rawCa.value === 'number' ? rawCa.value : parseFloat(String(rawCa.value));
-          if (!isNaN(num)) {
-            correctAnswer = { value: num, ...(rawCa.range ? { range: rawCa.range } : {}) };
+        let val = rawCa.value !== undefined && rawCa.value !== null ? Number(rawCa.value) : undefined;
+        let range = rawCa.range;
+        let min = rawCa.min !== undefined ? Number(rawCa.min) : (range?.from !== undefined ? Number(range.from) : undefined);
+        let max = rawCa.max !== undefined ? Number(rawCa.max) : (range?.to !== undefined ? Number(range.to) : undefined);
+
+        if (min !== undefined && max !== undefined && !isNaN(min) && !isNaN(max)) {
+          if (val === undefined || isNaN(val)) {
+            val = (min + max) / 2;
           }
+          range = { from: min, to: max };
+          correctAnswer = { value: parseFloat(val.toFixed(4)), min, max, range };
+        } else if (val !== undefined && !isNaN(val)) {
+          correctAnswer = { value: val, ...(range ? { range } : {}) };
         }
       } else if (typeof rawCa === 'number') {
         correctAnswer = { value: rawCa };
       } else if (typeof rawCa === 'string') {
         const trimmed = rawCa.trim();
         if (trimmed.toUpperCase() !== 'N/A' && trimmed.toUpperCase() !== 'NA' && trimmed !== 'needs_review') {
-          const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)$/);
+          const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(?::|to)\s*(-?\d+(?:\.\d+)?)$/i);
           if (rangeMatch) {
             const from = parseFloat(rangeMatch[1]);
             const to = parseFloat(rangeMatch[2]);
             if (from === to) {
               correctAnswer = { value: from };
             } else {
-              correctAnswer = { value: parseFloat(((from + to) / 2).toFixed(4)), range: { from, to } };
+              correctAnswer = {
+                value: parseFloat(((from + to) / 2).toFixed(4)),
+                min: from,
+                max: to,
+                range: { from, to },
+              };
             }
           } else {
             const num = parseFloat(trimmed);
@@ -437,13 +481,20 @@ export function normalizeGateQuestion(q: any): GateQuestion {
       if (Array.isArray(rawCa)) {
         correctAnswer = rawCa
           .map((a: any) => (typeof a === 'number' ? String.fromCharCode(65 + a) : String(a).trim().toUpperCase()))
+          .map((s: string) => {
+            const m = s.match(/[A-E]/);
+            return m ? m[0] : s;
+          })
           .filter((a: string) => /^[A-E]$/.test(a));
       } else if (typeof rawCa === 'string') {
         const clean = rawCa.trim().toUpperCase();
-        if (clean.includes(';') || clean.includes(',')) {
+        if (clean.includes(';') || clean.includes(',') || clean.includes(' ')) {
           correctAnswer = clean
-            .split(/[;,]/)
-            .map((s) => s.trim())
+            .split(/[;,\s]+/)
+            .map((s) => {
+              const m = s.match(/[A-E]/);
+              return m ? m[0] : s.trim();
+            })
             .filter((s) => /^[A-E]$/.test(s));
         } else if (/^[A-E]$/.test(clean)) {
           correctAnswer = [clean];
@@ -453,14 +504,33 @@ export function normalizeGateQuestion(q: any): GateQuestion {
       // MCQ
       if (typeof rawCa === 'string') {
         const trimmed = rawCa.trim().toUpperCase();
-        if (trimmed.toUpperCase() !== 'N/A' && trimmed.toUpperCase() !== 'NA' && trimmed !== 'NEEDS_REVIEW') {
-          correctAnswer = trimmed;
+        if (trimmed !== 'N/A' && trimmed !== 'NA' && trimmed !== 'NEEDS_REVIEW') {
+          const match = trimmed.match(/[A-E]/);
+          if (match) {
+            correctAnswer = match[0];
+          } else {
+            correctAnswer = trimmed;
+          }
         }
       } else if (typeof rawCa === 'number') {
         correctAnswer = String.fromCharCode(65 + rawCa);
       } else if (Array.isArray(rawCa) && rawCa.length > 0) {
         const first = rawCa[0];
-        correctAnswer = typeof first === 'number' ? String.fromCharCode(65 + first) : String(first).trim().toUpperCase();
+        if (typeof first === 'number') {
+          correctAnswer = String.fromCharCode(65 + first);
+        } else {
+          const str = String(first).trim().toUpperCase();
+          const match = str.match(/[A-E]/);
+          correctAnswer = match ? match[0] : str;
+        }
+      } else if (typeof rawCa === 'object' && rawCa !== null && 'value' in rawCa) {
+        const val = rawCa.value;
+        if (typeof val === 'number') {
+          correctAnswer = String.fromCharCode(65 + val);
+        } else if (typeof val === 'string') {
+          const match = val.trim().toUpperCase().match(/[A-E]/);
+          correctAnswer = match ? match[0] : val.trim().toUpperCase();
+        }
       }
     }
   }
@@ -482,6 +552,7 @@ export function normalizeGateQuestion(q: any): GateQuestion {
     page: q.source?.page || q.sourcePage || undefined,
     chapter: q.source?.chapter || q.sourceChapter || undefined,
     heading: q.source?.heading || q.sourceHeading || undefined,
+    section: q.source?.section || q.sourceSection || undefined,
   };
 
   const draft: GateQuestion = {

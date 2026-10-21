@@ -41,6 +41,8 @@ router.post('/questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminControlle
 router.get('/questions/review-queue', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getReviewQueue);
 router.post('/questions/bulk-recovery', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.bulkRecoveryQuestions);
 router.post('/questions/image-recovery/bulk', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.bulkRecoveryQuestions);
+router.post('/questions/audit-answers', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.auditAndRepairQuestions);
+router.get('/questions/audit-answers', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.auditAndRepairQuestions);
 router.post('/questions/recover-source-images', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.recoverSourceImagesBulk);
 router.post('/questions/:id/image/recover', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.recoverSingleQuestionImage);
 router.post('/questions/repair-images', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.repairQuestionImages);

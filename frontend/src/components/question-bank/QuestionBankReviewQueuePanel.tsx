@@ -16,6 +16,7 @@ import {
   Zap,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { getFormattedCorrectAnswer } from './QuestionRenderer';
 
 interface QuestionBankReviewQueuePanelProps {
   questions: any[];
@@ -391,7 +392,8 @@ export const QuestionBankReviewQueuePanel: React.FC<QuestionBankReviewQueuePanel
                 const imgUrl = `/api/questions/${q.id || q.customId}/image`;
                 const isVerified = q.verificationStatus === 'VERIFIED';
                 const hasOptions = Array.isArray(q.options) && q.options.length > 0;
-                const hasAnswer = Array.isArray(q.correctAnswer) && q.correctAnswer.length > 0;
+                const formattedAns = getFormattedCorrectAnswer(q);
+                const hasAnswer = formattedAns.isSet;
                 const qCode = q.customId || q.id.slice(0, 8);
 
                 return (
@@ -467,7 +469,7 @@ export const QuestionBankReviewQueuePanel: React.FC<QuestionBankReviewQueuePanel
                             hasAnswer ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          {hasAnswer ? `Ans: ${JSON.stringify(q.correctAnswer)}` : 'No Ans'}
+                          {hasAnswer ? `Ans: ${formattedAns.text}` : 'No Ans'}
                         </span>
                       </div>
                     </td>

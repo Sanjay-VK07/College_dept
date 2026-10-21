@@ -16,6 +16,7 @@ import { QuestionVersionService } from '../services/questionVersionService';
 import { EmbeddingProvider } from '../modules/ai/services/embeddingProvider';
 import { extractZipEntries, isZipFile } from '../services/zipExtractionService';
 import { DepartmentService } from '../services/departmentService';
+import { AuthoritativeAnswerService } from '../services/authoritativeAnswerService';
 
 export class AdminController {
   /**
@@ -1060,151 +1061,44 @@ export class AdminController {
 
   /**
    * Automatic Bulk Recovery & Multi-Step Auto-Fix Workflow
+   * Globally resolves authoritative answer keys from source documents,
+   * updates PostgreSQL in transactional batches, synchronizes QuestionVersions,
+   * and enforces strict verification rules (no unverified questions can have missing answers).
    */
   public static async bulkRecoveryQuestions(req: AuthRequest, res: Response) {
     try {
-      const { ids, autoVerify = true } = req.body;
-
-      const whereClause: any = Array.isArray(ids) && ids.length > 0
-        ? { id: { in: ids } }
-        : { verificationStatus: 'NEEDS_REVIEW' };
-
-      const questions = await prisma.question.findMany({ where: whereClause });
-
-      let recoveredCount = 0;
-      let imagesRebuilt = 0;
-      let optionsRecovered = 0;
-      let answersRecovered = 0;
-      let verifiedCount = 0;
-
-      // Collect updates and execute in batched $transactions
-      const updates: Array<{
-        id: string;
-        imageUrl: string | null;
-        options: any;
-        correctAnswer: any;
-        verificationStatus: any;
-        containsFigure: boolean;
-      }> = [];
-
-      for (const q of questions) {
-        let finalImageUrl = q.imageUrl;
-        let finalVerificationStatus = q.verificationStatus;
-        let finalOptions: any = q.options;
-        let finalAnswer: any = q.correctAnswer;
-        const vm: any = (q.visualMetadata as any) || {};
-        let isUpdated = false;
-
-        if (!finalImageUrl) {
-          if (vm.resolvedImageUrl) {
-            finalImageUrl = vm.resolvedImageUrl;
-            imagesRebuilt++;
-            isUpdated = true;
-          } else if (q.customId) {
-            finalImageUrl = `/uploads/diagrams/${q.customId}.jpg`;
-            imagesRebuilt++;
-            isUpdated = true;
-          }
-        }
-
-        const hasOptions = Array.isArray(finalOptions) && finalOptions.length > 0;
-        if (!hasOptions && vm.extractedOptions && Array.isArray(vm.extractedOptions) && vm.extractedOptions.length > 0) {
-          finalOptions = vm.extractedOptions;
-          optionsRecovered++;
-          isUpdated = true;
-        }
-
-        const hasAnswer = Array.isArray(finalAnswer) && finalAnswer.length > 0;
-        if (!hasAnswer) {
-          if (q.rawAnswer) {
-            const raw = String(q.rawAnswer).trim().toUpperCase();
-            if (['A', 'B', 'C', 'D'].includes(raw)) {
-              finalAnswer = [raw];
-              answersRecovered++;
-              isUpdated = true;
-            } else if (/^\d+$/.test(raw)) {
-              finalAnswer = [parseInt(raw, 10)];
-              answersRecovered++;
-              isUpdated = true;
-            }
-          } else if (vm.rawAnswer) {
-            finalAnswer = [String(vm.rawAnswer).trim().toUpperCase()];
-            answersRecovered++;
-            isUpdated = true;
-          }
-        }
-
-        if (autoVerify) {
-          const hasValidImage = Boolean(finalImageUrl || q.containsFigure || (typeof q.text === 'string' && q.text.trim().length > 0));
-          const hasValidAnswer = Array.isArray(finalAnswer)
-            ? finalAnswer.length > 0
-            : finalAnswer && typeof finalAnswer === 'object'
-            ? Object.keys(finalAnswer).length > 0
-            : Boolean(finalAnswer);
-
-          if (hasValidImage && hasValidAnswer) {
-            finalVerificationStatus = 'VERIFIED';
-            verifiedCount++;
-            recoveredCount++;
-            isUpdated = true;
-          } else {
-            finalVerificationStatus = 'NEEDS_REVIEW';
-          }
-        }
-
-        if (isUpdated) {
-          updates.push({
-            id: q.id,
-            imageUrl: finalImageUrl,
-            options: finalOptions,
-            correctAnswer: finalAnswer,
-            verificationStatus: finalVerificationStatus,
-            containsFigure: Boolean(finalImageUrl || q.containsFigure),
-          });
-        }
-      }
-
-      if (autoVerify) {
-        const updateResult = await prisma.question.updateMany({
-          where: {
-            ...whereClause,
-            NOT: [
-              { correctAnswer: { equals: [] } },
-              { correctAnswer: { equals: Prisma.DbNull } },
-              { correctAnswer: { equals: Prisma.JsonNull } },
-            ],
-          },
-          data: {
-            verificationStatus: 'VERIFIED',
-            containsFigure: true,
-          },
-        });
-        verifiedCount = updateResult.count;
-        recoveredCount = updateResult.count;
-      }
+      const report = await AuthoritativeAnswerService.repairAllQuestionsGlobally();
 
       await AuditLogger.log({
         userId: req.user?.id,
         action: 'BULK_RECOVER_QUESTIONS',
         resource: 'Question',
-        details: `Bulk recovered and updated ${questions.length} questions. ${verifiedCount} auto-verified.`,
+        details: `Bulk repaired questions globally. Total: ${report.totalQuestions}, Valid answers: ${report.validAnswersTotal}, Verified: ${report.verifiedCount}, Needs Review: ${report.needsReviewCount}`,
         ipAddress: req.ip,
       });
 
       return res.status(200).json({
         success: true,
-        summary: {
-          totalProcessed: questions.length,
-          recoveredCount,
-          imagesRebuilt,
-          optionsRecovered,
-          answersRecovered,
-          verifiedCount,
-          remainingNeedsReview: await prisma.question.count({ where: { verificationStatus: 'NEEDS_REVIEW' } }),
-        },
+        summary: report,
       });
     } catch (error: any) {
       console.error('[bulkRecoveryQuestions Error]:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Audit Question Bank Answers & Verification Consistency
+   */
+  public static async auditAndRepairQuestions(req: AuthRequest, res: Response) {
+    try {
+      const report = await AuthoritativeAnswerService.repairAllQuestionsGlobally();
+      return res.status(200).json({
+        success: true,
+        report,
+      });
+    } catch (error: any) {
+      console.error('[auditAndRepairQuestions Error]:', error);
       return res.status(500).json({ success: false, message: error.message });
     }
   }

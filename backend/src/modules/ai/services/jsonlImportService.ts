@@ -149,14 +149,14 @@ export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
 
   // 4. Topic / Section / Heading aliases:
   if (typeof rec.sourceHeading !== 'string') {
-    const rawHeading = rec.sourceHeading || rec.source_topic || rec.topic || rec.heading || rec.category;
+    const rawHeading = rec.sourceHeading || rec.source_heading || rec.source_topic || rec.topic || rec.heading || rec.category || (rec.source && typeof rec.source === 'object' && rec.source.heading);
     rec.sourceHeading = typeof rawHeading === 'string' ? rawHeading : null;
   }
   if (typeof rec.sourceSection !== 'string') {
     if (rec.sourceSection === null) {
       rec.sourceSection = null;
     } else {
-      const rawSection = rec.section || rec.source_document;
+      const rawSection = rec.source_section || rec.section || (rec.source && typeof rec.source === 'object' && rec.source.section) || rec.source_document;
       if (typeof rawSection === 'string') {
         rec.sourceSection = rawSection;
       } else if (typeof rec.source === 'string') {
@@ -1400,12 +1400,10 @@ export class JSONLImportService {
 
       if (min !== undefined && max !== undefined) {
         if (min === max) {
-          return { answer: { value: min }, needsReview: false };
+          return { answer: { value: min, min, max }, needsReview: false };
         }
-        const ans: any = { min, max };
-        if (typeof raw.value === 'number') {
-          ans.value = raw.value;
-        }
+        const midVal = typeof raw.value === 'number' ? raw.value : parseFloat(((min + max) / 2).toFixed(4));
+        const ans: any = { min, max, value: midVal, range: { from: min, to: max } };
         return { answer: ans, needsReview: false };
       }
       if (val !== undefined) {
@@ -1417,7 +1415,8 @@ export class JSONLImportService {
       if (raw.length === 2 && !isNaN(Number(raw[0])) && !isNaN(Number(raw[1]))) {
         const min = Number(raw[0]);
         const max = Number(raw[1]);
-        return { answer: min === max ? { value: min } : { min, max }, needsReview: false };
+        const midVal = parseFloat(((min + max) / 2).toFixed(4));
+        return { answer: min === max ? { value: min, min, max } : { min, max, value: midVal, range: { from: min, to: max } }, needsReview: false };
       }
       if (raw.length > 0) {
         return this.parseNATAnswer(raw[0]);
@@ -1441,13 +1440,14 @@ export class JSONLImportService {
         min = max;
         max = temp;
       }
-      const answer = min === max ? { value: min } : { min, max };
+      const midVal = parseFloat(((min + max) / 2).toFixed(4));
+      const answer = min === max ? { value: min, min, max } : { min, max, value: midVal, range: { from: min, to: max } };
       return { answer, needsReview: isMultiRange };
     }
 
     const plain = Number(firstSegment);
     if (Number.isFinite(plain)) {
-      return { answer: { value: plain }, needsReview: isMultiRange };
+      return { answer: { value: plain, min: plain, max: plain }, needsReview: isMultiRange };
     }
 
     return { answer: null, needsReview: true };
@@ -1629,116 +1629,9 @@ export class JSONLImportService {
   }
 
   public static async revalidateAndRepairAllQuestions() {
-    const allQuestions = await prisma.question.findMany();
-
-    let totalQuestions = allQuestions.length;
-    let answersFound = 0;
-    let answersMapped = 0;
-    let answersMissing = 0;
-    let answersInvalid = 0;
-    let msqMapped = 0;
-    let natMapped = 0;
-    let naCount = 0;
-    let unansweredInSource = 0;
-
-    for (const q of allQuestions) {
-      const vm: any = q.visualMetadata || {};
-      const rawAns =
-        q.rawAnswer ??
-        (vm.rawAnswer || vm.answer || vm.correctAnswer || vm.answerKey || vm.key || vm.sourceAnswer);
-
-      const rec: JSONLRecord = {
-        questionId: q.customId || q.id,
-        question: q.text,
-        options: q.options as any,
-        correctAnswer: rawAns,
-        questionType: q.type,
-        verificationStatus: q.verificationStatus,
-      };
-
-      const qType = (q.type || QuestionType.MCQ) as QuestionType;
-      const { options: normOptions, correctAnswer: normCorrectAnswer, needsReview, type: effectiveType } =
-        this.normalizeOptionsAndAnswer(rec, qType);
-
-      const isUnanswered =
-        q.verificationStatus === VerificationStatus.UNANSWERED_IN_SOURCE ||
-        rawAns === 'N/A' ||
-        rawAns === 'UNANSWERED_IN_SOURCE';
-
-      let effectiveVStatus: VerificationStatus = q.verificationStatus;
-
-      if (rawAns === 'N/A' || (q.correctAnswer as any) === 'N/A') {
-        naCount++;
-      }
-      if (isUnanswered) {
-        unansweredInSource++;
-        effectiveVStatus = VerificationStatus.UNANSWERED_IN_SOURCE;
-      }
-
-      const hasRaw = Boolean(rawAns && String(rawAns).trim() !== '' && String(rawAns).trim() !== 'N/A');
-      if (hasRaw) {
-        answersFound++;
-      }
-
-      let isMapped = false;
-      if (Array.isArray(normCorrectAnswer)) {
-        if (normCorrectAnswer.length > 0) isMapped = true;
-      } else if (normCorrectAnswer && typeof normCorrectAnswer === 'object') {
-        if (Object.keys(normCorrectAnswer).length > 0) isMapped = true;
-      }
-
-      if (isMapped) {
-        answersMapped++;
-        if (effectiveType === QuestionType.MSQ) msqMapped++;
-        if (effectiveType === QuestionType.NAT) natMapped++;
-        if (!isUnanswered && !needsReview) {
-          effectiveVStatus = VerificationStatus.VERIFIED;
-        } else {
-          effectiveVStatus = VerificationStatus.NEEDS_REVIEW;
-        }
-      } else {
-        if (hasRaw) {
-          answersInvalid++;
-        } else {
-          answersMissing++;
-        }
-        if (isUnanswered) {
-          effectiveVStatus = VerificationStatus.UNANSWERED_IN_SOURCE;
-        } else {
-          // A question must NEVER be VERIFIED if its required correct answer is missing, empty, invalid, or unmapped!
-          effectiveVStatus = VerificationStatus.NEEDS_REVIEW;
-        }
-      }
-
-      // Update question in PostgreSQL DB
-      await prisma.question.update({
-        where: { id: q.id },
-        data: {
-          type: effectiveType || q.type,
-          options: normOptions,
-          correctAnswer: normCorrectAnswer as any,
-          rawAnswer: rawAns !== undefined && rawAns !== null ? (typeof rawAns === 'string' ? rawAns : JSON.stringify(rawAns)) : q.rawAnswer,
-          verificationStatus: effectiveVStatus,
-        },
-      });
-    }
-
-    const verifiedCount = await prisma.question.count({ where: { verificationStatus: VerificationStatus.VERIFIED } });
-    const needsReviewCount = await prisma.question.count({ where: { verificationStatus: VerificationStatus.NEEDS_REVIEW } });
-
-    return {
-      totalQuestions,
-      answersFound,
-      answersMapped,
-      answersMissing,
-      answersInvalid,
-      msqMapped,
-      natMapped,
-      naCount,
-      unansweredInSource,
-      verifiedCount,
-      needsReviewCount,
-    };
+    const { AuthoritativeAnswerService } = require('../../../services/authoritativeAnswerService');
+    return AuthoritativeAnswerService.repairAllQuestionsGlobally();
   }
 }
+
 

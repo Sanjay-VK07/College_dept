@@ -158,17 +158,36 @@ export function getFormattedCorrectAnswer(q: any): { text: string; isSet: boolea
   if (!q) return { text: 'Not Specified (Needs Review)', isSet: false };
   const norm = normalizeGateQuestion(q);
   const ca = norm.correctAnswer;
+  const isNat = (norm.questionType || norm.type || q.questionType || q.type) === 'NAT';
 
   if (Array.isArray(ca) && ca.length > 0) {
-    return { text: ca.join(', '), isSet: true };
+    const formatted = ca
+      .map((item) => (typeof item === 'number' && !isNat ? String.fromCharCode(65 + item) : String(item).trim()))
+      .join(', ');
+    return { text: formatted, isSet: true };
   }
   if (typeof ca === 'string' && ca.trim()) {
     return { text: ca.trim(), isSet: true };
   }
   if (typeof ca === 'number') {
-    return { text: String.fromCharCode(65 + ca), isSet: true };
+    return { text: isNat ? String(ca) : String.fromCharCode(65 + ca), isSet: true };
   }
   if (typeof ca === 'object' && ca !== null && Object.keys(ca).length > 0) {
+    if (ca.range && ca.range.from !== undefined && ca.range.to !== undefined) {
+      if (ca.range.from === ca.range.to) {
+        return { text: `${ca.range.from}`, isSet: true };
+      }
+      return { text: `${ca.range.from} to ${ca.range.to}`, isSet: true };
+    }
+    if (ca.min !== undefined && ca.max !== undefined) {
+      if (ca.min === ca.max) {
+        return { text: `${ca.min}`, isSet: true };
+      }
+      return { text: `${ca.min} to ${ca.max}`, isSet: true };
+    }
+    if (ca.value !== undefined && ca.value !== null) {
+      return { text: `${ca.value}`, isSet: true };
+    }
     return { text: JSON.stringify(ca), isSet: true };
   }
   return { text: 'Not Specified (Needs Review)', isSet: false };
@@ -430,8 +449,11 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   // Helper to check if an option is correct
   const isOptionCorrect = (key: string, optIdx: number): boolean => {
-    const ca = qNorm.correctAnswer;
+    let ca = qNorm.correctAnswer;
     if (ca === undefined || ca === null) return false;
+    if (typeof ca === 'object' && !Array.isArray(ca) && 'value' in ca) {
+      ca = ca.value;
+    }
 
     if (Array.isArray(ca)) {
       return (
@@ -749,21 +771,14 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
             )}
 
             {/* In review/solution mode, show correct answer & comparison */}
-            {(showCorrectAnswer || viewMode === 'SOLUTION_VIEW') && (
+            {(showCorrectAnswer || viewMode === 'SOLUTION_VIEW' || viewMode === 'ADMIN_REVIEW') && (
               <div className="mt-4 p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs font-mono flex flex-wrap items-center justify-between gap-3 shadow-xs">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span className="font-sans font-bold text-emerald-900">Correct Answer:</span>
                   <span className="px-2.5 py-0.5 bg-emerald-200 text-emerald-950 font-bold rounded text-sm">
-                    {typeof qNorm.correctAnswer === 'object' && qNorm.correctAnswer !== null && 'value' in qNorm.correctAnswer
-                      ? qNorm.correctAnswer.value
-                      : String(qNorm.correctAnswer ?? 'N/A')}
+                    {getFormattedCorrectAnswer(qNorm).text}
                   </span>
-                  {typeof qNorm.correctAnswer === 'object' && qNorm.correctAnswer?.range && (
-                    <span className="text-[11px] text-emerald-800 font-sans">
-                      (Official Range: {qNorm.correctAnswer.range.from} to {qNorm.correctAnswer.range.to})
-                    </span>
-                  )}
                 </div>
 
                 {natSubmittedAnswer !== null && (
@@ -857,15 +872,13 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 5. CORRECT ANSWER DISPLAY (ONLY REVEALED IN REVIEW / SOLUTION MODE)
                 Hidden completely during student exam / solving session.
                 ========================================================================= */}
-            {(showCorrectAnswer || viewMode === 'SOLUTION_VIEW') && (
+            {(showCorrectAnswer || viewMode === 'SOLUTION_VIEW' || viewMode === 'ADMIN_REVIEW') && (
               <div className="mt-4 p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs font-mono flex flex-wrap items-center justify-between gap-3 shadow-xs">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span className="font-sans font-bold text-emerald-900">Official Correct Answer:</span>
                   <span className="px-2.5 py-0.5 bg-emerald-200 text-emerald-950 font-bold rounded text-sm">
-                    {Array.isArray(qNorm.correctAnswer) && qNorm.correctAnswer.length > 0
-                      ? qNorm.correctAnswer.join(', ')
-                      : String(qNorm.correctAnswer ?? 'N/A')}
+                    {getFormattedCorrectAnswer(qNorm).text}
                   </span>
                 </div>
 

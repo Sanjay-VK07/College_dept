@@ -2,6 +2,7 @@ import { JSONLImportService, normalizeDatasetRecord } from '../services/jsonlImp
 import { QuestionType, VerificationStatus } from '@prisma/client';
 import AdmZip from 'adm-zip';
 import { extractQuestionBankZipPackage } from '../../../services/zipExtractionService';
+import { AuthoritativeAnswerService } from '../../../services/authoritativeAnswerService';
 
 describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
   it('1. MCQ A/B/C/D mapping', () => {
@@ -83,7 +84,7 @@ describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
       questionType: 'NAT',
     });
     const norm1 = JSONLImportService.normalizeOptionsAndAnswer(rec1, QuestionType.NAT);
-    expect(norm1.correctAnswer).toEqual({ value: 42.5 });
+    expect(norm1.correctAnswer).toMatchObject({ value: 42.5 });
 
     const rec2 = normalizeDatasetRecord({
       questionId: 'Q_NAT_2',
@@ -93,7 +94,7 @@ describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
       questionType: 'NAT',
     });
     const norm2 = JSONLImportService.normalizeOptionsAndAnswer(rec2, QuestionType.NAT);
-    expect(norm2.correctAnswer).toEqual({ value: 100 });
+    expect(norm2.correctAnswer).toMatchObject({ value: 100 });
   });
 
   it('5. NAT range mapping (preserving min and max)', () => {
@@ -105,7 +106,7 @@ describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
       questionType: 'NAT',
     });
     const norm1 = JSONLImportService.normalizeOptionsAndAnswer(rec1, QuestionType.NAT);
-    expect(norm1.correctAnswer).toEqual({ min: 25, max: 28 });
+    expect(norm1.correctAnswer).toMatchObject({ min: 25, max: 28 });
 
     const rec2 = normalizeDatasetRecord({
       questionId: 'Q_NAT_R2',
@@ -115,7 +116,7 @@ describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
       questionType: 'NAT',
     });
     const norm2 = JSONLImportService.normalizeOptionsAndAnswer(rec2, QuestionType.NAT);
-    expect(norm2.correctAnswer).toEqual({ min: 10.5, max: 15.5 });
+    expect(norm2.correctAnswer).toMatchObject({ min: 10.5, max: 15.5 });
 
     const rec3 = normalizeDatasetRecord({
       questionId: 'Q_NAT_R3',
@@ -125,7 +126,7 @@ describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
       questionType: 'NAT',
     });
     const norm3 = JSONLImportService.normalizeOptionsAndAnswer(rec3, QuestionType.NAT);
-    expect(norm3.correctAnswer).toEqual({ min: 5, max: 10 });
+    expect(norm3.correctAnswer).toMatchObject({ min: 5, max: 10 });
   });
 
   it('6. N/A and missing answer rules', () => {
@@ -173,7 +174,7 @@ describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
     expect(norm1.correctAnswer).toEqual([2]);
 
     const norm2 = JSONLImportService.normalizeOptionsAndAnswer(preview.validRecords[1], QuestionType.NAT);
-    expect(norm2.correctAnswer).toEqual({ min: 15, max: 20 });
+    expect(norm2.correctAnswer).toMatchObject({ min: 15, max: 20 });
   });
 
   it('8. Re-import / idempotency validation', () => {
@@ -284,7 +285,29 @@ describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
       questionType: 'NAT',
     });
     const normRange = JSONLImportService.normalizeOptionsAndAnswer(natRange, QuestionType.NAT);
-    expect(normRange.correctAnswer).toEqual({ min: 4.8, max: 5.2 });
+    expect(normRange.correctAnswer).toMatchObject({ min: 4.8, max: 5.2 });
     expect(normRange.needsReview).toBe(false);
+  });
+
+  it('12. AuthoritativeAnswerService indexing and exact recovery for Q1348', () => {
+    AuthoritativeAnswerService.initAuthoritativeIndex();
+    const match = AuthoritativeAnswerService.findAuthoritativeMatch(
+      'Q1348',
+      447,
+      '65',
+      'Which of the following is NOT true of deadlock prevention and deadlock avoidance schemes?'
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.answerKeyAnswer || match?.answer).toBe('A');
+  });
+
+  it('13. AuthoritativeAnswerService resolves authoritative chapter records without guessing', () => {
+    AuthoritativeAnswerService.initAuthoritativeIndex();
+    const allRecords = AuthoritativeAnswerService.getAuthoritativeChapterRecords();
+    expect(allRecords.length).toBeGreaterThan(0);
+
+    const withAnswers = allRecords.filter((r: any) => r.answer || r.answerKeyAnswer);
+    expect(withAnswers.length).toBe(allRecords.length);
   });
 });
