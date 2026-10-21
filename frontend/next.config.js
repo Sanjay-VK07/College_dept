@@ -15,6 +15,14 @@ const nextConfig = {
         destination: `${backendBaseUrl}/uploads/:path*`,
       },
       {
+        source: '/gate-extraction-v2/:path*',
+        destination: `${backendBaseUrl}/gate-extraction-v2/:path*`,
+      },
+      {
+        source: '/images/:path*',
+        destination: `${backendBaseUrl}/images/:path*`,
+      },
+      {
         source: '/api/:path*',
         destination: `${backendApiUrl}/:path*`,
       },

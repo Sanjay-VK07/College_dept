@@ -190,4 +190,101 @@ describe('GLOBAL ANSWER MAPPING REGRESSION SUITE', () => {
     expect(norm1.correctAnswer).toEqual(norm2.correctAnswer);
     expect(norm1.options).toEqual(norm2.options);
   });
+
+  it('9. VERIFIED-without-answer prevention rule', () => {
+    // MCQ with options but missing/empty answer MUST trigger needsReview and have empty correctAnswer
+    const emptyMcq = normalizeDatasetRecord({
+      questionId: 'Q_NO_ANS',
+      question: 'Question without answer',
+      options: ['Option A', 'Option B', 'Option C', 'Option D'],
+      correctAnswer: '',
+      questionType: 'MCQ',
+    });
+    const normEmpty = JSONLImportService.normalizeOptionsAndAnswer(emptyMcq, QuestionType.MCQ);
+    expect(normEmpty.correctAnswer).toEqual([]);
+    expect(normEmpty.needsReview).toBe(true);
+
+    // MCQ with invalid unmapped token
+    const invalidTokenMcq = normalizeDatasetRecord({
+      questionId: 'Q_INVALID_TOKEN',
+      question: 'Question with unmapped token',
+      options: ['Option A', 'Option B'],
+      correctAnswer: 'Z',
+      questionType: 'MCQ',
+    });
+    const normInvalid = JSONLImportService.normalizeOptionsAndAnswer(invalidTokenMcq, QuestionType.MCQ);
+    expect(normInvalid.correctAnswer).toEqual([]);
+    expect(normInvalid.needsReview).toBe(true);
+
+    // NAT with invalid text
+    const invalidNat = normalizeDatasetRecord({
+      questionId: 'Q_INVALID_NAT',
+      question: 'Invalid NAT question',
+      options: [],
+      correctAnswer: 'not-a-number',
+      questionType: 'NAT',
+    });
+    const normNat = JSONLImportService.normalizeOptionsAndAnswer(invalidNat, QuestionType.NAT);
+    expect(normNat.needsReview).toBe(true);
+
+    // Explicit N/A answer
+    const naRecord = normalizeDatasetRecord({
+      questionId: 'Q_EXPLICIT_NA',
+      question: 'Excluded question',
+      options: ['A', 'B'],
+      correctAnswer: 'N/A',
+      questionType: 'MCQ',
+    });
+    const normNA = JSONLImportService.normalizeOptionsAndAnswer(naRecord, QuestionType.MCQ);
+    expect(normNA.correctAnswer).toEqual([]);
+    expect(normNA.needsReview).toBe(true);
+  });
+
+  it('10. Q1348 Authoritative Answer Mapping Regression', () => {
+    // Q1348 authoritative record: Resource Allocation, Deadlock Prevention, GATE CSE 2008 Q65
+    const q1348Record = normalizeDatasetRecord({
+      questionId: 'Q1348',
+      question: 'Which of the following is NOT true of deadlock prevention and deadlock avoidance schemes?',
+      options: [
+        { key: 'A', text: 'In deadlock prevention, the request for resources is always granted if the resulting state is safe' },
+        { key: 'B', text: 'In deadlock avoidance, the request for resources is always granted if the resulting state is safe' },
+        { key: 'C', text: 'Deadlock avoidance is less restrictive than deadlock prevention' },
+        { key: 'D', text: 'Deadlock avoidance requires knowledge of resource requirements apriori..' },
+      ],
+      correctAnswer: 'A',
+      questionType: 'MCQ',
+      sourcePage: 447,
+    });
+
+    const norm = JSONLImportService.normalizeOptionsAndAnswer(q1348Record, QuestionType.MCQ);
+    expect(norm.correctAnswer).toEqual([0]);
+    expect(norm.needsReview).toBe(false);
+    expect(norm.options.length).toBe(4);
+    expect(norm.options[0].text).toContain('deadlock prevention');
+  });
+
+  it('11. MSQ multi-tokens and NAT range preservation', () => {
+    const msqRecord = normalizeDatasetRecord({
+      questionId: 'Q_MSQ_SPLIT',
+      question: 'MSQ split test',
+      options: ['Opt A', 'Opt B', 'Opt C', 'Opt D'],
+      correctAnswer: 'B;C',
+      questionType: 'MCQ', // mislabeled as MCQ in raw source
+    });
+    const normMsq = JSONLImportService.normalizeOptionsAndAnswer(msqRecord, QuestionType.MCQ);
+    expect(normMsq.type).toBe(QuestionType.MSQ);
+    expect(normMsq.correctAnswer).toEqual([1, 2]);
+    expect(normMsq.needsReview).toBe(false);
+
+    const natRange = normalizeDatasetRecord({
+      questionId: 'Q_NAT_RANGE',
+      question: 'NAT Range test',
+      options: [],
+      correctAnswer: '4.8 : 5.2',
+      questionType: 'NAT',
+    });
+    const normRange = JSONLImportService.normalizeOptionsAndAnswer(natRange, QuestionType.NAT);
+    expect(normRange.correctAnswer).toEqual({ min: 4.8, max: 5.2 });
+    expect(normRange.needsReview).toBe(false);
+  });
 });

@@ -64,7 +64,7 @@ import { QuestionBankReviewQueuePanel } from '@/components/question-bank/Questio
 import { SearchableSubjectSelect } from '@/components/question-bank/SearchableSubjectSelect';
 import { CURRENT_INSTITUTION } from '@/config/institution';
 import { QuestionOptionContent, getOptionText } from '@/components/question-bank/QuestionOptionContent';
-import { QuestionRenderer } from '@/components/question-bank/QuestionRenderer';
+import { QuestionRenderer, getFormattedCorrectAnswer } from '@/components/question-bank/QuestionRenderer';
 
 interface College {
   id: string;
@@ -3630,14 +3630,21 @@ export default function AdminDashboard() {
               showInternalMetadata={true}
             />
 
-            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-xs flex items-center justify-between">
-              <span className="font-bold text-slate-700">Correct Answer: </span>
-              <span className="font-mono text-emerald-700 font-bold">
-                {Array.isArray(qbDetailQuestion.correctAnswer) && qbDetailQuestion.correctAnswer.length > 0
-                  ? JSON.stringify(qbDetailQuestion.correctAnswer)
-                  : String(qbDetailQuestion.correctAnswer ?? qbDetailQuestion.rawAnswer ?? 'N/A')}
-              </span>
-            </div>
+            {(() => {
+              const formatted = getFormattedCorrectAnswer(qbDetailQuestion);
+              return (
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-xs flex items-center justify-between">
+                  <span className="font-bold text-slate-700">Correct Answer: </span>
+                  {formatted.isSet ? (
+                    <span className="font-mono text-emerald-700 font-bold">{formatted.text}</span>
+                  ) : (
+                    <span className="font-mono text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-[11px]">
+                      {formatted.text}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
 
             {qbDetailQuestion.explanation && (
               <div className="p-2.5 bg-blue-50/50 border border-blue-200/60 rounded text-xs text-slate-700">

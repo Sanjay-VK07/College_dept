@@ -67,16 +67,33 @@ export async function runAnswerMappingAudit() {
     }
   }
 
+  const verifiedCount = allQuestions.filter(q => q.verificationStatus === 'VERIFIED').length;
+  const needsReviewCount = allQuestions.filter(q => q.verificationStatus === 'NEEDS_REVIEW').length;
+  const verifiedWithoutAnswer = allQuestions.filter(q => {
+    if (q.verificationStatus !== 'VERIFIED') return false;
+    const ca = q.correctAnswer;
+    if (Array.isArray(ca)) return ca.length === 0;
+    if (ca && typeof ca === 'object') return Object.keys(ca).length === 0;
+    if (typeof ca === 'number') return false;
+    if (typeof ca === 'string') return ca.trim().length === 0 || ca.trim().toUpperCase() === 'N/A';
+    return true;
+  }).length;
+
   const report = {
     totalQuestions,
+    validAnswers: answersMapped,
     answersFound,
     answersMapped,
     answersMissing,
     answersInvalid,
+    mappingFailures: answersInvalid,
     msqMapped,
     natMapped,
     naCount,
     unansweredInSource,
+    verifiedCount,
+    needsReviewCount,
+    verifiedWithoutAnswer,
     sampleUnmapped,
   };
 

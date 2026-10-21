@@ -20,4 +20,5 @@ uploads/
 *.tsbuildinfo
 scratch/
 **/scratch/
+frontend/public/
 

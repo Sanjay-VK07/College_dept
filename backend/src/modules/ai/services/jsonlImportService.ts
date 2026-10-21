@@ -148,11 +148,23 @@ export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
   }
 
   // 4. Topic / Section / Heading aliases:
-  if (!rec.sourceHeading) {
-    rec.sourceHeading = rec.source_topic || rec.topic || rec.heading || rec.category;
+  if (typeof rec.sourceHeading !== 'string') {
+    const rawHeading = rec.sourceHeading || rec.source_topic || rec.topic || rec.heading || rec.category;
+    rec.sourceHeading = typeof rawHeading === 'string' ? rawHeading : null;
   }
-  if (!rec.sourceSection) {
-    rec.sourceSection = rec.source || rec.source_document || rec.section;
+  if (typeof rec.sourceSection !== 'string') {
+    if (rec.sourceSection === null) {
+      rec.sourceSection = null;
+    } else {
+      const rawSection = rec.section || rec.source_document;
+      if (typeof rawSection === 'string') {
+        rec.sourceSection = rawSection;
+      } else if (typeof rec.source === 'string') {
+        rec.sourceSection = rec.source;
+      } else {
+        rec.sourceSection = null;
+      }
+    }
   }
   if (!rec.originalQuestionId) {
     rec.originalQuestionId = rec.source_question_number || rec.originalQuestionId;
@@ -165,6 +177,17 @@ export function normalizeDatasetRecord(rawObj: any): JSONLRecord {
   if (rec.sourcePage === undefined || rec.sourcePage === null) {
     if (rec.source_page_start !== undefined && rec.source_page_start !== null) {
       rec.sourcePage = Number(rec.source_page_start);
+    } else if (rec.source && typeof rec.source === 'object') {
+      if (Array.isArray(rec.source.pages) && rec.source.pages.length > 0) {
+        rec.sourcePage = Number(rec.source.pages[0]);
+      } else if (typeof rec.source.page === 'number') {
+        rec.sourcePage = rec.source.page;
+      }
+    }
+  }
+  if (rec.sourceDocument === undefined || rec.sourceDocument === null) {
+    if (rec.source && typeof rec.source === 'object' && typeof rec.source.pdf === 'string') {
+      rec.sourceDocument = rec.source.pdf;
     }
   }
 
@@ -1153,12 +1176,20 @@ export class JSONLImportService {
       );
       const rawVStatus = (rec.verificationStatus || '').toUpperCase();
       const missingFigRefs = hasMissingFigureRef ? 1 : 0;
-      const passesValidation = isContentValid && !needsReview && missingFigRefs === 0;
+      const hasValidAnswer = (() => {
+        const ca = normalizedCorrectAnswer;
+        if (Array.isArray(ca)) return ca.length > 0;
+        if (ca && typeof ca === 'object') return Object.keys(ca).length > 0;
+        if (typeof ca === 'number') return true;
+        if (typeof ca === 'string') return ca.trim().length > 0 && ca.trim().toUpperCase() !== 'N/A';
+        return false;
+      })();
+      const passesValidation = isContentValid && !needsReview && missingFigRefs === 0 && hasValidAnswer;
 
       let effectiveVStatus: VerificationStatus;
       if (rawVStatus === 'REJECTED') {
         effectiveVStatus = VerificationStatus.REJECTED;
-      } else if (rawVStatus === 'UNANSWERED_IN_SOURCE') {
+      } else if (rawVStatus === 'UNANSWERED_IN_SOURCE' || (!hasValidAnswer && String(rec.correctAnswer || '').toUpperCase() === 'N/A')) {
         effectiveVStatus = VerificationStatus.UNANSWERED_IN_SOURCE;
       } else if (passesValidation) {
         effectiveVStatus = VerificationStatus.VERIFIED;
@@ -1294,18 +1325,18 @@ export class JSONLImportService {
         negativeMarks: qType === QuestionType.MCQ ? 0.33 : 0.0,
         options: normalizedOptions,
         correctAnswer: normalizedCorrectAnswer,
-        rawAnswer: rec.rawAnswer || null,
-        explanation: rec.reason || rec.reviewReason || rec.extractionNotes || null,
+        rawAnswer: typeof rec.rawAnswer === 'string' ? rec.rawAnswer : (rec.rawAnswer ? JSON.stringify(rec.rawAnswer) : null),
+        explanation: typeof rec.reason === 'string' ? rec.reason : (typeof rec.reviewReason === 'string' ? rec.reviewReason : (typeof rec.extractionNotes === 'string' ? rec.extractionNotes : null)),
         imageUrl,
         subtopicId,
         createdById: userId,
         generatedByAI: false,
         origin: QuestionOrigin.SOURCE,
         verificationStatus: effectiveVStatus,
-        sourcePage: rec.sourcePage || null,
-        sourceChapter: rec.sourceChapter ? String(rec.sourceChapter) : (rec.chapter ? String(rec.chapter) : null),
-        sourceSection: rec.sourceSection || null,
-        sourceHeading: rec.sourceHeading || null,
+        sourcePage: typeof rec.sourcePage === 'number' && Number.isFinite(rec.sourcePage) ? Math.round(rec.sourcePage) : (Number.isFinite(Number(rec.sourcePage)) && rec.sourcePage !== null && rec.sourcePage !== undefined ? Number(rec.sourcePage) : null),
+        sourceChapter: typeof rec.sourceChapter === 'string' ? rec.sourceChapter : (rec.chapter ? String(rec.chapter) : null),
+        sourceSection: typeof rec.sourceSection === 'string' ? rec.sourceSection : null,
+        sourceHeading: typeof rec.sourceHeading === 'string' ? rec.sourceHeading : null,
         containsFigure: containsFigureFlag,
         textExtractionUsed: rec.textExtractionUsed ?? true,
         visualExtractionUsed: rec.visualExtractionUsed ?? false,
@@ -1363,13 +1394,22 @@ export class JSONLImportService {
     }
 
     if (typeof raw === 'object' && !Array.isArray(raw)) {
-      if (typeof raw.min === 'number' && typeof raw.max === 'number') {
-        const min = Number(raw.min);
-        const max = Number(raw.max);
-        return { answer: min === max ? { value: min } : { min, max, value: raw.value }, needsReview: false };
+      const min = typeof raw.min === 'number' ? raw.min : (typeof raw.acceptedRange?.min === 'number' ? raw.acceptedRange.min : undefined);
+      const max = typeof raw.max === 'number' ? raw.max : (typeof raw.acceptedRange?.max === 'number' ? raw.acceptedRange.max : undefined);
+      const val = typeof raw.value === 'number' ? raw.value : (min !== undefined && max !== undefined ? (min + max) / 2 : undefined);
+
+      if (min !== undefined && max !== undefined) {
+        if (min === max) {
+          return { answer: { value: min }, needsReview: false };
+        }
+        const ans: any = { min, max };
+        if (typeof raw.value === 'number') {
+          ans.value = raw.value;
+        }
+        return { answer: ans, needsReview: false };
       }
-      if (typeof raw.value === 'number') {
-        return { answer: { value: Number(raw.value), min: raw.min ?? Number(raw.value), max: raw.max ?? Number(raw.value) }, needsReview: false };
+      if (val !== undefined) {
+        return { answer: { value: val, min: val, max: val }, needsReview: false };
       }
     }
 
@@ -1543,13 +1583,23 @@ export class JSONLImportService {
         effectiveQType = QuestionType.MSQ;
       }
 
-      const hasMissingAnswer = correctIndices.length === 0 && rawChoices.length === 0;
-      const hasInvalidOptions = optionsArray.length < 2;
+      const hasMissingAnswer =
+        optionsArray.length >= 2
+          ? correctIndices.length === 0
+          : correctIndices.length === 0 && rawChoices.length === 0;
+      const hasInvalidOptions =
+        optionsArray.length < 2 &&
+        !rec.imageUrl &&
+        !rec.containsFigure &&
+        !rec.figure &&
+        !(Array.isArray(rec.figures) && rec.figures.length > 0);
       const needsReview = hasMissingAnswer || hasInvalidOptions;
 
       // PRESERVE CORRECT ANSWER: If optionsArray is empty but rawChoices/rawChoiceSource exist, preserve rawChoices instead of returning []!
       const finalCorrectAnswer =
-        correctIndices.length === 0 && rawChoices.length > 0
+        optionsArray.length >= 2
+          ? correctIndices
+          : correctIndices.length === 0 && rawChoices.length > 0
           ? rawChoices
           : correctIndices;
 
@@ -1641,14 +1691,22 @@ export class JSONLImportService {
         answersMapped++;
         if (effectiveType === QuestionType.MSQ) msqMapped++;
         if (effectiveType === QuestionType.NAT) natMapped++;
-        if (!isUnanswered && effectiveVStatus === VerificationStatus.NEEDS_REVIEW && !needsReview) {
+        if (!isUnanswered && !needsReview) {
           effectiveVStatus = VerificationStatus.VERIFIED;
+        } else {
+          effectiveVStatus = VerificationStatus.NEEDS_REVIEW;
         }
       } else {
         if (hasRaw) {
           answersInvalid++;
         } else {
           answersMissing++;
+        }
+        if (isUnanswered) {
+          effectiveVStatus = VerificationStatus.UNANSWERED_IN_SOURCE;
+        } else {
+          // A question must NEVER be VERIFIED if its required correct answer is missing, empty, invalid, or unmapped!
+          effectiveVStatus = VerificationStatus.NEEDS_REVIEW;
         }
       }
 
@@ -1665,6 +1723,9 @@ export class JSONLImportService {
       });
     }
 
+    const verifiedCount = await prisma.question.count({ where: { verificationStatus: VerificationStatus.VERIFIED } });
+    const needsReviewCount = await prisma.question.count({ where: { verificationStatus: VerificationStatus.NEEDS_REVIEW } });
+
     return {
       totalQuestions,
       answersFound,
@@ -1675,6 +1736,8 @@ export class JSONLImportService {
       natMapped,
       naCount,
       unansweredInSource,
+      verifiedCount,
+      needsReviewCount,
     };
   }
 }

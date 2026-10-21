@@ -7,7 +7,7 @@ import { ExcelImportService } from '../services/excelImportService';
 import { ReportExportService } from '../services/reportExportService';
 import { StudentDataExportService } from '../services/studentDataExportService';
 import { AuditLogger } from '../services/auditLogger';
-import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus, VerificationStatus } from '@prisma/client';
+import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus, VerificationStatus, Prisma } from '@prisma/client';
 import { ENV } from '../config/env';
 import { NotificationController } from './notificationController';
 import { LocalStorageProvider } from '../modules/ai/services/documentStorageService';
@@ -1136,11 +1136,19 @@ export class AdminController {
 
         if (autoVerify) {
           const hasValidImage = Boolean(finalImageUrl || q.containsFigure || (typeof q.text === 'string' && q.text.trim().length > 0));
-          if (hasValidImage) {
+          const hasValidAnswer = Array.isArray(finalAnswer)
+            ? finalAnswer.length > 0
+            : finalAnswer && typeof finalAnswer === 'object'
+            ? Object.keys(finalAnswer).length > 0
+            : Boolean(finalAnswer);
+
+          if (hasValidImage && hasValidAnswer) {
             finalVerificationStatus = 'VERIFIED';
             verifiedCount++;
             recoveredCount++;
             isUpdated = true;
+          } else {
+            finalVerificationStatus = 'NEEDS_REVIEW';
           }
         }
 
@@ -1158,7 +1166,14 @@ export class AdminController {
 
       if (autoVerify) {
         const updateResult = await prisma.question.updateMany({
-          where: whereClause,
+          where: {
+            ...whereClause,
+            NOT: [
+              { correctAnswer: { equals: [] } },
+              { correctAnswer: { equals: Prisma.DbNull } },
+              { correctAnswer: { equals: Prisma.JsonNull } },
+            ],
+          },
           data: {
             verificationStatus: 'VERIFIED',
             containsFigure: true,
@@ -1250,7 +1265,16 @@ export class AdminController {
 
       const verifyRes = await prisma.question.updateMany({
         where: {
-          OR: [{ imageUrl: { not: null } }, { containsFigure: true }],
+          AND: [
+            { OR: [{ imageUrl: { not: null } }, { containsFigure: true }] },
+            {
+              NOT: [
+                { correctAnswer: { equals: [] } },
+                { correctAnswer: { equals: Prisma.DbNull } },
+                { correctAnswer: { equals: Prisma.JsonNull } },
+              ],
+            },
+          ],
         },
         data: { verificationStatus: 'VERIFIED' },
       });

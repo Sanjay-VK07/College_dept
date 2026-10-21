@@ -33,8 +33,8 @@ export class PDFPageRenderService {
 
         if (match) {
           const fullPath = path.join(dir, match);
-          // Ignore tiny 5KB 26px broken crop slivers so full PDF page is rendered instead
-          if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile() && fs.statSync(fullPath).size > 30000) {
+          // Allow valid crop images (> 1KB) to be served
+          if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile() && fs.statSync(fullPath).size > 1000) {
             return fullPath;
           }
         }
@@ -306,7 +306,7 @@ export class PDFPageRenderService {
         path.join(process.cwd(), 'uploads', path.basename(clean)),
       ];
       for (const p of candidates) {
-        if (fs.existsSync(p) && fs.statSync(p).isFile() && fs.statSync(p).size > 30000) return p;
+        if (fs.existsSync(p) && fs.statSync(p).isFile() && fs.statSync(p).size > 1000) return p;
       }
       return null;
     };
@@ -316,7 +316,7 @@ export class PDFPageRenderService {
       return ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
     };
 
-    // 1. Fast Pattern Disk Lookup for pre-existing full page renders (> 15KB)
+    // 1. Fast Pattern Disk Lookup for pre-existing full page renders (> 1KB)
     const directDiskMatch = this.findImageOnDisk(questionId);
     if (directDiskMatch) {
       return {
@@ -363,7 +363,11 @@ export class PDFPageRenderService {
       }
 
       const vm: any = question.visualMetadata || {};
-      const cropCandidate = checkFile(question.imageUrl) || checkFile(vm.resolvedImageUrl) || checkFile(vm.originalImagePath);
+      const cropCandidate =
+        checkFile(question.imageUrl) ||
+        checkFile(vm.resolvedImageUrl) ||
+        checkFile(vm.originalImagePath) ||
+        checkFile(Array.isArray(vm.figures) ? vm.figures[0] : null);
       if (cropCandidate) {
         return {
           filePath: cropCandidate,

@@ -1,0 +1,174 @@
+[
+  {
+    "questionId": "1.1.5",
+    "category": "1. Normal text question",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      449
+    ],
+    "pages": [
+      29
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.1.8",
+    "category": "2. Equation-heavy question",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      760
+    ],
+    "pages": [
+      29
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.12.6",
+    "category": "3. Diagram question",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      1417
+    ],
+    "pages": [
+      56
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.1.17",
+    "category": "4. Table question",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      1332
+    ],
+    "pages": [
+      31,
+      32
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.1.6",
+    "category": "5. Question with four options",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      448
+    ],
+    "pages": [
+      29
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.1.12",
+    "category": "6. Question near page boundary",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      809
+    ],
+    "pages": [
+      30
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.1.13",
+    "category": "7. Multi-page question",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      971
+    ],
+    "pages": [
+      30,
+      31
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.1.16",
+    "category": "8. Question with unusual formatting (code struct)",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      963
+    ],
+    "pages": [
+      31
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.1.7",
+    "category": "9. Question with answer-key mapping (MSQ A;B;C;D)",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      510
+    ],
+    "pages": [
+      29
+    ],
+    "issues": []
+  },
+  {
+    "questionId": "1.1.10",
+    "category": "10. Difficult / complex question",
+    "imageValid": true,
+    "complete": true,
+    "boundaryValid": true,
+    "answerValid": true,
+    "status": "verified",
+    "dimensions": [
+      2168,
+      595
+    ],
+    "pages": [
+      30
+    ],
+    "issues": []
+  }
+]

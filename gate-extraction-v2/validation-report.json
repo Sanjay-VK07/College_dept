@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-10-02T09:07:26.115Z",
+  "totalQuestions": 1277,
+  "verified": 1275,
+  "needsReview": 2,
+  "mcqCount": 947,
+  "msqCount": 98,
+  "natCount": 232,
+  "needsReviewQuestions": [
+    {
+      "questionId": "1.24.33",
+      "questionType": "NAT",
+      "reason": "ANSWER_MISSING",
+      "reviewReasonMessage": "Needs review: answer key is missing.",
+      "pages": [
+        89
+      ],
+      "imageSrc": "images/1_24_33.png",
+      "answerStatus": "needs_review"
+    },
+    {
+      "questionId": "5.23.36",
+      "questionType": "NAT",
+      "reason": "ANSWER_MISSING",
+      "reviewReasonMessage": "Needs review: answer key is missing.",
+      "pages": [
+        418
+      ],
+      "imageSrc": "images/5_23_36.png",
+      "answerStatus": "needs_review"
+    }
+  ]
+}

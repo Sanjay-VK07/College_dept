@@ -1,0 +1,18 @@
+{
+  "sourcePdf": "filter1_volume3 (1)(1).pdf",
+  "extractionDate": "2026-10-02T09:18:59.537119",
+  "renderingDpi": 300,
+  "totalPagesProcessed": 469,
+  "totalQuestionsDetected": 1435,
+  "validQuestionsExtracted": 1277,
+  "verified": 1275,
+  "needs_review": 2,
+  "naRemovedCount": 158,
+  "multiPageCount": 176,
+  "answerKeySource": "Official Chapter Answer Keys (pages 93, 165, 272, 361, 467)",
+  "imageNamingFormat": "images/<questionId>.png",
+  "extractionWarnings": [
+    "158 N/A questions safely excluded per specification",
+    "176 multi-page questions seamlessly combined vertically"
+  ]
+}

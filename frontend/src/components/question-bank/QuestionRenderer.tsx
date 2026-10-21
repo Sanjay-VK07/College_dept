@@ -1,9 +1,26 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Maximize2, AlertTriangle, Eye, EyeOff, CheckCircle2, XCircle, HelpCircle, FileText } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  Maximize2,
+  AlertTriangle,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  ZoomIn,
+  ZoomOut,
+  X,
+  RotateCcw,
+  FileText,
+} from 'lucide-react';
 import api from '@/lib/api';
-import { QuestionOptionContent, getOptionText, getOptionImage } from './QuestionOptionContent';
+import {
+  GateQuestion,
+  normalizeGateQuestion,
+  compareNatAnswer,
+} from '@/types/question';
 
 export interface QuestionRendererProps {
   question: any;
@@ -14,70 +31,147 @@ export interface QuestionRendererProps {
   viewMode?: 'QUESTION_BANK' | 'EXAM_PREVIEW' | 'ADMIN_REVIEW' | 'STUDENT_EXAM' | 'SOLUTION_VIEW';
   showInternalMetadata?: boolean;
   className?: string;
+  defaultExpanded?: boolean;
 }
 
+/**
+ * Normalizes an image path/filename into a browser-accessible URL.
+ * Prioritizes high-resolution 300 DPI PNGs produced by gate-extraction-v2.
+ */
+function cleanImagePath(raw: string): string {
+  if (!raw || typeof raw !== 'string') return '';
+  let clean = raw.trim().replace(/\\/g, '/');
+  if (clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('data:')) {
+    return clean;
+  }
+
+  // 1. Direct path to gate-extraction-v2 images
+  if (clean.startsWith('/images/')) {
+    return clean;
+  }
+  if (clean.startsWith('images/')) {
+    return `/${clean}`;
+  }
+  if (clean.startsWith('/gate-extraction-v2/')) {
+    return clean;
+  }
+  if (clean.startsWith('gate-extraction-v2/')) {
+    return `/${clean}`;
+  }
+
+  // 2. Extracted question filename pattern: e.g. 1_1_5.png, 1_1_5.jpg, /uploads/diagrams/1_1_5.jpg
+  // Always map to the canonical 300 DPI high-resolution PNG in /images/
+  const filename = clean.split('/').pop() || '';
+  const match = filename.match(/^(\d+_\d+_\d+)(?:_p\d+)?\.(?:png|jpe?g|webp)$/i);
+  if (match) {
+    const pngName = filename.replace(/\.(jpe?g|webp)$/i, '.png');
+    return `/images/${pngName}`;
+  }
+
+  // 3. Fallback for other uploads
+  if (clean.startsWith('/uploads/') || clean.startsWith('uploads/')) {
+    return clean.startsWith('/') ? clean : `/${clean}`;
+  }
+
+  // 4. Default relative png to /images/
+  if (clean.endsWith('.png')) {
+    return `/images/${clean}`;
+  }
+
+  return clean.startsWith('/') ? clean : `/${clean}`;
+}
+
+/**
+ * Returns the primary image URL for a given question.
+ */
 export function getQuestionImageUrl(q: any): string | null {
   if (!q) return null;
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
 
-  if (typeof q.imageUrl === 'string' && q.imageUrl.trim()) {
-    const trimmed = q.imageUrl.trim();
-    if (trimmed.startsWith('/uploads/') || trimmed.startsWith('uploads/')) {
-      return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-    }
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
-      return trimmed;
+  // 1. Direct questionImage object or string
+  if (q.questionImage) {
+    const src = typeof q.questionImage === 'string' ? q.questionImage : q.questionImage.src;
+    if (typeof src === 'string' && src.trim()) {
+      return cleanImagePath(src);
     }
   }
 
-  const qId = q.customId || q.id;
+  // 2. Direct imageUrl property
+  if (typeof q.imageUrl === 'string' && q.imageUrl.trim()) {
+    return cleanImagePath(q.imageUrl);
+  }
+
+  // 3. Fallback to API endpoint for source-image
+  const qId = q.questionId || q.customId || q.id;
   if (qId) {
     return `${baseUrl}/question-bank/questions/${qId}/source-image`;
   }
 
+  // 4. Legacy aliases
   let raw: string | null = null;
   if (typeof q.question_image === 'string' && q.question_image.trim()) raw = q.question_image.trim();
-  else if (typeof q.questionImage === 'string' && q.questionImage.trim()) raw = q.questionImage.trim();
   else if (typeof q.image === 'string' && q.image.trim()) raw = q.image.trim();
-  else if (q.image && typeof q.image === 'object' && typeof q.image.url === 'string' && q.image.url.trim()) raw = q.image.url.trim();
+  else if (q.image && typeof q.image === 'object' && typeof q.image.url === 'string') raw = q.image.url.trim();
 
   if (!raw) return null;
-  if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:')) {
-    return raw;
-  }
-  let clean = raw.replace(/\\/g, '/');
-  if (clean.startsWith('/uploads/')) return clean;
-  if (clean.startsWith('uploads/')) return `/${clean}`;
-  return `/uploads/diagrams/${clean.split('/').pop() || clean}`;
+  return cleanImagePath(raw);
 }
 
-export function getOptionCropYPercent(q: any): number | null {
-  if (!q) return null;
-  const vm = q.visualMetadata || q.cropCoordinates || q.cropBox || {};
-  if (typeof vm.cropYPercent === 'number') return vm.cropYPercent;
-  if (typeof vm.optionBoundaryY === 'number') {
-    return vm.optionBoundaryY <= 1 ? vm.optionBoundaryY * 100 : vm.optionBoundaryY;
+/**
+ * Returns all image URLs for a question (supporting multi-page PDF questions).
+ */
+export function getQuestionImageUrls(q: any): string[] {
+  if (!q) return [];
+  const urls: string[] = [];
+
+  const addOne = (src: any) => {
+    if (!src) return;
+    const str = typeof src === 'string' ? src : src.src || src.url;
+    if (typeof str === 'string' && str.trim()) {
+      urls.push(cleanImagePath(str));
+    }
+  };
+
+  if (Array.isArray(q.questionImages)) {
+    q.questionImages.forEach(addOne);
+  } else if (Array.isArray(q.questionImage)) {
+    q.questionImage.forEach(addOne);
+  } else if (Array.isArray(q.images)) {
+    q.images.forEach(addOne);
   }
-  if (typeof q.cropYPercent === 'number') return q.cropYPercent;
-  if (typeof q.optionBoundaryY === 'number') {
-    return q.optionBoundaryY <= 1 ? q.optionBoundaryY * 100 : q.optionBoundaryY;
+
+  if (urls.length === 0) {
+    const single = getQuestionImageUrl(q);
+    if (single) urls.push(single);
   }
-  return null;
+
+  return urls;
 }
 
 export function doesImageRequireReview(q: any): boolean {
   if (!q) return false;
-  if (q.verificationStatus === 'NEEDS_REVIEW' || q.reviewStatus === 'NEEDS_REVIEW' || q.needsReview) {
-    return true;
-  }
-  const containsEmbeddedOptions = !!(q.imageIncludesOptions || q.containsEmbeddedOptions || q.source_includes_options || q.hasEmbeddedOptions);
-  const hasStructuredOptions = Array.isArray(q.options) && q.options.length > 0;
-  const hasBoundaryCrop = getOptionCropYPercent(q) !== null;
+  const norm = normalizeGateQuestion(q);
+  return norm.status === 'needs_review';
+}
 
-  if (containsEmbeddedOptions && hasStructuredOptions && !hasBoundaryCrop) {
-    return true;
+export function getFormattedCorrectAnswer(q: any): { text: string; isSet: boolean } {
+  if (!q) return { text: 'Not Specified (Needs Review)', isSet: false };
+  const norm = normalizeGateQuestion(q);
+  const ca = norm.correctAnswer;
+
+  if (Array.isArray(ca) && ca.length > 0) {
+    return { text: ca.join(', '), isSet: true };
   }
-  return false;
+  if (typeof ca === 'string' && ca.trim()) {
+    return { text: ca.trim(), isSet: true };
+  }
+  if (typeof ca === 'number') {
+    return { text: String.fromCharCode(65 + ca), isSet: true };
+  }
+  if (typeof ca === 'object' && ca !== null && Object.keys(ca).length > 0) {
+    return { text: JSON.stringify(ca), isSet: true };
+  }
+  return { text: 'Not Specified (Needs Review)', isSet: false };
 }
 
 export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
@@ -89,7 +183,25 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   viewMode = 'QUESTION_BANK',
   showInternalMetadata = false,
   className = '',
+  defaultExpanded,
 }) => {
+  // 1. Canonical normalization into GateQuestion schema
+  const qNorm: GateQuestion = normalizeGateQuestion(question);
+
+  // 2. Expand/Collapse initial state:
+  // In STUDENT_EXAM mode, default to expanded so students can answer immediately.
+  // Otherwise, verified questions default to expanded, needs_review questions default to collapsed.
+  const isStudentExam = viewMode === 'STUDENT_EXAM';
+  const initialExpanded =
+    defaultExpanded !== undefined
+      ? defaultExpanded
+      : qNorm.display?.defaultExpanded !== undefined
+      ? qNorm.display.defaultExpanded
+      : isStudentExam
+      ? (qNorm.status === 'verified')
+      : qNorm.status === 'verified';
+
+  const [isExpanded, setIsExpanded] = useState<boolean>(initialExpanded);
   const [showOcrDrawer, setShowOcrDrawer] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
@@ -97,19 +209,94 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   const [recoverErrorMsg, setRecoverErrorMsg] = useState<string | null>(null);
   const [cacheBuster, setCacheBuster] = useState(0);
 
+  // Active image resolution and fallback tracking
+  const rawImageUrls = getQuestionImageUrls(question);
+  const [activeImageUrls, setActiveImageUrls] = useState<string[]>(rawImageUrls);
+
+  // Built-in high-resolution zoom modal state
+  const [isZoomModalOpen, setIsZoomModalOpen] = useState(false);
+  const [zoomedUrl, setZoomedUrl] = useState<string | null>(null);
+  const [zoomLevel, setZoomLevel] = useState<'fit' | 100 | 150 | 200 | 300 | 400>('fit');
+  const [naturalDims, setNaturalDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+  const ZOOM_LEVELS: Array<'fit' | 100 | 150 | 200 | 300 | 400> = ['fit', 100, 150, 200, 300, 400];
+
+  const handleZoomIn = () => {
+    const currentIndex = ZOOM_LEVELS.indexOf(zoomLevel);
+    if (currentIndex < ZOOM_LEVELS.length - 1) {
+      setZoomLevel(ZOOM_LEVELS[currentIndex + 1]);
+    }
+  };
+
+  const handleZoomOut = () => {
+    const currentIndex = ZOOM_LEVELS.indexOf(zoomLevel);
+    if (currentIndex > 0) {
+      setZoomLevel(ZOOM_LEVELS[currentIndex - 1]);
+    }
+  };
+
+  const handleResetZoom = () => {
+    setZoomLevel('fit');
+  };
+
+  useEffect(() => {
+    if (!isZoomModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsZoomModalOpen(false);
+      } else if (e.key === '+' || e.key === '=') {
+        handleZoomIn();
+      } else if (e.key === '-' || e.key === '_') {
+        handleZoomOut();
+      } else if (e.key === '0') {
+        handleResetZoom();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isZoomModalOpen, zoomLevel]);
+
+  useEffect(() => {
+    const nextNorm = normalizeGateQuestion(question);
+    const nextExpanded =
+      defaultExpanded !== undefined
+        ? defaultExpanded
+        : viewMode === 'STUDENT_EXAM'
+        ? true
+        : nextNorm.display?.defaultExpanded !== undefined
+        ? nextNorm.display.defaultExpanded
+        : nextNorm.status === 'verified';
+
+    setIsExpanded(nextExpanded);
+    setImageError(false);
+    setActiveImageUrls(getQuestionImageUrls(question));
+  }, [question?.id, question?.customId, question?.questionId, defaultExpanded, viewMode]);
+
   if (!question) {
     return (
-      <div className="p-4 bg-slate-50 border border-slate-200 rounded text-slate-500 text-sm italic">
+      <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-500 text-sm italic">
         No question data provided.
       </div>
     );
   }
 
-  const rawImageUrl = getQuestionImageUrl(question);
-  const imageUrl = rawImageUrl ? (cacheBuster ? `${rawImageUrl}?t=${cacheBuster}` : rawImageUrl) : null;
-  const cropYPercent = getOptionCropYPercent(question);
-  const requiresReview = doesImageRequireReview(question);
   const rawText = typeof question.text === 'string' ? question.text.replace(/!\[.*?\]\((.*?)\)/g, '').trim() : '';
+
+  const handleImageLoadError = (url: string, index: number) => {
+    console.warn(`Question image failed to load: ${url}`);
+    // If it was a relative path, try direct API endpoint as fallback
+    const qId = qNorm.questionId || question.id;
+    if (qId && !url.includes('/source-image')) {
+      const apiFallback = `/api/question-bank/questions/${qId}/source-image`;
+      setActiveImageUrls((prev) => {
+        const next = [...prev];
+        next[index] = apiFallback;
+        return next;
+      });
+      return;
+    }
+    setImageError(true);
+  };
 
   const handleRecoverImage = async () => {
     if (isRecovering) return;
@@ -117,7 +304,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       setIsRecovering(true);
       setRecoverErrorMsg(null);
       setRecoverSuccessMsg(null);
-      const qId = question.id || question.customId;
+      const qId = qNorm.questionId || question.id || question.customId;
       if (!qId) return;
 
       const res = await api.post(`/admin/questions/${qId}/image/recover`);
@@ -129,6 +316,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         testImg.onload = () => {
           setImageError(false);
           setCacheBuster(buster);
+          setActiveImageUrls([`${targetUrl}?t=${buster}`]);
           setRecoverSuccessMsg('Source image recovered successfully');
           setIsRecovering(false);
         };
@@ -144,121 +332,276 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     } catch (e: any) {
       console.warn('Image recovery failed:', e);
       const backendMsg = e?.response?.data?.message;
-      const status = e?.response?.status;
-      if (status === 404) {
-        setRecoverErrorMsg(backendMsg || 'Source PDF could not be found. Please re-import the source document.');
-      } else if (status === 401 || status === 403) {
-        setRecoverErrorMsg('Authentication or permission required to recover source images.');
-      } else if (backendMsg) {
-        setRecoverErrorMsg(backendMsg);
-      } else {
-        setRecoverErrorMsg('Failed to connect to backend recovery service.');
-      }
+      setRecoverErrorMsg(backendMsg || 'Failed to connect to backend recovery service.');
       setIsRecovering(false);
     }
   };
 
-  const qType = (question.type || 'MCQ').toUpperCase();
+  const qType = (qNorm.questionType || qNorm.type || question.questionType || question.type || 'MCQ').toUpperCase();
   const isNAT = qType === 'NAT';
+  const isMSQ = qType === 'MSQ';
+  const isMCQ = qType === 'MCQ';
   const isFreeResponse = qType === 'FREE_RESPONSE';
-  const isMatch = qType === 'MATCH_THE_FOLLOWING';
-  const isMCQorMSQ = qType === 'MCQ' || qType === 'MSQ';
 
-  const optionsList: any[] = Array.isArray(question.options) ? question.options : [];
+  // Extract initial NAT value from selectedAnswer or qNorm.studentAnswer
+  const getInitialNat = (): string => {
+    if (selectedAnswer !== undefined && selectedAnswer !== null) {
+      if (typeof selectedAnswer === 'object' && selectedAnswer !== null && 'value' in selectedAnswer) {
+        return String(selectedAnswer.value);
+      }
+      if (typeof selectedAnswer === 'number' || typeof selectedAnswer === 'string') {
+        return String(selectedAnswer);
+      }
+    }
+    if (qNorm.studentAnswer !== undefined && qNorm.studentAnswer !== null) {
+      if (typeof qNorm.studentAnswer === 'object' && 'value' in qNorm.studentAnswer) {
+        return String(qNorm.studentAnswer.value);
+      }
+      return String(qNorm.studentAnswer);
+    }
+    return '';
+  };
 
-  // Helper to check if an option index is selected
-  const isOptionSelected = (optIdx: number): boolean => {
+  const [natInputValue, setNatInputValue] = useState<string>(getInitialNat);
+  const [natValidationError, setNatValidationError] = useState<string | null>(null);
+  const [natSubmittedAnswer, setNatSubmittedAnswer] = useState<string | null>(() => {
+    const init = getInitialNat();
+    return init !== '' ? init : null;
+  });
+
+  useEffect(() => {
+    const current = getInitialNat();
+    if (current !== '') {
+      setNatInputValue(current);
+      setNatSubmittedAnswer(current);
+    }
+  }, [selectedAnswer, qNorm.studentAnswer]);
+
+  const handleNatSubmit = () => {
+    const trimmed = natInputValue.trim();
+    if (!trimmed) {
+      setNatValidationError('Please enter a numerical answer.');
+      return;
+    }
+    const isNumeric = /^-?\d+(?:\.\d+)?$/.test(trimmed);
+    if (!isNumeric) {
+      setNatValidationError('Please enter a valid numerical value (e.g. 12.5 or -5).');
+      return;
+    }
+    const numVal = parseFloat(trimmed);
+    if (isNaN(numVal)) {
+      setNatValidationError('Please enter a valid numerical value.');
+      return;
+    }
+    setNatValidationError(null);
+    setNatSubmittedAnswer(trimmed);
+    onSelectAnswer?.({ value: numVal });
+  };
+
+  // Option keys: Default to ['A', 'B', 'C', 'D'].
+  // If options array has 5 or more keys (e.g. A-E), preserve them.
+  const optionKeys: string[] =
+    Array.isArray(qNorm.options) && qNorm.options.length > 4
+      ? qNorm.options.map((opt, i) =>
+          typeof opt === 'object' && opt?.key ? String(opt.key).toUpperCase() : String.fromCharCode(65 + i)
+        )
+      : ['A', 'B', 'C', 'D'];
+
+  // Helper to check if an option is selected (supports keys 'A', 'B', etc. and 0-based indices)
+  const isOptionSelected = (key: string, optIdx: number): boolean => {
     if (selectedAnswer === undefined || selectedAnswer === null) return false;
     if (Array.isArray(selectedAnswer)) {
-      return selectedAnswer.includes(optIdx);
+      return (
+        selectedAnswer.includes(key) ||
+        selectedAnswer.includes(key.toUpperCase()) ||
+        selectedAnswer.includes(optIdx) ||
+        selectedAnswer.includes(String(optIdx))
+      );
+    }
+    if (typeof selectedAnswer === 'string') {
+      const cleanSel = selectedAnswer.trim().toUpperCase();
+      return cleanSel === key.toUpperCase() || cleanSel === String(optIdx);
     }
     if (typeof selectedAnswer === 'number') {
       return selectedAnswer === optIdx;
     }
-    if (typeof selectedAnswer === 'string') {
-      const parsed = parseInt(selectedAnswer, 10);
-      return !isNaN(parsed) && parsed === optIdx;
-    }
     return false;
   };
 
-  // Helper to check if an option index is correct
-  const isOptionCorrect = (optIdx: number): boolean => {
-    const ca = question.correctAnswer;
+  // Helper to check if an option is correct
+  const isOptionCorrect = (key: string, optIdx: number): boolean => {
+    const ca = qNorm.correctAnswer;
     if (ca === undefined || ca === null) return false;
+
     if (Array.isArray(ca)) {
-      return ca.includes(optIdx) || ca.includes(String.fromCharCode(65 + optIdx)) || ca.includes(String(optIdx));
+      return (
+        ca.includes(key) ||
+        ca.includes(key.toUpperCase()) ||
+        ca.includes(optIdx) ||
+        ca.includes(String.fromCharCode(65 + optIdx)) ||
+        ca.includes(String(optIdx))
+      );
     }
-    if (typeof ca === 'number') return ca === optIdx;
     if (typeof ca === 'string') {
-      if (ca.trim().toUpperCase() === String.fromCharCode(65 + optIdx)) return true;
-      if (ca.trim() === String(optIdx)) return true;
+      const cleanCa = ca.trim().toUpperCase();
+      return cleanCa === key.toUpperCase() || cleanCa === String.fromCharCode(65 + optIdx) || cleanCa === String(optIdx);
+    }
+    if (typeof ca === 'number') {
+      return ca === optIdx;
     }
     return false;
   };
 
-  const handleOptionClick = (optIdx: number) => {
+  // Handle option click (Only records student answer; does NOT reveal correctness)
+  const handleOptionClick = (key: string, optIdx: number) => {
     if (!onSelectAnswer || viewMode === 'SOLUTION_VIEW') return;
 
-    if (qType === 'MCQ') {
-      onSelectAnswer([optIdx]);
-    } else if (qType === 'MSQ') {
+    if (isMSQ) {
       const currentSelected = Array.isArray(selectedAnswer) ? [...selectedAnswer] : [];
-      const indexInSel = currentSelected.indexOf(optIdx);
+      const indexInSel =
+        currentSelected.indexOf(optIdx) >= 0
+          ? currentSelected.indexOf(optIdx)
+          : currentSelected.indexOf(key);
       if (indexInSel >= 0) {
         currentSelected.splice(indexInSel, 1);
       } else {
         currentSelected.push(optIdx);
       }
       onSelectAnswer(currentSelected);
+    } else {
+      // MCQ single select
+      onSelectAnswer([optIdx]);
+    }
+  };
+
+  const handleOpenZoom = (targetUrl?: string) => {
+    const url = targetUrl || activeImageUrls[0];
+    if (!url) return;
+    if (onZoomImage) {
+      onZoomImage(url, `Question ${qNorm.questionId}`);
+    } else {
+      setZoomedUrl(url);
+      setZoomLevel('fit');
+      setIsZoomModalOpen(true);
     }
   };
 
   const handleOpenFullPdfPage = async () => {
     try {
-      const docId = question.sourceDocumentId || question.sourceDocument?.id || 'import_1788025494809';
-      const pageNum = question.sourcePage || 447;
+      const docId = qNorm.source?.pdf || question.sourceDocumentId || question.sourceDocument?.id || '2014_CS.pdf';
+      const pageNum = qNorm.source?.page || question.sourcePage || 29;
       const res = await api.get(`/ai/documents/${docId}/download`, { responseType: 'blob' });
       const blobUrl = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
       window.open(`${blobUrl}#page=${pageNum}`, '_blank');
     } catch (e: any) {
       console.warn('Failed to open PDF document:', e);
-      window.open(`/api/question-bank/questions/${question.customId || question.id}/source-image`, '_blank');
+      window.open(`/api/question-bank/questions/${qNorm.questionId}/source-image`, '_blank');
     }
   };
 
-  return (
-    <div className={`space-y-6 ${className}`}>
-      {/* Source Metadata Header Bar */}
-      {(question.sourceDocumentId || question.sourceDocument || question.sourcePage) && (
-        <div className="p-2.5 bg-slate-100 border border-slate-200 rounded-md text-xs flex flex-wrap items-center justify-between gap-2 shadow-xs">
-          <div className="flex items-center gap-2 font-mono text-slate-700">
-            <FileText className="w-4 h-4 text-blue-600 shrink-0" />
-            <span className="font-bold">Source:</span>
-            <span>{question.sourceDocument?.fileName || question.sourceDocument?.title || question.sourceDocumentId || '2014_CS.pdf'}</span>
-            <span className="text-slate-400">•</span>
-            <span className="font-bold">Page:</span>
-            <span>{question.sourcePage || '447'}</span>
+  // =========================================================================
+  // 1. COLLAPSED QUESTION VIEW
+  // For questions marked status="needs_review", render collapsed by default
+  // in review workflows (can be expanded with a single click).
+  // =========================================================================
+  if (!isExpanded) {
+    return (
+      <div className={`erp-card p-0 overflow-hidden border border-amber-300 bg-amber-50/40 rounded-lg shadow-xs hover:border-amber-400 transition-all ${className}`}>
+        <div
+          onClick={() => setIsExpanded(true)}
+          className="p-3.5 flex items-center justify-between cursor-pointer select-none"
+          title="Click to expand question view"
+        >
+          <div className="flex items-center gap-3">
+            <span className="font-mono font-bold text-slate-800 text-sm">
+              {qNorm.questionId}
+            </span>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-200 text-amber-900 border border-amber-300 uppercase">
+              NEEDS REVIEW
+            </span>
           </div>
-          <button
-            type="button"
-            onClick={handleOpenFullPdfPage}
-            className="px-2.5 py-1 bg-blue-700 hover:bg-blue-800 text-white rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors shadow-xs"
-            title="Open original source PDF document at source page"
+
+          <div className="flex items-center gap-2 text-xs font-semibold text-amber-900">
+            <span>Expand</span>
+            <ChevronDown className="w-4 h-4 text-amber-700" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // 2. EXPANDED QUESTION VIEW
+  // The original question image is the COMPLETE source of truth.
+  // The student reads EVERYTHING from the original question image:
+  // - Question text, Equations, Diagrams, Tables, Figures, All answer choices.
+  // The A/B/C/D controls in the UI are ONLY answer-selection controls.
+  // THEY MUST NEVER DISPLAY OPTION TEXT.
+  // =========================================================================
+  return (
+    <div className={`space-y-5 bg-white p-5 border border-slate-200 rounded-xl shadow-xs ${className}`}>
+      {/* Top Header Row with Question ID, Status Badge & Collapse Toggle */}
+      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <span className="font-mono font-bold text-lg text-[#1E40AF]">
+            Question {qNorm.questionId}
+          </span>
+          <span
+            className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold uppercase border ${
+              qNorm.status === 'verified'
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                : 'bg-amber-50 text-amber-800 border-amber-300'
+            }`}
           >
-            <Maximize2 className="w-3 h-3" />
-            <span>Open Full Source Page</span>
-          </button>
+            {qNorm.status === 'verified' ? 'Verified' : 'Needs Review'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {qNorm.status === 'needs_review' && !isStudentExam && (
+            <button
+              type="button"
+              onClick={() => setIsExpanded(false)}
+              className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 py-1 px-2.5 rounded-md hover:bg-slate-100 transition-colors"
+              title="Collapse question view"
+            >
+              <span>Collapse</span>
+              <ChevronUp className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Source Metadata Header Bar (Non-clickable metadata only — No Open Source Page button) */}
+      {(qNorm.source?.pdf || qNorm.source?.page || (qNorm.source as any)?.pages) && (
+        <div className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs flex items-center gap-2 font-mono text-slate-600 w-fit">
+          <FileText className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <span className="font-semibold text-slate-700">Source:</span>
+          <span>{qNorm.source?.pdf || 'filter1_volume3 (1)(1).pdf'}</span>
+          <span className="text-slate-300">•</span>
+          <span className="font-semibold text-slate-700">Page:</span>
+          <span>
+            {Array.isArray((qNorm.source as any)?.pages)
+              ? (qNorm.source as any).pages.join(', ')
+              : Array.isArray(qNorm.source?.page)
+              ? (qNorm.source?.page as any[]).join(', ')
+              : qNorm.source?.page || '29'}
+          </span>
         </div>
       )}
 
-      {/* Verification Status Warning / Banner if NEEDS_REVIEW */}
-      {requiresReview && (
+      {/* Needs Review Banner if Status is needs_review */}
+      {qNorm.status === 'needs_review' && !isStudentExam && (
         <div className="p-3 bg-amber-50 border border-amber-300 rounded-md text-amber-900 text-xs flex items-center justify-between gap-2 shadow-sm">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4.5 h-4.5 text-amber-600 shrink-0" />
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
             <span className="font-semibold">
-              NEEDS REVIEW: Question image boundary or option extraction requires manual review.
+              {qNorm.reviewReasonMessage ||
+                (qNorm.reviewReason === 'ANSWER_MISSING' || !qNorm.correctAnswer || qNorm.correctAnswer === 'needs_review'
+                  ? 'Needs review: answer key is missing.'
+                  : !qNorm.questionImage
+                  ? 'Needs review: question image is missing.'
+                  : 'Needs review: question image or boundaries require verification.')}
             </span>
           </div>
           <span className="px-2 py-0.5 bg-amber-200 text-amber-900 rounded font-mono text-[10px] font-bold uppercase shrink-0">
@@ -267,7 +610,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         </div>
       )}
 
-      {/* Recover Success Banner */}
+      {/* Recovery Success Banner */}
       {recoverSuccessMsg && (
         <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-md text-emerald-900 text-xs flex items-center gap-2 shadow-xs">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -275,108 +618,171 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         </div>
       )}
 
-      {/* 1. PRIMARY QUESTION DISPLAY: ORIGINAL PDF QUESTION IMAGE */}
-      {imageUrl && !imageError ? (
-        <div className="space-y-2">
-          <div className="relative group inline-block max-w-full bg-white p-2 border border-slate-200 rounded-lg shadow-sm">
-            <img
-              src={imageUrl}
-              alt="Original Question Image"
-              className="max-h-[550px] w-auto object-contain cursor-zoom-in rounded"
-              style={
-                cropYPercent && cropYPercent > 0 && cropYPercent < 100
-                  ? { clipPath: `inset(0 0 ${100 - cropYPercent}% 0)` }
-                  : undefined
-              }
-              onError={() => setImageError(true)}
-              onClick={() =>
-                onZoomImage?.(
-                  imageUrl,
-                  cropYPercent ? 'Original PDF Question Image (Cropped Question Region)' : 'Original PDF Question Image'
-                )
-              }
-            />
-            {onZoomImage && (
-              <button
-                type="button"
-                onClick={() =>
-                  onZoomImage(
-                    imageUrl,
-                    cropYPercent ? 'Original PDF Question Image (Cropped Question Region)' : 'Original PDF Question Image'
-                  )
-                }
-                className="absolute top-3 right-3 px-2 py-1 bg-slate-900/80 hover:bg-slate-900 text-white rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 shadow"
+      {/* =========================================================================
+          3. LARGE ORIGINAL QUESTION IMAGE — COMPLETE SOURCE OF TRUTH
+          Contains stem, equations, diagrams, tables, figures, original choices A/B/C/D.
+          Preserves aspect ratio, full resolution, readable, zoomable.
+          Supports questions spanning multiple PDF pages.
+          ========================================================================= */}
+      {activeImageUrls.length > 0 && !imageError ? (
+        <div className="space-y-4">
+          {activeImageUrls.map((url, imgIdx) => {
+            const finalUrl = cacheBuster ? `${url}?t=${cacheBuster}` : url;
+            return (
+              <div
+                key={imgIdx}
+                className="relative group w-full bg-white p-3 border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col items-center"
               >
-                <Maximize2 className="w-3.5 h-3.5" />
-                <span>Zoom Image</span>
-              </button>
-            )}
-          </div>
+                {activeImageUrls.length > 1 && (
+                  <div className="w-full text-left font-mono text-xs text-slate-500 font-semibold mb-2">
+                    Source Page / Section {imgIdx + 1}
+                  </div>
+                )}
+                <div className="w-full flex justify-center overflow-hidden">
+                  <img
+                    src={finalUrl}
+                    alt={`Question ${qNorm.questionId} Complete Question Image`}
+                    style={{ width: '100%', height: 'auto', objectFit: 'contain' }}
+                    className="w-full max-w-4xl rounded-lg cursor-zoom-in transition-all"
+                    onError={() => handleImageLoadError(url, imgIdx)}
+                    onClick={() => handleOpenZoom(finalUrl)}
+                  />
+                </div>
+
+                {/* Prominent Zoom Button */}
+                <div className="absolute top-4 right-4 flex items-center gap-2 opacity-90 group-hover:opacity-100 transition-opacity">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenZoom(finalUrl)}
+                    className="px-3 py-1.5 bg-slate-900/85 hover:bg-slate-900 text-white rounded-md text-xs font-medium flex items-center gap-1.5 shadow transition-colors"
+                    title="Click to Zoom Image"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5" />
+                    <span>Zoom Image</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : imageError ? (
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs font-mono space-y-2 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <div className="font-bold flex items-center gap-1.5">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>
-                {question.sourceDocumentId || question.sourcePage
-                  ? `Source document temporarily unavailable (${question.sourceDocumentId || 'Recorded'} • Page ${question.sourcePage || 'N/A'})`
-                  : 'Original source unavailable because this question has no source document/page metadata.'}
-              </span>
+              <span>Source document temporarily unavailable for question {qNorm.questionId}</span>
             </div>
-            {question.sourceDocumentId || question.sourcePage ? (
-              <button
-                type="button"
-                disabled={isRecovering}
-                onClick={handleRecoverImage}
-                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-sans text-xs font-bold transition-colors shrink-0 shadow-sm disabled:opacity-50"
-              >
-                {isRecovering ? 'Recovering...' : 'Recover Source Image'}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              disabled={isRecovering}
+              onClick={handleRecoverImage}
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-sans text-xs font-bold transition-colors shrink-0 shadow-sm disabled:opacity-50"
+            >
+              {isRecovering ? 'Recovering...' : 'Recover Source Image'}
+            </button>
           </div>
-          {recoverErrorMsg ? (
+          {recoverErrorMsg && (
             <p className="text-xs font-sans text-rose-700 font-semibold bg-rose-50 p-2 rounded border border-rose-200">
               {recoverErrorMsg}
-            </p>
-          ) : (
-            <p className="text-[11px] text-amber-700 font-sans">
-              Document: {question.sourceDocument?.fileName || question.sourceDocumentId || 'N/A'} • Page: {question.sourcePage || 'N/A'}
             </p>
           )}
         </div>
       ) : (
-        /* Fallback: Text only rendered if NO source PDF question image exists */
-        <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 text-base leading-relaxed font-medium whitespace-pre-wrap">
-          {rawText || <span className="text-slate-400 italic">No question text or image available</span>}
+        /* Text Fallback: only if no question image exists */
+        <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-sm leading-relaxed font-medium">
+          {rawText || <span className="text-slate-400 italic">No question image or text available.</span>}
         </div>
       )}
 
-      {/* 2. STRUCTURED OPTIONS OR INPUT AREA BELOW QUESTION IMAGE */}
-      <div className="space-y-3 pt-2">
+      {/* =========================================================================
+          4. ANSWER-SELECTION CONTROLS (ONLY A, B, C, D — NEVER OPTION TEXT)
+          ========================================================================= */}
+      <div className="space-y-4 pt-1">
         {isNAT ? (
-          <div className="max-w-md space-y-2 bg-slate-50 p-4 border border-slate-200 rounded-lg">
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Numerical Answer Entry (NAT):
+          <div className="space-y-3 pt-2 max-w-md">
+            <label htmlFor={`nat-input-${qNorm.questionId}`} className="block text-sm font-semibold text-slate-800">
+              Your Answer:
             </label>
-            <input
-              type="number"
-              step="any"
-              disabled={viewMode === 'SOLUTION_VIEW'}
-              value={selectedAnswer !== undefined && selectedAnswer !== null ? selectedAnswer : ''}
-              onChange={(e) => onSelectAnswer?.(e.target.value)}
-              placeholder="Enter numerical value"
-              className="erp-input font-mono font-bold text-emerald-700 bg-white text-base w-full"
-            />
-            <p className="text-[11px] text-slate-500 font-mono">
-              Enter exact calculation result.
-            </p>
-            {showCorrectAnswer && (
-              <div className="mt-3 text-xs font-mono text-emerald-800 bg-emerald-50 p-2.5 rounded border border-emerald-200">
-                <span className="font-bold">Official NAT Answer: </span>
-                {typeof question.correctAnswer === 'object' && question.correctAnswer !== null
-                  ? JSON.stringify(question.correctAnswer)
-                  : String(question.correctAnswer ?? question.rawAnswer ?? 'N/A')}
+            <div className="flex items-center gap-2">
+              <input
+                id={`nat-input-${qNorm.questionId}`}
+                type="text"
+                disabled={viewMode === 'SOLUTION_VIEW'}
+                value={natInputValue}
+                onChange={(e) => {
+                  setNatInputValue(e.target.value);
+                  if (natValidationError) setNatValidationError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleNatSubmit();
+                  }
+                }}
+                placeholder="Enter numerical value"
+                className="flex-1 px-3.5 py-2.5 bg-white border border-slate-300 rounded-lg text-slate-900 font-mono text-base focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+              />
+              {viewMode !== 'SOLUTION_VIEW' && (
+                <button
+                  id={`nat-submit-${qNorm.questionId}`}
+                  type="button"
+                  onClick={handleNatSubmit}
+                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer shadow-xs whitespace-nowrap"
+                >
+                  Submit Answer
+                </button>
+              )}
+            </div>
+
+            {natValidationError && (
+              <div id={`nat-error-${qNorm.questionId}`} className="text-xs text-rose-600 font-medium flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span>{natValidationError}</span>
+              </div>
+            )}
+
+            {/* In normal exam mode: show student's submitted answer once entered */}
+            {natSubmittedAnswer !== null && viewMode !== 'SOLUTION_VIEW' && !showCorrectAnswer && (
+              <div id={`nat-student-answer-${qNorm.questionId}`} className="text-sm text-slate-700 font-medium pt-1">
+                Your Answer: <span className="font-mono font-bold text-blue-700">{natSubmittedAnswer}</span>
+              </div>
+            )}
+
+            {/* In review/solution mode, show correct answer & comparison */}
+            {(showCorrectAnswer || viewMode === 'SOLUTION_VIEW') && (
+              <div className="mt-4 p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs font-mono flex flex-wrap items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="font-sans font-bold text-emerald-900">Correct Answer:</span>
+                  <span className="px-2.5 py-0.5 bg-emerald-200 text-emerald-950 font-bold rounded text-sm">
+                    {typeof qNorm.correctAnswer === 'object' && qNorm.correctAnswer !== null && 'value' in qNorm.correctAnswer
+                      ? qNorm.correctAnswer.value
+                      : String(qNorm.correctAnswer ?? 'N/A')}
+                  </span>
+                  {typeof qNorm.correctAnswer === 'object' && qNorm.correctAnswer?.range && (
+                    <span className="text-[11px] text-emerald-800 font-sans">
+                      (Official Range: {qNorm.correctAnswer.range.from} to {qNorm.correctAnswer.range.to})
+                    </span>
+                  )}
+                </div>
+
+                {natSubmittedAnswer !== null && (
+                  <div className="flex items-center gap-2 text-slate-700 font-sans">
+                    <span className="font-semibold text-slate-500">Your Answer:</span>
+                    <span className="font-mono font-bold px-2 py-0.5 rounded text-xs bg-slate-100 border border-slate-200 text-slate-800">
+                      {natSubmittedAnswer}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                        compareNatAnswer(natSubmittedAnswer, qNorm.correctAnswer)
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-rose-100 text-rose-800'
+                      }`}
+                    >
+                      {compareNatAnswer(natSubmittedAnswer, qNorm.correctAnswer) ? 'Correct' : 'Incorrect'}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -393,147 +799,255 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
               placeholder="Type your response here..."
               className="erp-input font-sans text-slate-800 bg-white w-full"
             />
-            {showCorrectAnswer && question.correctAnswer && (
-              <div className="mt-3 text-xs text-slate-700 bg-blue-50 p-2.5 rounded border border-blue-200">
-                <span className="font-bold text-[#1E40AF]">Reference Answer: </span>
-                {typeof question.correctAnswer === 'object'
-                  ? JSON.stringify(question.correctAnswer)
-                  : String(question.correctAnswer)}
-              </div>
-            )}
           </div>
-        ) : isMatch ? (
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
-            <div className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Match the Following Columns:
-            </div>
-            <div className="grid grid-cols-2 gap-4 text-xs font-medium text-slate-800">
-              <div className="space-y-2 p-3 bg-white border border-slate-200 rounded">
-                <div className="font-bold text-slate-900 border-b pb-1">Group I</div>
-                {((question.options as any)?.group1 || ['1', '2', '3']).map((item: any, i: number) => (
-                  <div key={i} className="py-1 font-mono">
-                    {i + 1}. {getOptionText(item) || String(item)}
-                  </div>
-                ))}
-              </div>
-              <div className="space-y-2 p-3 bg-white border border-slate-200 rounded">
-                <div className="font-bold text-slate-900 border-b pb-1">Group II</div>
-                {((question.options as any)?.group2 || ['P', 'Q', 'R']).map((item: any, i: number) => (
-                  <div key={i} className="py-1 font-mono">
-                    {String.fromCharCode(80 + i)}. {getOptionText(item) || String(item)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        ) : isMCQorMSQ ? (
-          optionsList.length > 0 ? (
-            <div className="space-y-2.5">
-              {optionsList.map((opt: any, optIdx: number) => {
-                const selected = isOptionSelected(optIdx);
-                const correct = isOptionCorrect(optIdx);
+        ) : (
+          /* MCQ / MSQ: Render ONLY [ A ] [ B ] [ C ] [ D ] controls.
+             Buttons contain ONLY A, B, C, D. No additional text.
+             Selecting an answer records/highlights student answer.
+             Does NOT reveal the correct answer during student solving sessions. */
+          <div className="py-2">
+            <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 py-4">
+              {optionKeys.map((key, optIdx) => {
+                const selected = isOptionSelected(key, optIdx);
+                const correct = isOptionCorrect(key, optIdx);
 
-                let cardBorderClass = 'border-slate-200 bg-white hover:bg-slate-50';
-                let badgeClass = 'bg-slate-100 text-slate-700 border-slate-300';
+                let buttonClasses = '';
 
-                if (showCorrectAnswer) {
+                if (showCorrectAnswer || viewMode === 'SOLUTION_VIEW') {
+                  // Review / Solution Mode: reveal correct answer and candidate response
                   if (correct && selected) {
-                    cardBorderClass = 'border-emerald-500 bg-emerald-50/80 text-emerald-900 shadow-sm';
-                    badgeClass = 'bg-emerald-600 text-white';
+                    buttonClasses =
+                      'bg-emerald-600 border-2 border-emerald-600 text-white shadow-md ring-4 ring-emerald-100 scale-105';
                   } else if (correct) {
-                    cardBorderClass = 'border-emerald-400 bg-emerald-50/50 text-emerald-900';
-                    badgeClass = 'bg-emerald-600 text-white';
+                    buttonClasses =
+                      'bg-emerald-50 border-2 border-emerald-500 text-emerald-800 ring-2 ring-emerald-200 font-extrabold';
                   } else if (selected) {
-                    cardBorderClass = 'border-red-400 bg-red-50/80 text-red-900';
-                    badgeClass = 'bg-red-600 text-white';
+                    buttonClasses =
+                      'bg-rose-600 border-2 border-rose-600 text-white shadow-md ring-4 ring-rose-100 scale-105';
+                  } else {
+                    buttonClasses = 'bg-slate-50 border-2 border-slate-200 text-slate-400';
                   }
                 } else if (selected) {
-                  cardBorderClass = 'border-[#1E40AF] bg-blue-50/80 text-slate-900 shadow-sm';
-                  badgeClass = 'bg-[#1E40AF] text-white';
+                  // Normal Student Solving Mode: Selected state (records student choice, does NOT reveal correctness)
+                  buttonClasses =
+                    'bg-[#1E40AF] border-2 border-[#1E40AF] text-white shadow-md ring-4 ring-blue-100 scale-105 font-extrabold';
+                } else {
+                  // Normal Student Solving Mode: Unselected state
+                  buttonClasses =
+                    'bg-white border-2 border-slate-300 text-slate-800 hover:border-[#1E40AF] hover:text-[#1E40AF] hover:bg-blue-50/60 shadow-xs';
                 }
 
                 return (
                   <button
-                    key={optIdx}
+                    key={key}
                     type="button"
+                    id={`answer-btn-${qNorm.questionId}-${key}`}
                     disabled={viewMode === 'SOLUTION_VIEW'}
-                    onClick={() => handleOptionClick(optIdx)}
-                    className={`w-full text-left p-3.5 rounded-md border transition-all flex items-start space-x-3.5 ${cardBorderClass}`}
+                    onClick={() => handleOptionClick(key, optIdx)}
+                    className={`w-14 h-14 sm:w-16 sm:h-16 rounded-xl flex items-center justify-center font-mono font-bold text-xl sm:text-2xl transition-all duration-150 select-none cursor-pointer ${buttonClasses}`}
+                    title={`Option ${key}`}
                   >
-                    <div
-                      className={`w-7 h-7 rounded flex items-center justify-center font-mono font-bold text-xs shrink-0 mt-0.5 border ${badgeClass}`}
-                    >
-                      {String.fromCharCode(65 + optIdx)}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <QuestionOptionContent
-                        option={opt}
-                        optionIndex={optIdx}
-                        isSelected={selected}
-                        isCorrect={showCorrectAnswer ? correct : undefined}
-                        onZoomImage={onZoomImage}
-                        textClassName="text-sm font-medium"
-                      />
-                    </div>
-                    {showCorrectAnswer && (
-                      <div className="shrink-0 self-center pl-2">
-                        {correct ? (
-                          <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                        ) : selected ? (
-                          <XCircle className="w-5 h-5 text-red-600" />
-                        ) : null}
-                      </div>
-                    )}
+                    {key}
                   </button>
                 );
               })}
             </div>
-          ) : (
-            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-md space-y-2">
-              <div className="text-xs text-slate-600 font-medium flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-blue-500 inline-block shrink-0"></span>
-                <span>Option choices are visible in the question image above.</span>
-              </div>
-              {showCorrectAnswer && (
-                <div className="text-xs font-mono font-bold text-emerald-800 bg-emerald-50 p-2.5 rounded border border-emerald-200 flex items-center justify-between">
-                  <span>Official Answer:</span>
-                  <span className="px-2 py-0.5 bg-emerald-100 border border-emerald-300 rounded text-emerald-900 font-bold">
-                    {Array.isArray(question.correctAnswer) && question.correctAnswer.length > 0
-                      ? question.correctAnswer.join(', ')
-                      : String(question.correctAnswer ?? question.rawAnswer ?? 'N/A')}
+
+            {/* =========================================================================
+                5. CORRECT ANSWER DISPLAY (ONLY REVEALED IN REVIEW / SOLUTION MODE)
+                Hidden completely during student exam / solving session.
+                ========================================================================= */}
+            {(showCorrectAnswer || viewMode === 'SOLUTION_VIEW') && (
+              <div className="mt-4 p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs font-mono flex flex-wrap items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="font-sans font-bold text-emerald-900">Official Correct Answer:</span>
+                  <span className="px-2.5 py-0.5 bg-emerald-200 text-emerald-950 font-bold rounded text-sm">
+                    {Array.isArray(qNorm.correctAnswer) && qNorm.correctAnswer.length > 0
+                      ? qNorm.correctAnswer.join(', ')
+                      : String(qNorm.correctAnswer ?? 'N/A')}
                   </span>
                 </div>
-              )}
-            </div>
-          )
-        ) : null}
+
+                {selectedAnswer !== undefined && selectedAnswer !== null && (
+                  <div className="flex items-center gap-2 text-slate-700 font-sans">
+                    <span className="font-semibold text-slate-500">Student Response:</span>
+                    <span className="font-mono font-bold px-2 py-0.5 rounded text-xs bg-slate-100 border border-slate-200 text-slate-800">
+                      {Array.isArray(selectedAnswer)
+                        ? selectedAnswer
+                            .map((item) =>
+                              typeof item === 'number'
+                                ? String.fromCharCode(65 + item)
+                                : String(item).toUpperCase()
+                            )
+                            .join(', ')
+                        : typeof selectedAnswer === 'number'
+                        ? String.fromCharCode(65 + selectedAnswer)
+                        : String(selectedAnswer).toUpperCase()}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* 3. INTERNAL MACHINE-READABLE / SEARCH LAYER (OPTIONAL COLLAPSIBLE DRAWER FOR ADMIN/DEBUGGING) */}
+      {/* Internal Machine-Readable Drawer (Optional for dev/admin inspection) */}
       {(showInternalMetadata || viewMode === 'ADMIN_REVIEW' || viewMode === 'QUESTION_BANK') && (
-        <div className="pt-3 border-t border-slate-200 text-xs">
+        <div className="pt-3 border-t border-slate-100 text-xs">
           <button
             type="button"
             onClick={() => setShowOcrDrawer((p) => !p)}
             className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 font-mono text-[11px] font-medium transition-colors"
           >
             {showOcrDrawer ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-            <span>Internal OCR & Search Metadata Layer ({showOcrDrawer ? 'Hide' : 'Show'})</span>
+            <span>Internal OCR & Metadata Layer ({showOcrDrawer ? 'Hide' : 'Show'})</span>
           </button>
           {showOcrDrawer && (
             <div className="mt-2 p-3 bg-slate-900 text-slate-200 rounded-md font-mono text-xs space-y-2">
               <div>
-                <span className="text-blue-400 font-bold">OCR Text (Search/RAG index):</span>
+                <span className="text-blue-400 font-bold">Internal OCR Search Text:</span>
                 <p className="mt-1 whitespace-pre-wrap text-slate-300">{rawText || '—'}</p>
               </div>
               <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400 pt-1 border-t border-slate-800">
-                <div>Source Image: {imageUrl || 'None'}</div>
-                <div>Crop Y%: {cropYPercent !== null ? `${cropYPercent}%` : 'Full Image'}</div>
-                <div>Verification Status: {question.verificationStatus || 'VERIFIED'}</div>
-                <div>Question ID: {question.customId || question.id || 'N/A'}</div>
+                <div>Question ID: {qNorm.questionId}</div>
+                <div>Status: {qNorm.status}</div>
+                <div>Image Sources: {activeImageUrls.join(', ') || 'None'}</div>
+                <div>Correct Answer: {JSON.stringify(qNorm.correctAnswer)}</div>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Built-in Full-Resolution Image Zoom Modal */}
+      {isZoomModalOpen && zoomedUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4"
+          onClick={() => setIsZoomModalOpen(false)}
+        >
+          <div
+            className="relative bg-slate-900 rounded-2xl shadow-2xl max-w-6xl max-h-[92vh] w-full flex flex-col overflow-hidden border border-slate-700"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex flex-wrap items-center justify-between px-5 py-3.5 bg-slate-900 text-white border-b border-slate-800 gap-3">
+              <div className="flex items-center gap-3">
+                <span className="font-mono font-bold text-sm text-blue-400">
+                  Question {qNorm.questionId}
+                </span>
+                <span className="text-xs text-slate-400 hidden sm:inline">
+                  Original 300 DPI High-Resolution Image
+                </span>
+                {naturalDims.width > 0 && (
+                  <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-slate-800 text-slate-300 border border-slate-700">
+                    {naturalDims.width} × {naturalDims.height} px
+                  </span>
+                )}
+              </div>
+
+              {/* Zoom Controls Bar */}
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                {/* Discrete Zoom Level Selector */}
+                <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                  {ZOOM_LEVELS.map((lvl) => (
+                    <button
+                      key={lvl}
+                      type="button"
+                      onClick={() => setZoomLevel(lvl)}
+                      className={`px-2 py-1 rounded text-xs font-mono transition-colors ${
+                        zoomLevel === lvl
+                          ? 'bg-blue-600 text-white font-bold shadow-xs'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                      }`}
+                      title={lvl === 'fit' ? 'Fit to Viewport' : `Zoom to ${lvl}%`}
+                    >
+                      {lvl === 'fit' ? 'Fit' : `${lvl}%`}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="h-5 w-px bg-slate-700 mx-1 hidden sm:block" />
+
+                <button
+                  type="button"
+                  disabled={zoomLevel === ZOOM_LEVELS[ZOOM_LEVELS.length - 1]}
+                  onClick={handleZoomIn}
+                  className="p-1.5 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent rounded text-slate-300 hover:text-white transition-colors"
+                  title="Zoom In (+)"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  disabled={zoomLevel === 'fit'}
+                  onClick={handleZoomOut}
+                  className="p-1.5 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent rounded text-slate-300 hover:text-white transition-colors"
+                  title="Zoom Out (-)"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetZoom}
+                  className="p-1.5 hover:bg-slate-800 rounded text-slate-300 hover:text-white transition-colors"
+                  title="Reset to Fit (0)"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsZoomModalOpen(false)}
+                  className="p-1.5 hover:bg-rose-900/40 rounded text-slate-300 hover:text-rose-400 ml-1 sm:ml-2 transition-colors"
+                  title="Close (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body with Pan/Scroll viewport */}
+            <div className="flex-1 overflow-auto p-4 sm:p-8 bg-slate-950 flex items-center justify-center min-h-[420px] max-h-[78vh]">
+              <div className="inline-block m-auto transition-all duration-150">
+                <img
+                  src={zoomedUrl}
+                  alt={`Question ${qNorm.questionId} Full Resolution Image`}
+                  style={
+                    zoomLevel === 'fit'
+                      ? {
+                          maxWidth: '100%',
+                          maxHeight: '72vh',
+                          width: 'auto',
+                          height: 'auto',
+                          objectFit: 'contain',
+                          display: 'block',
+                        }
+                      : {
+                          width: `${Math.round((naturalDims.width || 2168) * (zoomLevel / 100))}px`,
+                          maxWidth: 'none',
+                          height: 'auto',
+                          display: 'block',
+                          imageRendering: 'auto',
+                        }
+                  }
+                  className="rounded shadow-2xl bg-white select-none"
+                  onLoad={(e) => {
+                    const img = e.currentTarget;
+                    if (img.naturalWidth && img.naturalHeight) {
+                      setNaturalDims({ width: img.naturalWidth, height: img.naturalHeight });
+                    }
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer status bar */}
+            <div className="px-5 py-2 bg-slate-900 border-t border-slate-800 text-[11px] font-mono text-slate-400 flex items-center justify-between">
+              <span>Current Scale: {zoomLevel === 'fit' ? 'Fit Viewport' : `${zoomLevel}%`}</span>
+              <span className="text-slate-500">Press Esc to close • Scroll to inspect details</span>
+            </div>
+          </div>
         </div>
       )}
     </div>
