@@ -21,4 +21,8 @@ uploads/
 scratch/
 **/scratch/
 frontend/public/
-
+backend/public/
+.next_staging/
+**/.next_staging/
+backups/
+**/backups/

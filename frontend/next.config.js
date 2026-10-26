@@ -3,11 +3,13 @@ const backendApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/
 const backendBaseUrl = (process.env.NEXT_PUBLIC_SOCKET_URL || backendApiUrl.replace(/\/api\/?$/, '')).replace(/\/$/, '');
 
 const nextConfig = {
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   reactStrictMode: true,
   env: {
     NEXT_PUBLIC_API_URL: backendApiUrl,
     NEXT_PUBLIC_SOCKET_URL: backendBaseUrl,
   },
+
   async rewrites() {
     return [
       {

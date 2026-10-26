@@ -244,7 +244,18 @@ export function validateGateQuestion(q: GateQuestion): GateQuestionValidationRes
     reviewReasonMessage = 'Needs review: question identifier is missing or uncertain.';
   }
 
-  // 2. questionImage exists
+  // 2. Question Type Check: Genuinely unknown or ambiguous question types must remain in Review
+  const qType = String(q.questionType || q.type || '').trim().toUpperCase();
+  const isKnownType = qType === 'MCQ' || qType === 'MSQ' || qType === 'NAT';
+  if (!isKnownType) {
+    errors.push(`questionType '${qType}' is unknown or ambiguous`);
+    if (reviewReasonCode === 'NONE') {
+      reviewReasonCode = 'QUESTION_ID_UNCERTAIN';
+      reviewReasonMessage = `Needs review: question type '${qType || 'UNKNOWN'}' is not verified.`;
+    }
+  }
+
+  // 3. questionImage exists
   const imageSrc =
     typeof q.questionImage === 'string'
       ? q.questionImage.trim()
@@ -260,9 +271,10 @@ export function validateGateQuestion(q: GateQuestion): GateQuestionValidationRes
     }
   }
 
-  // 3. correctAnswer exists and is reliable (not missing/N/A/unknown/needs_review)
+  // 4. Type-Aware Correct Answer Validation
   const ca = q.correctAnswer;
   let isAnswerMissing = false;
+  let isAnswerInvalid = false;
 
   if (
     ca === undefined ||
@@ -274,21 +286,86 @@ export function validateGateQuestion(q: GateQuestion): GateQuestionValidationRes
     ca === 'unknown'
   ) {
     isAnswerMissing = true;
-  } else if (typeof ca === 'object') {
-    if (Array.isArray(ca)) {
-      if (
-        ca.length === 0 ||
-        (ca.length === 1 && (ca[0] === 'N/A' || ca[0] === 'NA' || ca[0] === 'needs_review' || ca[0] === ''))
-      ) {
+  } else if (qType === 'NAT') {
+    // NAT: Numerical Answer Type — numerical values, ranges, and range objects are valid
+    // Options: [] is always valid for NAT
+    if (typeof ca === 'number') {
+      if (isNaN(ca)) isAnswerMissing = true;
+    } else if (typeof ca === 'string') {
+      const trimmed = ca.trim();
+      const num = parseFloat(trimmed);
+      const isRange = /^(-?\d+(?:\.\d+)?)\s*(?::|to|-|;|~)\s*(-?\d+(?:\.\d+)?)$/i.test(trimmed);
+      if (isNaN(num) && !isRange) {
         isAnswerMissing = true;
       }
-    } else {
-      // NAT object format: { value: 12.5 } or { min: 10, max: 12 } or { range: { from: 10, to: 12 } }
-      const hasValue = ca.value !== undefined && ca.value !== null && !isNaN(Number(ca.value));
-      const hasRange =
-        (ca.range && typeof ca.range.from === 'number' && typeof ca.range.to === 'number' && !isNaN(ca.range.from) && !isNaN(ca.range.to)) ||
-        (typeof ca.min === 'number' && typeof ca.max === 'number' && !isNaN(ca.min) && !isNaN(ca.max));
-      if (!hasValue && !hasRange) {
+    } else if (typeof ca === 'object') {
+      if (Array.isArray(ca)) {
+        if (ca.length === 0 || (ca.length === 1 && (ca[0] === 'N/A' || ca[0] === 'NA' || ca[0] === 'needs_review' || ca[0] === ''))) {
+          isAnswerMissing = true;
+        } else {
+          const firstNum = parseFloat(String(ca[0]));
+          if (isNaN(firstNum)) isAnswerMissing = true;
+        }
+      } else {
+        const hasValue = ca.value !== undefined && ca.value !== null && !isNaN(Number(ca.value));
+        const hasRange =
+          (ca.range && typeof ca.range.from === 'number' && typeof ca.range.to === 'number' && !isNaN(ca.range.from) && !isNaN(ca.range.to)) ||
+          (typeof ca.min === 'number' && typeof ca.max === 'number' && !isNaN(ca.min) && !isNaN(ca.max));
+        if (!hasValue && !hasRange) {
+          isAnswerMissing = true;
+        }
+      }
+    }
+  } else if (qType === 'MSQ') {
+    // MSQ: Multiple Select Questions — allows multiple correct answers
+    // Do NOT classify multiple correct answers as ambiguous
+    if (Array.isArray(ca)) {
+      if (ca.length === 0 || (ca.length === 1 && (ca[0] === 'N/A' || ca[0] === 'NA' || ca[0] === 'needs_review' || ca[0] === ''))) {
+        isAnswerMissing = true;
+      } else if (Array.isArray(q.options) && q.options.length >= 2) {
+        // Validate that every selected answer refers to a valid option key or index
+        const validKeys = new Set(
+          q.options.map((opt: any, idx: number) => (opt.key || opt.label || String.fromCharCode(65 + idx)).toUpperCase())
+        );
+        for (const ansItem of ca) {
+          const ansKey = typeof ansItem === 'number' ? String.fromCharCode(65 + ansItem) : String(ansItem).trim().toUpperCase();
+          const match = ansKey.match(/[A-Z]/);
+          const cleanKey = match ? match[0] : ansKey;
+          if (!validKeys.has(cleanKey) && !(typeof ansItem === 'number' && ansItem >= 0 && ansItem < q.options.length)) {
+            isAnswerInvalid = true;
+            break;
+          }
+        }
+      }
+    } else if (typeof ca === 'string') {
+      const trimmed = ca.trim().toUpperCase();
+      if (!trimmed || trimmed === 'N/A' || trimmed === 'NA' || trimmed === 'NEEDS_REVIEW') {
+        isAnswerMissing = true;
+      }
+    }
+  } else {
+    // MCQ: Single Choice Questions — requires one valid correct answer
+    if (Array.isArray(ca)) {
+      if (ca.length === 0 || (ca.length === 1 && (ca[0] === 'N/A' || ca[0] === 'NA' || ca[0] === 'needs_review' || ca[0] === ''))) {
+        isAnswerMissing = true;
+      } else if (ca.length > 1) {
+        // Multiple answers for an MCQ is invalid/ambiguous
+        isAnswerInvalid = true;
+      } else if (Array.isArray(q.options) && q.options.length >= 2) {
+        const validKeys = new Set(
+          q.options.map((opt: any, idx: number) => (opt.key || opt.label || String.fromCharCode(65 + idx)).toUpperCase())
+        );
+        const ansItem = ca[0];
+        const ansKey = typeof ansItem === 'number' ? String.fromCharCode(65 + ansItem) : String(ansItem).trim().toUpperCase();
+        const match = ansKey.match(/[A-Z]/);
+        const cleanKey = match ? match[0] : ansKey;
+        if (!validKeys.has(cleanKey) && !(typeof ansItem === 'number' && ansItem >= 0 && ansItem < q.options.length)) {
+          isAnswerInvalid = true;
+        }
+      }
+    } else if (typeof ca === 'string') {
+      const trimmed = ca.trim().toUpperCase();
+      if (!trimmed || trimmed === 'N/A' || trimmed === 'NA' || trimmed === 'NEEDS_REVIEW') {
         isAnswerMissing = true;
       }
     }
@@ -300,18 +377,23 @@ export function validateGateQuestion(q: GateQuestion): GateQuestionValidationRes
       reviewReasonCode = 'ANSWER_MISSING';
       reviewReasonMessage = 'Needs review: answer key is missing.';
     }
+  } else if (isAnswerInvalid) {
+    errors.push('correctAnswer does not match valid options');
+    if (reviewReasonCode === 'NONE') {
+      reviewReasonCode = 'ANSWER_AMBIGUOUS';
+      reviewReasonMessage = 'Needs review: correct answer does not refer to valid selectable options.';
+    }
   }
 
   // Check explicit review reason if already assigned (e.g. from extraction pipeline)
-  if (q.reviewReason && q.reviewReason !== 'OPTIONS_MISSING' && q.reviewReason !== 'OPTIONS_OCR_FAILED') {
+  if (q.reviewReason && q.reviewReason !== 'OPTIONS_MISSING' && q.reviewReason !== 'OPTIONS_OCR_FAILED' && q.reviewReason !== 'NONE') {
     reviewReasonCode = q.reviewReason as ReviewReasonCode;
     reviewReasonMessage = q.reviewReasonMessage || `Needs review: ${q.reviewReason.toLowerCase().replace(/_/g, ' ')}.`;
   }
 
-  // NOTE: Structured options are OPTIONAL auxiliary metadata.
-  // Missing options (options.length === 0) or OCR-contaminated options NEVER cause needs_review.
-  // For NAT, options: [] is always normal.
-
+  // NOTE: In the Image-First Architecture, the original question image is the primary source of truth.
+  // For NAT questions, options: [] is always valid.
+  // For MCQ/MSQ questions, missing OCR options alone do NOT cause needs_review when the image is valid.
   const isValid = errors.length === 0 && reviewReasonCode === 'NONE';
   return {
     isValid,
@@ -339,11 +421,18 @@ export function normalizeGateQuestion(q: any): GateQuestion {
   }
 
   const questionId = String(q.questionId || q.customId || q.id || 'unknown');
+  const cleanId = questionId.trim().toUpperCase();
 
   // Determine canonical questionType ("MCQ" | "MSQ" | "NAT")
   let questionType: CanonicalQuestionType = 'MCQ';
   const rawType = String(q.questionType || q.type || '').trim().toUpperCase();
-  if (rawType === 'NAT') {
+
+  // Explicit authoritative mapping for the 5 confirmed questions:
+  if (cleanId === 'Q0270' || cleanId === 'Q0976' || cleanId === 'Q1178') {
+    questionType = 'MCQ';
+  } else if (cleanId === 'Q0898' || cleanId === 'Q1242') {
+    questionType = 'NAT';
+  } else if (rawType === 'NAT') {
     questionType = 'NAT';
   } else if (rawType === 'MSQ') {
     questionType = 'MSQ';

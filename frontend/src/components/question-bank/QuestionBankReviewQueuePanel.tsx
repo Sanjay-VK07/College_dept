@@ -39,16 +39,41 @@ export const QuestionBankReviewQueuePanel: React.FC<QuestionBankReviewQueuePanel
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingMsg, setProcessingMsg] = useState('');
 
+  // Type-aware diagnostic helpers
+  const isQuestionOptionsMissing = (q: any) => {
+    const qType = String(q.questionType || q.type || '').toUpperCase();
+    // NAT questions do not require options; options: [] is always valid
+    if (qType === 'NAT' || qType === 'FREE_RESPONSE') return false;
+    return !q.options || (Array.isArray(q.options) && q.options.length === 0);
+  };
+
+  const isQuestionAnswerMissing = (q: any) => {
+    const ca = q.correctAnswer;
+    if (ca === undefined || ca === null || ca === '' || ca === 'N/A' || ca === 'NA' || ca === 'needs_review' || ca === 'unknown') {
+      return true;
+    }
+    if (Array.isArray(ca)) {
+      return ca.length === 0 || (ca.length === 1 && (ca[0] === 'N/A' || ca[0] === 'NA' || ca[0] === 'needs_review' || ca[0] === ''));
+    }
+    if (typeof ca === 'number') {
+      return isNaN(ca);
+    }
+    if (typeof ca === 'object') {
+      const hasVal = ca.value !== undefined && ca.value !== null && !isNaN(Number(ca.value));
+      const hasRange =
+        (ca.range && typeof ca.range.from === 'number' && typeof ca.range.to === 'number') ||
+        (typeof ca.min === 'number' && typeof ca.max === 'number');
+      return !hasVal && !hasRange;
+    }
+    return false;
+  };
+
   // Diagnostic Stats
   const totalCount = questions.length;
   const needsReviewCount = questions.filter((q) => q.verificationStatus === 'NEEDS_REVIEW').length;
   const verifiedCount = questions.filter((q) => q.verificationStatus === 'VERIFIED').length;
-  const missingOptionsCount = questions.filter(
-    (q) => (!q.options || (Array.isArray(q.options) && q.options.length === 0)) && (q.type === 'MCQ' || q.type === 'MSQ')
-  ).length;
-  const missingAnswerCount = questions.filter(
-    (q) => !q.correctAnswer || (Array.isArray(q.correctAnswer) && q.correctAnswer.length === 0)
-  ).length;
+  const missingOptionsCount = questions.filter((q) => isQuestionOptionsMissing(q)).length;
+  const missingAnswerCount = questions.filter((q) => isQuestionAnswerMissing(q)).length;
 
   // Filtered Questions
   const filteredQuestions = questions.filter((q) => {
@@ -61,8 +86,8 @@ export const QuestionBankReviewQueuePanel: React.FC<QuestionBankReviewQueuePanel
     }
     if (statusFilter === 'NEEDS_REVIEW') return q.verificationStatus === 'NEEDS_REVIEW';
     if (statusFilter === 'VERIFIED') return q.verificationStatus === 'VERIFIED';
-    if (statusFilter === 'MISSING_OPTIONS') return (!q.options || q.options.length === 0) && (q.type === 'MCQ' || q.type === 'MSQ');
-    if (statusFilter === 'MISSING_ANSWER') return !q.correctAnswer || (Array.isArray(q.correctAnswer) && q.correctAnswer.length === 0);
+    if (statusFilter === 'MISSING_OPTIONS') return isQuestionOptionsMissing(q);
+    if (statusFilter === 'MISSING_ANSWER') return isQuestionAnswerMissing(q);
     return true;
   });
 
@@ -391,6 +416,8 @@ export const QuestionBankReviewQueuePanel: React.FC<QuestionBankReviewQueuePanel
               filteredQuestions.map((q) => {
                 const imgUrl = `/api/questions/${q.id || q.customId}/image`;
                 const isVerified = q.verificationStatus === 'VERIFIED';
+                const qType = String(q.questionType || q.type || '').toUpperCase();
+                const isNat = qType === 'NAT';
                 const hasOptions = Array.isArray(q.options) && q.options.length > 0;
                 const formattedAns = getFormattedCorrectAnswer(q);
                 const hasAnswer = formattedAns.isSet;
@@ -457,13 +484,19 @@ export const QuestionBankReviewQueuePanel: React.FC<QuestionBankReviewQueuePanel
                     {/* Options & Answer Summary */}
                     <td className="text-[11px]">
                       <div className="flex items-center gap-1.5">
-                        <span
-                          className={`px-1.5 py-0.5 rounded font-mono font-bold ${
-                            hasOptions ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {hasOptions ? `${q.options.length} Opts` : 'No Opts'}
-                        </span>
+                        {isNat ? (
+                          <span className="px-1.5 py-0.5 rounded font-mono font-bold bg-purple-100 text-purple-800">
+                            NAT (Numeric)
+                          </span>
+                        ) : (
+                          <span
+                            className={`px-1.5 py-0.5 rounded font-mono font-bold ${
+                              hasOptions ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {hasOptions ? `${q.options.length} Opts` : 'No Opts'}
+                          </span>
+                        )}
                         <span
                           className={`px-1.5 py-0.5 rounded font-mono font-bold ${
                             hasAnswer ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-600'

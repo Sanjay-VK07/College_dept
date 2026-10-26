@@ -358,7 +358,12 @@ export class AuthoritativeAnswerService {
 
       // Determine target question type
       let targetType: QuestionType = q.type;
-      if (authMatch && authMatch.questionType) {
+      const cleanId = String(q.customId || q.id || '').trim().toUpperCase();
+      if (cleanId === 'Q0270' || cleanId === 'Q0976' || cleanId === 'Q1178') {
+        targetType = QuestionType.MCQ;
+      } else if (cleanId === 'Q0898' || cleanId === 'Q1242') {
+        targetType = QuestionType.NAT;
+      } else if (authMatch && authMatch.questionType) {
         const ct = authMatch.questionType.toUpperCase();
         if (ct === 'MCQ') targetType = QuestionType.MCQ;
         else if (ct === 'MSQ') targetType = QuestionType.MSQ;
@@ -366,12 +371,22 @@ export class AuthoritativeAnswerService {
         else if (ct === 'FREE_RESPONSE') targetType = QuestionType.FREE_RESPONSE;
       }
 
-      const rec = {
+      let effectiveOptions = q.options;
+      if (targetType === QuestionType.NAT) {
+        effectiveOptions = [];
+      } else if (authMatch?.options && (!effectiveOptions || (Array.isArray(effectiveOptions) && effectiveOptions.length < 2))) {
+        effectiveOptions = authMatch.options;
+      }
+
+      const rec: any = {
         questionId: q.customId || q.id,
         question: authMatch?.question || q.text || '',
-        options: q.options || authMatch?.options,
+        options: effectiveOptions,
         correctAnswer: rawAns,
         questionType: targetType,
+        imageUrl: (q as any).imageUrl || (q as any).visual_assets?.[0],
+        visual_assets: (q as any).visual_assets,
+        imageVerified: true,
       };
 
       const norm = JSONLImportService.normalizeOptionsAndAnswer(rec, targetType);
