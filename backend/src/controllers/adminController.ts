@@ -7,7 +7,7 @@ import { ExcelImportService } from '../services/excelImportService';
 import { ReportExportService } from '../services/reportExportService';
 import { StudentDataExportService } from '../services/studentDataExportService';
 import { AuditLogger } from '../services/auditLogger';
-import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus, VerificationStatus, Prisma } from '@prisma/client';
+import { Role, QuestionType, Difficulty, ExamType, ExamStatus, AIDocumentStatus, VerificationStatus, Prisma, ResultVisibility, SolutionVisibility } from '@prisma/client';
 import { ENV } from '../config/env';
 import { NotificationController } from './notificationController';
 import { LocalStorageProvider } from '../modules/ai/services/documentStorageService';
@@ -1613,6 +1613,10 @@ export class AdminController {
         instructions,
         questionCount,
         sourceDocumentId,
+        resultVisibility,
+        solutionVisibility,
+        startTime,
+        endTime,
       } = req.body;
 
       if (!title || String(title).trim().length < 5) {
@@ -1671,13 +1675,15 @@ export class AdminController {
           examType: examType || ExamType.SCHEDULED,
           durationMinutes: parsedDuration,
           totalMarks: parsedMarks,
-          startTime: new Date(),
-          endTime: new Date(Date.now() + 86400000 * 7),
+          startTime: startTime ? new Date(startTime) : new Date(),
+          endTime: endTime ? new Date(endTime) : new Date(Date.now() + 86400000 * 7),
           targetDepartment: targetDepartment || 'Computer Science and Engineering',
           targetYear: resolvedYear || 3,
           maxViolations: parsedViolations,
           instructions: instructions || 'Fullscreen mode is strictly enforced.',
           isPublished: false,
+          resultVisibility: (resultVisibility as ResultVisibility) || ResultVisibility.AFTER_EXAM_ENDS,
+          solutionVisibility: (solutionVisibility as SolutionVisibility) || SolutionVisibility.SHOW_AFTER_RESULT,
           status: ExamStatus.DRAFT,
           createdById: req.user!.id,
         },

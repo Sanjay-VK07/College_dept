@@ -10,9 +10,14 @@ export class PDFPageRenderService {
   public static findImageOnDisk(idOrCode: string): string | null {
     if (!idOrCode) return null;
 
+    const normalizedCode = idOrCode.replace(/^(?:V\d+_|vol\d+_)/i, '').replace(/\./g, '_');
+    const targetCodes = Array.from(new Set([idOrCode, normalizedCode]));
+
     const dirs = [
       path.join(process.cwd(), 'public', 'uploads', 'diagrams'),
       path.join(process.cwd(), 'uploads', 'diagrams'),
+      path.join(process.cwd(), 'public', 'images'),
+      path.join(process.cwd(), '..', 'gate-extraction-v2', 'images'),
       path.join(process.cwd(), 'public', 'uploads'),
       path.join(process.cwd(), 'uploads'),
     ];
@@ -23,11 +28,12 @@ export class PDFPageRenderService {
         const files = fs.readdirSync(dir);
         const match = files.find((f) => {
           const name = path.parse(f).name;
-          return (
-            name === idOrCode ||
-            name.startsWith(idOrCode + '_p') ||
-            name.startsWith(idOrCode + '.') ||
-            name.startsWith(idOrCode + '_')
+          return targetCodes.some(
+            (code) =>
+              name === code ||
+              name.startsWith(code + '_p') ||
+              name.startsWith(code + '.') ||
+              name.startsWith(code + '_')
           );
         });
 
@@ -331,8 +337,17 @@ export class PDFPageRenderService {
     // 2. Query Question Record from Database
     let question: any = null;
     try {
+      const cleanId = questionId.replace(/^(?:V\d+_|vol\d+_)/i, '');
       question = await prisma.question.findFirst({
-        where: { OR: [{ id: questionId }, { customId: questionId }] },
+        where: {
+          OR: [
+            { id: questionId },
+            { customId: questionId },
+            { customId: cleanId },
+            { customId: `V3_${cleanId}` },
+            { customId: `V2_${cleanId}` },
+          ],
+        },
         select: {
           id: true,
           customId: true,

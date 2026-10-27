@@ -679,7 +679,18 @@ export function normalizeGateQuestion(q: any): GateQuestion {
   let reviewReasonMessage = q.reviewReasonMessage || validation.reviewReasonMessage;
 
   if (!validation.isValid) {
-    status = 'needs_review';
+    if (
+      (q.verificationStatus === 'VERIFIED' || q.status === 'VERIFIED') &&
+      validation.reviewReasonCode === 'ANSWER_MISSING' &&
+      (q.correctAnswer === undefined || q.correctAnswer === null)
+    ) {
+      // In student live exams, correctAnswer is withheld for security; verified questions remain verified
+      status = 'verified';
+      reviewReason = undefined;
+      reviewReasonMessage = undefined;
+    } else {
+      status = 'needs_review';
+    }
   } else if (
     (q.status === 'needs_review' || q.verificationStatus === 'NEEDS_REVIEW') &&
     q.reviewReason &&

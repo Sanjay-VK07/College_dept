@@ -10,14 +10,14 @@ export class ExamController {
    * for an exam, per that exam's configured resultVisibility. This gates the student-facing
    * surfaces only — Faculty/Admin review is never subject to this check.
    */
-  private static canStudentSeeResult(test: { resultVisibility: string; endTime: Date | string; resultsPublished: boolean }): boolean {
+  private static canStudentSeeResult(test: { resultVisibility: string; endTime: Date | string; resultsPublished: boolean; status?: string }): boolean {
     switch (test.resultVisibility) {
       case 'IMMEDIATE':
         return true;
       case 'AFTER_EXAM_ENDS':
-        return new Date() >= new Date(test.endTime);
+        return Boolean(test.resultsPublished) || test.status === 'COMPLETED' || test.status === 'ARCHIVED' || new Date() >= new Date(test.endTime);
       case 'MANUAL_PUBLISH':
-        return test.resultsPublished;
+        return Boolean(test.resultsPublished);
       default:
         return true;
     }
@@ -252,6 +252,8 @@ export class ExamController {
 
         return {
           id: q.id,
+          customId: q.customId,
+          verificationStatus: q.verificationStatus,
           order: tq.order,
           text: q.text,
           type: q.type,
@@ -264,6 +266,8 @@ export class ExamController {
           module: q.subtopic.topic.module.name,
           topic: q.subtopic.topic.name,
           subtopic: q.subtopic.name,
+          sourcePage: q.sourcePage,
+          sourceChapter: q.sourceChapter,
           savedAnswer: savedResp ? savedResp.chosenAnswer : null,
           status: savedResp ? savedResp.status : 'NOT_VISITED',
         };
@@ -526,11 +530,18 @@ export class ExamController {
     // Solutions/answer keys are gated by the exam's configured solutionVisibility for students —
     // faculty/admin always see the real answer key regardless of that setting.
     const visibility = assignment.test.solutionVisibility;
+    const isResultReleased = assignment.test.resultsPublished || ExamController.canStudentSeeResult(assignment.test);
     const canSeeAnswerKey =
       forceShowAnswerKey ||
+      isResultReleased ||
       visibility === 'SHOW_ALWAYS' ||
       visibility === 'SHOW_AFTER_RESULT' ||
       (visibility === 'SHOW_AFTER_EXAM_ENDS' && new Date() >= new Date(assignment.test.endTime));
+
+    let totalScore = 0;
+    let attemptedCount = 0;
+    let correctCount = 0;
+    let wrongCount = 0;
 
     const solutions = assignment.test.testQuestions.map(tq => {
       const q = tq.question;
@@ -538,9 +549,33 @@ export class ExamController {
       // submitExam graded against, not whatever the live Question row says today.
       const graded = tq.questionVersion || q;
       const resp = responseMap.get(q.id);
+      const chosenAnswer = resp ? resp.chosenAnswer : null;
+
+      let isCorrect = resp ? resp.isCorrect : false;
+      let marksObtained = resp ? resp.marksObtained : 0;
+
+      if (chosenAnswer !== null && chosenAnswer !== undefined && chosenAnswer !== '') {
+        attemptedCount++;
+        const evalRes = GateScoringService.evaluateResponse(
+          {
+            id: q.id,
+            type: graded.type,
+            marks: graded.marks,
+            negativeMarks: graded.negativeMarks,
+            correctAnswer: graded.correctAnswer,
+          },
+          chosenAnswer
+        );
+        isCorrect = evalRes.isCorrect;
+        marksObtained = evalRes.marksObtained;
+        totalScore += marksObtained;
+        if (isCorrect) correctCount++;
+        else wrongCount++;
+      }
 
       return {
         id: q.id,
+        customId: q.customId,
         order: tq.order,
         text: graded.text,
         type: graded.type,
@@ -548,10 +583,11 @@ export class ExamController {
         marks: graded.marks,
         negativeMarks: graded.negativeMarks,
         options: graded.options,
+        imageUrl: graded.imageUrl || q.imageUrl,
         correctAnswer: canSeeAnswerKey ? graded.correctAnswer : undefined,
-        chosenAnswer: resp ? resp.chosenAnswer : null,
-        isCorrect: resp ? resp.isCorrect : false,
-        marksObtained: resp ? resp.marksObtained : 0,
+        chosenAnswer,
+        isCorrect,
+        marksObtained,
         timeSpentSec: resp ? resp.timeSpentSec : 0,
         explanation: canSeeAnswerKey ? graded.explanation : undefined,
         reference: q.reference,
@@ -563,14 +599,26 @@ export class ExamController {
       };
     });
 
+    const totalQuestions = assignment.test.testQuestions.length;
+    const unansweredCount = Math.max(0, totalQuestions - attemptedCount);
+    const finalScore = Math.max(0, Number(totalScore.toFixed(2)));
+    const calculatedAccuracy = attemptedCount > 0 ? Number(((correctCount / attemptedCount) * 100).toFixed(1)) : 0;
+    const resolvedScore = assignment.score !== null ? (assignment.score === 0 && finalScore > 0 ? finalScore : assignment.score) : finalScore;
+    const resolvedAccuracy = assignment.accuracy !== null ? (assignment.accuracy === 0 && calculatedAccuracy > 0 ? calculatedAccuracy : assignment.accuracy) : calculatedAccuracy;
+
     return {
       assignment,
       testTitle: assignment.test.title,
       student: assignment.student,
-      score: assignment.score,
+      score: resolvedScore,
       totalMarks: assignment.test.totalMarks,
-      accuracy: assignment.accuracy,
+      accuracy: resolvedAccuracy,
       timeTakenSec: assignment.timeTakenSec,
+      totalQuestions,
+      attemptedCount,
+      correctCount,
+      wrongCount,
+      unansweredCount,
       solutions,
     };
   }
@@ -608,6 +656,16 @@ export class ExamController {
           success: false,
           code: 'RESULT_NOT_YET_VISIBLE',
           message: 'Results for this examination are not yet available. Please check back once they are released.',
+          data: {
+            assignmentId: assignment.id,
+            testTitle: assignment.test.title,
+            resultVisibility: assignment.test.resultVisibility,
+            resultsPublished: assignment.test.resultsPublished,
+            releaseDate: assignment.test.resultVisibility === 'AFTER_EXAM_ENDS' ? assignment.test.endTime : null,
+            submittedAt: assignment.submittedAt,
+            status: assignment.status,
+            totalMarks: assignment.test.totalMarks,
+          },
         });
       }
 
@@ -624,6 +682,11 @@ export class ExamController {
           totalMarks: review.totalMarks,
           accuracy: review.accuracy,
           timeTakenSec: review.timeTakenSec,
+          totalQuestions: review.totalQuestions,
+          attemptedCount: review.attemptedCount,
+          correctCount: review.correctCount,
+          wrongCount: review.wrongCount,
+          unansweredCount: review.unansweredCount,
           solutions: review.solutions,
         },
       });
@@ -672,6 +735,11 @@ export class ExamController {
           totalMarks: review.totalMarks,
           accuracy: review.accuracy,
           timeTakenSec: review.timeTakenSec,
+          totalQuestions: review.totalQuestions,
+          attemptedCount: review.attemptedCount,
+          correctCount: review.correctCount,
+          wrongCount: review.wrongCount,
+          unansweredCount: review.unansweredCount,
           startedAt: review.assignment.startedAt,
           submittedAt: review.assignment.submittedAt,
           solutions: review.solutions,

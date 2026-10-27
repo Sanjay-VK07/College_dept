@@ -182,17 +182,19 @@ export default function StudentDashboard() {
   const recentResultsList = completedExams.map((item: any) => {
     const titleStr = item.test?.title || '--';
     const code = titleStr !== '--' && titleStr.split(' ')[0] && /^[A-Z0-9]+$/i.test(titleStr.split(' ')[0]) ? titleStr.split(' ')[0] : '--';
-    const score = item.score !== null && item.score !== undefined ? item.score : '--';
-    const totalMarks = item.test?.totalMarks !== null && item.test?.totalMarks !== undefined ? item.test.totalMarks : '--';
+    const isVisible = item.resultVisible !== false;
+    const score = isVisible && item.score !== null && item.score !== undefined ? `${item.score} / ${item.test?.totalMarks ?? 100}` : 'Pending Release';
 
     return {
+      id: item.id,
       code,
       subject: titleStr,
       score,
-      totalMarks,
-      correctCount: item.correctCount ?? 0,
-      wrongCount: item.wrongCount ?? 0,
-      status: item.status || 'EVALUATED',
+      totalMarks: item.test?.totalMarks !== null && item.test?.totalMarks !== undefined ? item.test.totalMarks : '--',
+      correctCount: isVisible ? (item.correctCount ?? 0) : '--',
+      wrongCount: isVisible ? (item.wrongCount ?? 0) : '--',
+      resultVisible: isVisible,
+      status: isVisible ? (item.status || 'EVALUATED') : 'AWAITING_RELEASE',
     };
   });
 
@@ -345,14 +347,20 @@ export default function StudentDashboard() {
 
                           {isCompleted ? (
                             <div className="flex items-center space-x-2">
-                              <span className="erp-badge-green">
-                                Score: {assignment.score !== null && assignment.score !== undefined ? assignment.score : '--'}/{assignment.test?.totalMarks !== null && assignment.test?.totalMarks !== undefined ? assignment.test.totalMarks : '--'}
-                              </span>
+                              {assignment.resultVisible === false ? (
+                                <span className="erp-badge-amber">
+                                  Results Pending
+                                </span>
+                              ) : (
+                                <span className="erp-badge-green">
+                                  Score: {assignment.score !== null && assignment.score !== undefined ? assignment.score : '--'}/{assignment.test?.totalMarks !== null && assignment.test?.totalMarks !== undefined ? assignment.test.totalMarks : '--'}
+                                </span>
+                              )}
                               <button
                                 onClick={() => router.push(`/student/solution/${assignment.id}`)}
-                                className="erp-btn-secondary py-1.5 text-xs"
+                                className={assignment.resultVisible === false ? "erp-btn-secondary py-1.5 text-xs text-amber-800 border-amber-300 hover:bg-amber-50" : "erp-btn-secondary py-1.5 text-xs"}
                               >
-                                Review Solutions
+                                {assignment.resultVisible === false ? 'Submission Status' : 'Review Solutions'}
                               </button>
                             </div>
                           ) : isInProgress ? (
@@ -493,25 +501,46 @@ export default function StudentDashboard() {
                     <th>Correct</th>
                     <th>Wrong</th>
                     <th>Result Status</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {recentResultsList.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500 text-xs font-mono">
+                      <td colSpan={7} className="py-8 text-center text-slate-500 text-xs font-mono">
                         No data available
                       </td>
                     </tr>
                   ) : (
                     recentResultsList.map((res, idx) => (
-                      <tr key={idx}>
+                      <tr key={res.id || idx}>
                         <td className="font-mono font-bold text-[#1E40AF]">{res.code}</td>
                         <td className="font-semibold text-slate-900">{res.subject}</td>
-                        <td className="font-mono font-bold text-[#1E40AF]">{res.score} / {res.totalMarks}</td>
+                        <td className="font-mono font-bold text-[#1E40AF]">
+                          {res.resultVisible ? (
+                            res.score
+                          ) : (
+                            <span className="text-amber-700 font-sans text-xs font-medium">Pending Release</span>
+                          )}
+                        </td>
                         <td className="font-mono font-bold text-emerald-700">{res.correctCount}</td>
                         <td className="font-mono font-bold text-red-600">{res.wrongCount}</td>
                         <td>
-                          <span className="erp-badge-green">{res.status}</span>
+                          <span className={res.resultVisible ? 'erp-badge-green' : 'erp-badge-amber'}>
+                            {res.resultVisible ? res.status : 'Pending Release'}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => router.push(`/student/solution/${res.id}`)}
+                            className={
+                              res.resultVisible
+                                ? 'erp-btn-secondary py-1 px-2.5 text-xs'
+                                : 'erp-btn-secondary py-1 px-2.5 text-xs text-amber-800 border-amber-300 hover:bg-amber-50'
+                            }
+                          >
+                            {res.resultVisible ? 'Review Solutions' : 'Status'}
+                          </button>
                         </td>
                       </tr>
                     ))

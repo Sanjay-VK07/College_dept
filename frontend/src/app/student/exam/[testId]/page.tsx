@@ -429,11 +429,24 @@ export default function ExamPage() {
             selectedAnswer={selectedAnswers[currentQ.id]}
             onSelectAnswer={(ans) => {
               if (currentQ.type === 'NAT' || currentQ.type === 'FREE_RESPONSE') {
-                handleNATChange(typeof ans === 'string' ? ans : String(ans || ''));
+                const natVal =
+                  typeof ans === 'object' && ans !== null && 'value' in ans
+                    ? String(ans.value)
+                    : typeof ans === 'string'
+                    ? ans
+                    : typeof ans === 'number'
+                    ? String(ans)
+                    : '';
+                handleNATChange(natVal);
               } else if (Array.isArray(ans) && currentQ.type === 'MCQ') {
                 if (ans.length > 0) handleOptionSelect(ans[0]);
+              } else if (currentQ.type === 'MSQ') {
+                const msqAns = Array.isArray(ans) ? ans : [ans];
+                setSelectedAnswers((prev) => ({ ...prev, [currentQ.id]: msqAns }));
+                autoSave(currentQ.id, msqAns, 'ANSWERED');
               } else {
                 setSelectedAnswers((prev) => ({ ...prev, [currentQ.id]: ans }));
+                autoSave(currentQ.id, ans, 'ANSWERED');
               }
             }}
             viewMode="STUDENT_EXAM"

@@ -208,16 +208,19 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   const qNorm: GateQuestion = normalizeGateQuestion(question);
 
   // 2. Expand/Collapse initial state:
-  // In STUDENT_EXAM mode, default to expanded so students can answer immediately.
+  // In STUDENT_EXAM and SOLUTION_VIEW modes, default to expanded so examinees and review sessions display immediately.
   // Otherwise, verified questions default to expanded, needs_review questions default to collapsed.
   const isStudentExam = viewMode === 'STUDENT_EXAM';
+  const isSolutionView = viewMode === 'SOLUTION_VIEW';
+  const isStudentOrSolution = isStudentExam || isSolutionView;
+
   const initialExpanded =
     defaultExpanded !== undefined
       ? defaultExpanded
       : qNorm.display?.defaultExpanded !== undefined
       ? qNorm.display.defaultExpanded
-      : isStudentExam
-      ? (qNorm.status === 'verified')
+      : isStudentOrSolution
+      ? true
       : qNorm.status === 'verified';
 
   const [isExpanded, setIsExpanded] = useState<boolean>(initialExpanded);
@@ -288,6 +291,9 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
     setIsExpanded(nextExpanded);
     setImageError(false);
+    setRecoverErrorMsg(null);
+    setRecoverSuccessMsg(null);
+    setIsRecovering(false);
     setActiveImageUrls(getQuestionImageUrls(question));
   }, [question?.id, question?.customId, question?.questionId, defaultExpanded, viewMode]);
 
@@ -303,10 +309,25 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   const handleImageLoadError = (url: string, index: number) => {
     console.warn(`Question image failed to load: ${url}`);
-    // If it was a relative path, try direct API endpoint as fallback
-    const qId = qNorm.questionId || question.id;
+    const qId = question.customId || qNorm.customId || qNorm.questionId || question.id;
+
+    // 1. If /images/ failed, try static /uploads/diagrams/ fallback
+    if (url.startsWith('/images/')) {
+      const filename = url.split('/').pop()?.split('?')[0];
+      if (filename) {
+        const staticFallback = `/uploads/diagrams/${filename}`;
+        setActiveImageUrls((prev) => {
+          const next = [...prev];
+          next[index] = staticFallback;
+          return next;
+        });
+        return;
+      }
+    }
+
+    // 2. Try public backend source-image endpoint (accessible to student sessions)
     if (qId && !url.includes('/source-image')) {
-      const apiFallback = `/api/question-bank/questions/${qId}/source-image`;
+      const apiFallback = `/api/questions/${qId}/source-image`;
       setActiveImageUrls((prev) => {
         const next = [...prev];
         next[index] = apiFallback;
@@ -364,20 +385,25 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   // Extract initial NAT value from selectedAnswer or qNorm.studentAnswer
   const getInitialNat = (): string => {
-    if (selectedAnswer !== undefined && selectedAnswer !== null) {
-      if (typeof selectedAnswer === 'object' && selectedAnswer !== null && 'value' in selectedAnswer) {
-        return String(selectedAnswer.value);
+    const parseVal = (val: any): string => {
+      if (val === undefined || val === null) return '';
+      if (typeof val === 'object' && val !== null && 'value' in val) {
+        return String(val.value);
       }
-      if (typeof selectedAnswer === 'number' || typeof selectedAnswer === 'string') {
-        return String(selectedAnswer);
+      if (typeof val === 'string') {
+        if (val === '[object Object]') return '';
+        return val;
       }
-    }
-    if (qNorm.studentAnswer !== undefined && qNorm.studentAnswer !== null) {
-      if (typeof qNorm.studentAnswer === 'object' && 'value' in qNorm.studentAnswer) {
-        return String(qNorm.studentAnswer.value);
+      if (typeof val === 'number') {
+        return String(val);
       }
-      return String(qNorm.studentAnswer);
-    }
+      return '';
+    };
+
+    const fromSelected = parseVal(selectedAnswer);
+    if (fromSelected) return fromSelected;
+    const fromStudent = parseVal(qNorm.studentAnswer);
+    if (fromStudent) return fromStudent;
     return '';
   };
 
@@ -390,10 +416,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   useEffect(() => {
     const current = getInitialNat();
-    if (current !== '') {
-      setNatInputValue(current);
-      setNatSubmittedAnswer(current);
-    }
+    setNatInputValue(current);
+    setNatSubmittedAnswer(current !== '' ? current : null);
   }, [selectedAnswer, qNorm.studentAnswer]);
 
   const handleNatSubmit = () => {
@@ -414,7 +438,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     }
     setNatValidationError(null);
     setNatSubmittedAnswer(trimmed);
-    onSelectAnswer?.({ value: numVal });
+    onSelectAnswer?.(trimmed);
   };
 
   // Option keys: Default to ['A', 'B', 'C', 'D'].
@@ -562,40 +586,42 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   // =========================================================================
   return (
     <div className={`space-y-5 bg-white p-5 border border-slate-200 rounded-xl shadow-xs ${className}`}>
-      {/* Top Header Row with Question ID, Status Badge & Collapse Toggle */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-        <div className="flex items-center gap-3">
-          <span className="font-mono font-bold text-lg text-[#1E40AF]">
-            Question {qNorm.questionId}
-          </span>
-          <span
-            className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold uppercase border ${
-              qNorm.status === 'verified'
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                : 'bg-amber-50 text-amber-800 border-amber-300'
-            }`}
-          >
-            {qNorm.status === 'verified' ? 'Verified' : 'Needs Review'}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {qNorm.status === 'needs_review' && !isStudentExam && (
-            <button
-              type="button"
-              onClick={() => setIsExpanded(false)}
-              className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 py-1 px-2.5 rounded-md hover:bg-slate-100 transition-colors"
-              title="Collapse question view"
+      {/* Top Header Row with Question ID, Status Badge & Collapse Toggle (Hidden during student exams and solution review) */}
+      {!isStudentOrSolution && (
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <span className="font-mono font-bold text-lg text-[#1E40AF]">
+              Question {question.order !== undefined ? question.order : qNorm.customId || qNorm.questionId}
+            </span>
+            <span
+              className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold uppercase border ${
+                qNorm.status === 'verified'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                  : 'bg-amber-50 text-amber-800 border-amber-300'
+              }`}
             >
-              <span>Collapse</span>
-              <ChevronUp className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </div>
+              {qNorm.status === 'verified' ? 'Verified' : 'Needs Review'}
+            </span>
+          </div>
 
-      {/* Source Metadata Header Bar (Non-clickable metadata only — No Open Source Page button) */}
-      {(qNorm.source?.pdf || qNorm.source?.page || (qNorm.source as any)?.pages) && (
+          <div className="flex items-center gap-2">
+            {qNorm.status === 'needs_review' && (
+              <button
+                type="button"
+                onClick={() => setIsExpanded(false)}
+                className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 py-1 px-2.5 rounded-md hover:bg-slate-100 transition-colors"
+                title="Collapse question view"
+              >
+                <span>Collapse</span>
+                <ChevronUp className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Source Metadata Header Bar (Hidden during student exams and solution review) */}
+      {!isStudentOrSolution && (qNorm.source?.pdf || qNorm.source?.page || (qNorm.source as any)?.pages) && (
         <div className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs flex items-center gap-2 font-mono text-slate-600 w-fit">
           <FileText className="w-3.5 h-3.5 text-blue-600 shrink-0" />
           <span className="font-semibold text-slate-700">Source:</span>
@@ -613,7 +639,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       )}
 
       {/* Needs Review Banner if Status is needs_review */}
-      {qNorm.status === 'needs_review' && !isStudentExam && (
+      {qNorm.status === 'needs_review' && !isStudentOrSolution && (
         <div className="p-3 bg-amber-50 border border-amber-300 rounded-md text-amber-900 text-xs flex items-center justify-between gap-2 shadow-sm">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -692,18 +718,23 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           <div className="flex items-center justify-between gap-2">
             <div className="font-bold flex items-center gap-1.5">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>Source document temporarily unavailable for question {qNorm.questionId}</span>
+              <span>
+                Source document temporarily unavailable for Question{' '}
+                {question.order !== undefined ? question.order : qNorm.customId || qNorm.questionId}
+              </span>
             </div>
-            <button
-              type="button"
-              disabled={isRecovering}
-              onClick={handleRecoverImage}
-              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-sans text-xs font-bold transition-colors shrink-0 shadow-sm disabled:opacity-50"
-            >
-              {isRecovering ? 'Recovering...' : 'Recover Source Image'}
-            </button>
+            {!isStudentOrSolution && (
+              <button
+                type="button"
+                disabled={isRecovering}
+                onClick={handleRecoverImage}
+                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-sans text-xs font-bold transition-colors shrink-0 shadow-sm disabled:opacity-50"
+              >
+                {isRecovering ? 'Recovering...' : 'Recover Source Image'}
+              </button>
+            )}
           </div>
-          {recoverErrorMsg && (
+          {!isStudentOrSolution && recoverErrorMsg && (
             <p className="text-xs font-sans text-rose-700 font-semibold bg-rose-50 p-2 rounded border border-rose-200">
               {recoverErrorMsg}
             </p>

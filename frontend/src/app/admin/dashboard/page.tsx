@@ -857,6 +857,19 @@ export default function AdminDashboard() {
     }
   };
 
+  const handlePublishExamResults = async (id: string, title: string) => {
+    if (!confirm(`Are you sure you want to officially release and publish results for "${title}" to students?`)) return;
+    try {
+      const res = await api.put(`/admin/exams/${id}/publish-results`);
+      if (res.data?.success) {
+        showToast(res.data.message || 'Results published successfully');
+        fetchInitialData();
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Failed to publish results');
+    }
+  };
+
   const handleDeleteExam = async (id: string) => {
     if (!confirm('Are you sure you want to delete this examination?')) return;
     try {
@@ -1996,6 +2009,13 @@ export default function AdminDashboard() {
                                         <Radio className="w-3.5 h-3.5" />
                                       </button>
                                       <button
+                                        onClick={() => handlePublishExamResults(exam.id, exam.title)}
+                                        title={exam.resultsPublished ? "Results Released to Students" : "Publish Results to Students"}
+                                        className={`p-1.5 rounded transition-colors ${exam.resultsPublished ? 'text-emerald-700 bg-emerald-50' : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'}`}
+                                      >
+                                        <Award className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
                                         onClick={() => handleDuplicateExam(exam)}
                                         title="Duplicate Exam"
                                         className="p-1.5 text-slate-600 hover:bg-slate-100 rounded"
@@ -2069,9 +2089,14 @@ export default function AdminDashboard() {
 
                           <div className="pt-2 border-t border-slate-100 flex justify-between items-center text-xs">
                             <span className="font-mono text-slate-500">Duration: {exam.durationMinutes} Mins</span>
-                            <span className={exam.isPublished ? 'erp-badge-green' : 'erp-badge-amber'}>
-                              {exam.isPublished ? '● Published' : '○ Draft'}
-                            </span>
+                            <div className="flex items-center space-x-1.5">
+                              {exam.resultsPublished && (
+                                <span className="erp-badge-green font-mono text-[10px]">Results Released</span>
+                              )}
+                              <span className={exam.isPublished ? 'erp-badge-green' : 'erp-badge-amber'}>
+                                {exam.isPublished ? '● Published' : '○ Draft'}
+                              </span>
+                            </div>
                           </div>
 
                           <div className="flex items-center space-x-2 pt-1 border-t border-slate-100 text-xs">
@@ -2079,9 +2104,17 @@ export default function AdminDashboard() {
                               <Eye className="w-3.5 h-3.5" />
                               <span>Preview</span>
                             </button>
-                            <button onClick={() => handleTogglePublishExam(exam.id)} className="erp-btn-primary py-1 text-xs flex-1">
+                            <button onClick={() => handleTogglePublishExam(exam.id)} className="erp-btn-secondary py-1 text-xs flex-1">
                               <span>Toggle Status</span>
                             </button>
+                            {exam.isPublished && (
+                              <button
+                                onClick={() => handlePublishExamResults(exam.id, exam.title)}
+                                className={`py-1 text-xs px-2.5 rounded font-medium border transition-colors ${exam.resultsPublished ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'erp-btn-primary'}`}
+                              >
+                                {exam.resultsPublished ? 'Results Released' : 'Publish Results'}
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}

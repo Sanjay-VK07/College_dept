@@ -51,10 +51,17 @@ app.use((req, res, next) => {
 
 import path from 'path';
 
-// Serve uploaded diagrams, figures and assets statically
+// Serve uploaded diagrams, figures and assets statically with multi-directory fallback
 app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+app.use('/uploads/diagrams', express.static(path.join(process.cwd(), 'public', 'uploads', 'diagrams')));
+app.use('/uploads/diagrams', express.static(path.join(process.cwd(), 'uploads', 'diagrams')));
+app.use('/uploads/diagrams', express.static(path.join(process.cwd(), 'public', 'images')));
+app.use('/uploads/diagrams', express.static(path.join(process.cwd(), '..', 'gate-extraction-v2', 'images')));
 app.use('/gate-extraction-v2', express.static(path.join(process.cwd(), '..', 'gate-extraction-v2')));
+app.use('/images', express.static(path.join(process.cwd(), 'public', 'uploads', 'diagrams')));
+app.use('/images', express.static(path.join(process.cwd(), 'uploads', 'diagrams')));
+app.use('/images', express.static(path.join(process.cwd(), 'public', 'images')));
 app.use('/images', express.static(path.join(process.cwd(), '..', 'gate-extraction-v2', 'images')));
 
 // Health & Readiness Probes
