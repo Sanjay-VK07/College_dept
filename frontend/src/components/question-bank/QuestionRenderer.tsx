@@ -170,9 +170,24 @@ export function getFormattedCorrectAnswer(q: any): { text: string; isSet: boolea
     return { text: ca.trim(), isSet: true };
   }
   if (typeof ca === 'number') {
-    return { text: isNat ? String(ca) : String.fromCharCode(65 + ca), isSet: true };
+    return {
+      text: isNat || !Number.isInteger(ca) || ca < 0 || ca >= 5 ? String(ca) : String.fromCharCode(65 + ca),
+      isSet: true,
+    };
   }
   if (typeof ca === 'object' && ca !== null && Object.keys(ca).length > 0) {
+    if (Array.isArray(ca.acceptedRanges) && ca.acceptedRanges.length > 0) {
+      const parts = ca.acceptedRanges.map((r: any) => {
+        const min = r.min ?? r.range?.from ?? r.range?.[0];
+        const max = r.max ?? r.range?.to ?? r.range?.[1];
+        if (min !== undefined && max !== undefined) {
+          return min === max ? `${min}` : `${min} to ${max}`;
+        }
+        if (r.value !== undefined) return `${r.value}`;
+        return JSON.stringify(r);
+      });
+      return { text: parts.join(' or '), isSet: true };
+    }
     if (ca.range && ca.range.from !== undefined && ca.range.to !== undefined) {
       if (ca.range.from === ca.range.to) {
         return { text: `${ca.range.from}`, isSet: true };

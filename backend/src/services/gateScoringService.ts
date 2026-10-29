@@ -76,7 +76,12 @@ export class GateScoringService {
    * Evaluates a student response against GATE official marking rules
    */
   public static evaluateResponse(question: QuestionData, chosenAnswer: any): EvaluationResult {
-    if (chosenAnswer === undefined || chosenAnswer === null || chosenAnswer === '') {
+    if (
+      chosenAnswer === undefined ||
+      chosenAnswer === null ||
+      chosenAnswer === '' ||
+      (Array.isArray(chosenAnswer) && chosenAnswer.length === 0)
+    ) {
       return { isCorrect: false, marksObtained: 0 };
     }
 
@@ -94,12 +99,16 @@ export class GateScoringService {
 
   private static evaluateMCQ(question: QuestionData, chosenAnswer: any): EvaluationResult {
     const chosenLetter = this.normalizeOptionToLetter(chosenAnswer);
+    if (!chosenLetter) {
+      return { isCorrect: false, marksObtained: 0 };
+    }
+
     const correctLetter = this.normalizeOptionToLetter(question.correctAnswer);
 
-    if (chosenLetter && correctLetter && chosenLetter === correctLetter) {
+    if (correctLetter && chosenLetter === correctLetter) {
       return { isCorrect: true, marksObtained: question.marks };
     } else {
-      // Negative marking ONLY applies to MCQ: 1/3 penalty for 1-mark, 2/3 penalty for 2-mark
+      // Negative marking ONLY applies to MCQ when candidate selected an incorrect option
       const penalty = question.negativeMarks || (question.marks === 2.0 ? 0.67 : 0.33);
       return { isCorrect: false, marksObtained: -Math.abs(penalty) };
     }
@@ -142,48 +151,72 @@ export class GateScoringService {
       return { isCorrect: false, marksObtained: 0 };
     }
 
-    let min: number | undefined;
-    let max: number | undefined;
-    let targetVal: number | undefined;
-
     const ca = question.correctAnswer;
-    if (typeof ca === 'number') {
-      targetVal = ca;
-    } else if (typeof ca === 'string') {
-      const trimmed = ca.trim();
-      const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(?::|to|-)\s*(-?\d+(?:\.\d+)?)$/i);
-      if (rangeMatch) {
-        min = parseFloat(rangeMatch[1]);
-        max = parseFloat(rangeMatch[2]);
-      } else {
-        const parsed = parseFloat(trimmed);
-        if (!isNaN(parsed)) targetVal = parsed;
-      }
-    } else if (typeof ca === 'object' && ca !== null) {
-      if (ca.min !== undefined && ca.max !== undefined) {
-        min = Number(ca.min);
-        max = Number(ca.max);
-      } else if (ca.range) {
-        if (Array.isArray(ca.range) && ca.range.length >= 2) {
-          min = Number(ca.range[0]);
-          max = Number(ca.range[1]);
-        } else if (typeof ca.range === 'object' && ca.range.from !== undefined && ca.range.to !== undefined) {
-          min = Number(ca.range.from);
-          max = Number(ca.range.to);
-        }
-      }
-      if (ca.value !== undefined) {
-        targetVal = Number(ca.value);
-      }
+    if (ca === undefined || ca === null) {
+      return { isCorrect: false, marksObtained: 0 };
     }
 
+    // Helper to evaluate a single candidate range or scalar against numValue
+    const matchesCandidate = (candidate: any): boolean => {
+      if (candidate === undefined || candidate === null) return false;
+      const EPS = 1e-6;
+
+      if (typeof candidate === 'number') {
+        return Math.abs(numValue - candidate) < EPS;
+      }
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed.includes(';')) {
+          return trimmed.split(';').some((seg) => matchesCandidate(seg.trim()));
+        }
+        const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(?::|\bto\b|-|~)\s*(-?\d+(?:\.\d+)?)$/i);
+        if (rangeMatch) {
+          const lower = Math.min(parseFloat(rangeMatch[1]), parseFloat(rangeMatch[2]));
+          const upper = Math.max(parseFloat(rangeMatch[1]), parseFloat(rangeMatch[2]));
+          return numValue >= lower - EPS && numValue <= upper + EPS;
+        }
+        const parsed = parseFloat(trimmed);
+        if (!isNaN(parsed)) {
+          return Math.abs(numValue - parsed) < EPS;
+        }
+        return false;
+      }
+      if (typeof candidate === 'object' && candidate !== null) {
+        if (Array.isArray(candidate.acceptedRanges) && candidate.acceptedRanges.length > 0) {
+          return candidate.acceptedRanges.some((r: any) => matchesCandidate(r));
+        }
+        let min = candidate.min !== undefined ? Number(candidate.min) : undefined;
+        let max = candidate.max !== undefined ? Number(candidate.max) : undefined;
+        if (candidate.range) {
+          if (Array.isArray(candidate.range) && candidate.range.length >= 2) {
+            if (min === undefined) min = Number(candidate.range[0]);
+            if (max === undefined) max = Number(candidate.range[1]);
+          } else if (typeof candidate.range === 'object') {
+            if (min === undefined && candidate.range.from !== undefined) min = Number(candidate.range.from);
+            if (max === undefined && candidate.range.to !== undefined) max = Number(candidate.range.to);
+          }
+        }
+        if (min !== undefined && max !== undefined && !isNaN(min) && !isNaN(max)) {
+          const lower = Math.min(min, max);
+          const upper = Math.max(min, max);
+          return numValue >= lower - EPS && numValue <= upper + EPS;
+        }
+        if (candidate.value !== undefined) {
+          const target = Number(candidate.value);
+          if (!isNaN(target)) {
+            const tol = typeof candidate.tolerance === 'number' ? candidate.tolerance : EPS;
+            return Math.abs(numValue - target) <= tol;
+          }
+        }
+      }
+      return false;
+    };
+
     let isCorrect = false;
-    if (min !== undefined && max !== undefined && !isNaN(min) && !isNaN(max)) {
-      const lower = Math.min(min, max);
-      const upper = Math.max(min, max);
-      isCorrect = numValue >= (lower - 0.001) && numValue <= (upper + 0.001);
-    } else if (targetVal !== undefined && !isNaN(targetVal)) {
-      isCorrect = Math.abs(numValue - targetVal) < 0.001;
+    if (Array.isArray(ca)) {
+      isCorrect = ca.some((item) => matchesCandidate(item));
+    } else {
+      isCorrect = matchesCandidate(ca);
     }
 
     if (isCorrect) {

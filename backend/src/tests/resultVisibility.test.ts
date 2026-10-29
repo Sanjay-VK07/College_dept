@@ -149,4 +149,32 @@ describe('resultVisibility enforcement', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.score).not.toBeNull();
   });
+
+  it('student privacy: student A cannot access student B attempt solution review', async () => {
+    const { assignmentId } = await makeExamAndAttempt('immediate', ResultVisibility.IMMEDIATE);
+    // Student 'afterEnds' tries to view Student 'immediate' assignment solution
+    const res = await request(app).get(`/api/exam/solution/${assignmentId}`).set('Authorization', `Bearer ${students.afterEnds.token}`);
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(/Student Privacy Policy/i);
+  });
+
+  it('publishing one exam does not publish unrelated examinations', async () => {
+    const exam1 = await makeExamAndAttempt('manual', ResultVisibility.MANUAL_PUBLISH);
+    const exam2 = await makeExamAndAttempt('manual', ResultVisibility.MANUAL_PUBLISH);
+
+    const adminToken = jwt.sign({ id: adminId }, ENV.JWT_SECRET, { expiresIn: '1h' });
+
+    // Publish exam1 only
+    const publishRes = await request(app).put(`/api/admin/exams/${exam1.test.id}/publish-results`).set('Authorization', `Bearer ${adminToken}`);
+    expect(publishRes.status).toBe(200);
+
+    // Exam 1 should now be visible
+    const res1 = await request(app).get(`/api/exam/solution/${exam1.assignmentId}`).set('Authorization', `Bearer ${students.manual.token}`);
+    expect(res1.status).toBe(200);
+
+    // Exam 2 must still remain unpublished and blocked
+    const res2 = await request(app).get(`/api/exam/solution/${exam2.assignmentId}`).set('Authorization', `Bearer ${students.manual.token}`);
+    expect(res2.status).toBe(403);
+    expect(res2.body.code).toBe('RESULT_NOT_YET_VISIBLE');
+  }, 60000);
 });

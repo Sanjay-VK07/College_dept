@@ -9,8 +9,27 @@ import { QuestionRenderer } from '@/components/question-bank/QuestionRenderer';
 function formatAnswerDisplay(answer: any, options?: any[], questionType?: string): string {
   if (answer === null || answer === undefined || answer === '') return 'Not Attempted';
 
-  if (questionType === 'NAT') {
-    if (typeof answer === 'object') {
+  const isNat =
+    questionType === 'NAT' ||
+    (typeof answer === 'object' &&
+      answer !== null &&
+      ('acceptedRanges' in answer || 'range' in answer || ('min' in answer && 'max' in answer)));
+
+  if (isNat) {
+    if (typeof answer === 'object' && answer !== null) {
+      if (Array.isArray(answer.acceptedRanges) && answer.acceptedRanges.length > 0) {
+        return answer.acceptedRanges
+          .map((r: any) => {
+            const min = r.min ?? r.range?.from ?? r.range?.[0];
+            const max = r.max ?? r.range?.to ?? r.range?.[1];
+            if (min !== undefined && max !== undefined) {
+              return min === max ? String(min) : `[${min} to ${max}]`;
+            }
+            if (r.value !== undefined) return String(r.value);
+            return JSON.stringify(r);
+          })
+          .join(' or ');
+      }
       if (answer.min !== undefined && answer.max !== undefined) {
         if (answer.min === answer.max) return String(answer.min);
         return `[${answer.min} to ${answer.max}]`;
@@ -32,21 +51,24 @@ function formatAnswerDisplay(answer: any, options?: any[], questionType?: string
   }
 
   const formatSingleOption = (val: any) => {
+    // Only map integer indices to Option (A-D) if this is confirmed to be MCQ/MSQ
+    const isMcqOrMsq = questionType === 'MCQ' || questionType === 'MSQ';
+
     if (typeof val === 'number') {
-      if (val >= 0 && val < 26) {
+      if (isMcqOrMsq && Number.isInteger(val) && val >= 0 && val < 26) {
         return `Option (${String.fromCharCode(65 + val)})`;
       }
       return String(val);
     }
     if (typeof val === 'string') {
       const clean = val.trim().toUpperCase();
-      if (/^[0-9]+$/.test(clean)) {
+      if (/^[0-9]+$/.test(clean) && isMcqOrMsq) {
         const num = parseInt(clean, 10);
         if (num >= 0 && num < 26) {
           return `Option (${String.fromCharCode(65 + num)})`;
         }
       }
-      if (/^[A-Z]$/.test(clean)) {
+      if (/^[A-E]$/.test(clean)) {
         return `Option (${clean})`;
       }
       return val;

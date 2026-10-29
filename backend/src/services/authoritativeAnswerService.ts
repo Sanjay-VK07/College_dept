@@ -400,7 +400,14 @@ export class AuthoritativeAnswerService {
         if (Object.keys(normAns).length > 0) isValidAnswer = true;
       } else if (typeof normAns === 'number') {
         isValidAnswer = true;
-      } else if (typeof normAns === 'string' && normAns.trim().length > 0 && normAns.trim().toUpperCase() !== 'N/A') {
+      } else if (
+        typeof normAns === 'string' &&
+        normAns.trim().length > 0 &&
+        normAns.trim().toUpperCase() !== 'N/A' &&
+        normAns.trim().toUpperCase() !== 'TBA' &&
+        normAns.trim().toUpperCase() !== 'X' &&
+        normAns.trim().toUpperCase() !== 'UNANSWERED_IN_SOURCE'
+      ) {
         isValidAnswer = true;
       }
 

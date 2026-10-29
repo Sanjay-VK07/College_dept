@@ -48,6 +48,7 @@ export interface NatStudentAnswer {
  */
 export function compareNatAnswer(studentValue: any, correctValue: any): boolean {
   if (studentValue === undefined || studentValue === null || studentValue === '') return false;
+  if (correctValue === undefined || correctValue === null) return false;
 
   let rawStudent = studentValue;
   if (typeof studentValue === 'object' && studentValue !== null && 'value' in studentValue) {
@@ -56,44 +57,72 @@ export function compareNatAnswer(studentValue: any, correctValue: any): boolean 
   const studentNum = typeof rawStudent === 'number' ? rawStudent : parseFloat(String(rawStudent).trim());
   if (isNaN(studentNum)) return false;
 
-  let targetNum: number | undefined = undefined;
-  let range: { from: number; to: number } | undefined = undefined;
+  const matchesSingleCandidate = (candidate: any): boolean => {
+    if (candidate === undefined || candidate === null) return false;
+    const EPS = 1e-6;
 
-  if (typeof correctValue === 'number') {
-    targetNum = correctValue;
-  } else if (correctValue && typeof correctValue === 'object') {
-    if (typeof correctValue.value === 'number') {
-      targetNum = correctValue.value;
-    } else if (typeof correctValue.value === 'string' && !isNaN(parseFloat(correctValue.value))) {
-      targetNum = parseFloat(correctValue.value);
+    if (typeof candidate === 'number') {
+      return Math.abs(studentNum - candidate) < EPS;
     }
-    if (
-      correctValue.range &&
-      typeof correctValue.range.from === 'number' &&
-      typeof correctValue.range.to === 'number'
-    ) {
-      range = correctValue.range;
+
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed.includes(';')) {
+        return trimmed.split(';').some((seg) => matchesSingleCandidate(seg.trim()));
+      }
+      const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(?::|\bto\b|-|~)\s*(-?\d+(?:\.\d+)?)$/i);
+      if (rangeMatch) {
+        const from = Math.min(parseFloat(rangeMatch[1]), parseFloat(rangeMatch[2]));
+        const to = Math.max(parseFloat(rangeMatch[1]), parseFloat(rangeMatch[2]));
+        return studentNum >= from - EPS && studentNum <= to + EPS;
+      }
+      const parsed = parseFloat(trimmed);
+      if (!isNaN(parsed)) {
+        return Math.abs(studentNum - parsed) < EPS;
+      }
+      return false;
     }
-  } else if (typeof correctValue === 'string') {
-    const trimmed = correctValue.trim();
-    const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)$/);
-    if (rangeMatch) {
-      range = { from: parseFloat(rangeMatch[1]), to: parseFloat(rangeMatch[2]) };
-      targetNum = range.from;
-    } else if (!isNaN(parseFloat(trimmed))) {
-      targetNum = parseFloat(trimmed);
+
+    if (typeof candidate === 'object' && candidate !== null) {
+      if (Array.isArray(candidate.acceptedRanges) && candidate.acceptedRanges.length > 0) {
+        return candidate.acceptedRanges.some((r: any) => matchesSingleCandidate(r));
+      }
+
+      let min = candidate.min !== undefined ? Number(candidate.min) : undefined;
+      let max = candidate.max !== undefined ? Number(candidate.max) : undefined;
+      if (candidate.range) {
+        if (Array.isArray(candidate.range) && candidate.range.length >= 2) {
+          if (min === undefined) min = Number(candidate.range[0]);
+          if (max === undefined) max = Number(candidate.range[1]);
+        } else if (typeof candidate.range === 'object') {
+          if (min === undefined && candidate.range.from !== undefined) min = Number(candidate.range.from);
+          if (max === undefined && candidate.range.to !== undefined) max = Number(candidate.range.to);
+        }
+      }
+
+      if (min !== undefined && max !== undefined && !isNaN(min) && !isNaN(max)) {
+        const lower = Math.min(min, max);
+        const upper = Math.max(min, max);
+        return studentNum >= lower - EPS && studentNum <= upper + EPS;
+      }
+
+      if (candidate.value !== undefined) {
+        const target = Number(candidate.value);
+        if (!isNaN(target)) {
+          const tol = typeof candidate.tolerance === 'number' ? candidate.tolerance : EPS;
+          return Math.abs(studentNum - target) <= tol;
+        }
+      }
     }
+
+    return false;
+  };
+
+  if (Array.isArray(correctValue)) {
+    return correctValue.some((item) => matchesSingleCandidate(item));
   }
 
-  if (range) {
-    const min = Math.min(range.from, range.to);
-    const max = Math.max(range.from, range.to);
-    return studentNum >= min - 1e-9 && studentNum <= max + 1e-9;
-  }
-
-  if (targetNum === undefined || isNaN(targetNum)) return false;
-
-  return Math.abs(studentNum - targetNum) < 1e-7;
+  return matchesSingleCandidate(correctValue);
 }
 
 /**

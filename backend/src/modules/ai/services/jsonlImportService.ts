@@ -1427,36 +1427,73 @@ export class JSONLImportService {
     }
 
     const str = String(raw).trim();
-    if (!str || str.toUpperCase() === 'N/A' || str.toUpperCase() === 'UNANSWERED_IN_SOURCE') {
+    if (
+      !str ||
+      str.toUpperCase() === 'N/A' ||
+      str.toUpperCase() === 'TBA' ||
+      str.toUpperCase() === 'X' ||
+      str.toUpperCase() === 'UNANSWERED_IN_SOURCE'
+    ) {
       return { answer: null, needsReview: true };
     }
 
-    const isMultiRange = str.includes(';');
-    const firstSegment = isMultiRange ? str.split(';')[0].trim() : str;
+    const parseSingleSegment = (segment: string): { min?: number; max?: number; value?: number; range?: { from: number; to: number } } | null => {
+      const segTrim = segment.trim();
+      const rangeMatch = segTrim.match(/^(-?\d+(?:\.\d+)?)\s*(?::|\bto\b|-|~)\s*(-?\d+(?:\.\d+)?)$/i);
+      if (rangeMatch) {
+        let min = Number(rangeMatch[1]);
+        let max = Number(rangeMatch[2]);
+        if (min > max) {
+          const temp = min;
+          min = max;
+          max = temp;
+        }
+        const midVal = parseFloat(((min + max) / 2).toFixed(4));
+        return min === max
+          ? { value: min, min, max, range: { from: min, to: max } }
+          : { min, max, value: midVal, range: { from: min, to: max } };
+      }
+      const plain = Number(segTrim);
+      if (Number.isFinite(plain)) {
+        return { value: plain, min: plain, max: plain, range: { from: plain, to: plain } };
+      }
+      return null;
+    };
 
-    const rangeMatch = firstSegment.match(/^(-?\d+(?:\.\d+)?)\s*(?::|\bto\b|-|~)\s*(-?\d+(?:\.\d+)?)$/i);
-    if (rangeMatch) {
-      let min = Number(rangeMatch[1]);
-      let max = Number(rangeMatch[2]);
-      if (min > max) {
-        const temp = min;
-        min = max;
-        max = temp;
+    if (str.includes(';')) {
+      const segments = str.split(';').map((s) => s.trim()).filter(Boolean);
+      const acceptedRanges: any[] = [];
+      for (const seg of segments) {
+        const parsedSeg = parseSingleSegment(seg);
+        if (parsedSeg) {
+          acceptedRanges.push(parsedSeg);
+        }
       }
-      const midVal = parseFloat(((min + max) / 2).toFixed(4));
-      const answer: any = min === max ? { value: min, min, max } : { min, max, value: midVal, range: { from: min, to: max } };
-      if (isMultiRange) {
-        answer.rawRange = str;
+      if (acceptedRanges.length > 0) {
+        const primary = acceptedRanges[0];
+        const answer: any = {
+          value: primary.value,
+          min: primary.min,
+          max: primary.max,
+          range: primary.range,
+          acceptedRanges,
+          rawRange: str,
+        };
+        return { answer, needsReview: false };
       }
-      return { answer, needsReview: false };
+      return { answer: null, needsReview: true };
     }
 
-    const plain = Number(firstSegment);
-    if (Number.isFinite(plain)) {
-      const answer: any = { value: plain, min: plain, max: plain };
-      if (isMultiRange) {
-        answer.rawRange = str;
-      }
+    const single = parseSingleSegment(str);
+    if (single) {
+      const answer: any = {
+        value: single.value,
+        min: single.min,
+        max: single.max,
+        range: single.range,
+        acceptedRanges: [single],
+        rawRange: str,
+      };
       return { answer, needsReview: false };
     }
 

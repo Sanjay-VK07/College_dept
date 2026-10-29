@@ -398,7 +398,13 @@ export class ExamController {
         const studentResp = responseMap.get(q.id);
         const chosenAnswer = studentResp ? studentResp.chosenAnswer : null;
 
-        if (chosenAnswer !== null && chosenAnswer !== undefined && chosenAnswer !== '') {
+        const isAttempted =
+          chosenAnswer !== null &&
+          chosenAnswer !== undefined &&
+          chosenAnswer !== '' &&
+          (!Array.isArray(chosenAnswer) || chosenAnswer.length > 0);
+
+        if (isAttempted) {
           totalAttempted++;
           const evaluation = GateScoringService.evaluateResponse(
             {
@@ -554,7 +560,13 @@ export class ExamController {
       let isCorrect = resp ? resp.isCorrect : false;
       let marksObtained = resp ? resp.marksObtained : 0;
 
-      if (chosenAnswer !== null && chosenAnswer !== undefined && chosenAnswer !== '') {
+      const isAttempted =
+        chosenAnswer !== null &&
+        chosenAnswer !== undefined &&
+        chosenAnswer !== '' &&
+        (!Array.isArray(chosenAnswer) || chosenAnswer.length > 0);
+
+      if (isAttempted) {
         attemptedCount++;
         const evalRes = GateScoringService.evaluateResponse(
           {

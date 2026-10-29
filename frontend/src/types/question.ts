@@ -29,12 +29,26 @@ export interface QuestionSourceMetadata {
 
 export type CanonicalQuestionType = 'MCQ' | 'MSQ' | 'NAT';
 
-export interface NatCorrectAnswer {
-  value: number;
+export interface NatAcceptedRange {
+  min: number;
+  max: number;
   range?: {
     from: number;
     to: number;
   };
+  value?: number;
+}
+
+export interface NatCorrectAnswer {
+  value: number;
+  min?: number;
+  max?: number;
+  range?: {
+    from: number;
+    to: number;
+  };
+  acceptedRanges?: NatAcceptedRange[];
+  rawRange?: string;
   sourceNotation?: string;
 }
 
@@ -46,10 +60,12 @@ export interface NatStudentAnswer {
 /**
  * Dedicated NAT answer comparison function.
  * Compares student input against canonical answer according to official grading rule.
+ * Supports multiple accepted ranges, exact scalar numbers, and semicolon-delimited alternatives.
  * Avoids floating-point precision bugs without inventing arbitrary wide tolerances.
  */
 export function compareNatAnswer(studentValue: any, correctValue: any): boolean {
   if (studentValue === undefined || studentValue === null || studentValue === '') return false;
+  if (correctValue === undefined || correctValue === null) return false;
 
   let rawStudent = studentValue;
   if (typeof studentValue === 'object' && studentValue !== null && 'value' in studentValue) {
@@ -58,44 +74,72 @@ export function compareNatAnswer(studentValue: any, correctValue: any): boolean 
   const studentNum = typeof rawStudent === 'number' ? rawStudent : parseFloat(String(rawStudent).trim());
   if (isNaN(studentNum)) return false;
 
-  let targetNum: number | undefined = undefined;
-  let range: { from: number; to: number } | undefined = undefined;
+  const matchesSingleCandidate = (candidate: any): boolean => {
+    if (candidate === undefined || candidate === null) return false;
+    const EPS = 1e-6;
 
-  if (typeof correctValue === 'number') {
-    targetNum = correctValue;
-  } else if (correctValue && typeof correctValue === 'object') {
-    if (typeof correctValue.value === 'number') {
-      targetNum = correctValue.value;
-    } else if (typeof correctValue.value === 'string' && !isNaN(parseFloat(correctValue.value))) {
-      targetNum = parseFloat(correctValue.value);
+    if (typeof candidate === 'number') {
+      return Math.abs(studentNum - candidate) < EPS;
     }
-    if (
-      correctValue.range &&
-      typeof correctValue.range.from === 'number' &&
-      typeof correctValue.range.to === 'number'
-    ) {
-      range = correctValue.range;
+
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed.includes(';')) {
+        return trimmed.split(';').some((seg) => matchesSingleCandidate(seg.trim()));
+      }
+      const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(?::|\bto\b|-|~)\s*(-?\d+(?:\.\d+)?)$/i);
+      if (rangeMatch) {
+        const from = Math.min(parseFloat(rangeMatch[1]), parseFloat(rangeMatch[2]));
+        const to = Math.max(parseFloat(rangeMatch[1]), parseFloat(rangeMatch[2]));
+        return studentNum >= from - EPS && studentNum <= to + EPS;
+      }
+      const parsed = parseFloat(trimmed);
+      if (!isNaN(parsed)) {
+        return Math.abs(studentNum - parsed) < EPS;
+      }
+      return false;
     }
-  } else if (typeof correctValue === 'string') {
-    const trimmed = correctValue.trim();
-    const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)$/);
-    if (rangeMatch) {
-      range = { from: parseFloat(rangeMatch[1]), to: parseFloat(rangeMatch[2]) };
-      targetNum = range.from;
-    } else if (!isNaN(parseFloat(trimmed))) {
-      targetNum = parseFloat(trimmed);
+
+    if (typeof candidate === 'object' && candidate !== null) {
+      if (Array.isArray(candidate.acceptedRanges) && candidate.acceptedRanges.length > 0) {
+        return candidate.acceptedRanges.some((r: any) => matchesSingleCandidate(r));
+      }
+
+      let min = candidate.min !== undefined ? Number(candidate.min) : undefined;
+      let max = candidate.max !== undefined ? Number(candidate.max) : undefined;
+      if (candidate.range) {
+        if (Array.isArray(candidate.range) && candidate.range.length >= 2) {
+          if (min === undefined) min = Number(candidate.range[0]);
+          if (max === undefined) max = Number(candidate.range[1]);
+        } else if (typeof candidate.range === 'object') {
+          if (min === undefined && candidate.range.from !== undefined) min = Number(candidate.range.from);
+          if (max === undefined && candidate.range.to !== undefined) max = Number(candidate.range.to);
+        }
+      }
+
+      if (min !== undefined && max !== undefined && !isNaN(min) && !isNaN(max)) {
+        const lower = Math.min(min, max);
+        const upper = Math.max(min, max);
+        return studentNum >= lower - EPS && studentNum <= upper + EPS;
+      }
+
+      if (candidate.value !== undefined) {
+        const target = Number(candidate.value);
+        if (!isNaN(target)) {
+          const tol = typeof candidate.tolerance === 'number' ? candidate.tolerance : EPS;
+          return Math.abs(studentNum - target) <= tol;
+        }
+      }
     }
+
+    return false;
+  };
+
+  if (Array.isArray(correctValue)) {
+    return correctValue.some((item) => matchesSingleCandidate(item));
   }
 
-  if (range) {
-    const min = Math.min(range.from, range.to);
-    const max = Math.max(range.from, range.to);
-    return studentNum >= min - 1e-9 && studentNum <= max + 1e-9;
-  }
-
-  if (targetNum === undefined || isNaN(targetNum)) return false;
-
-  return Math.abs(studentNum - targetNum) < 1e-7;
+  return matchesSingleCandidate(correctValue);
 }
 
 /**
@@ -523,45 +567,108 @@ export function normalizeGateQuestion(q: any): GateQuestion {
   }
 
   if (rawCa !== undefined && rawCa !== null && rawCa !== '') {
-    if (questionType === 'NAT') {
+    const isActuallyNat =
+      questionType === 'NAT' ||
+      (typeof rawCa === 'object' &&
+        rawCa !== null &&
+        ('acceptedRanges' in rawCa || 'range' in rawCa || ('min' in rawCa && 'max' in rawCa)));
+
+    if (isActuallyNat) {
       if (typeof rawCa === 'object' && !Array.isArray(rawCa)) {
         let val = rawCa.value !== undefined && rawCa.value !== null ? Number(rawCa.value) : undefined;
         let range = rawCa.range;
         let min = rawCa.min !== undefined ? Number(rawCa.min) : (range?.from !== undefined ? Number(range.from) : undefined);
         let max = rawCa.max !== undefined ? Number(rawCa.max) : (range?.to !== undefined ? Number(range.to) : undefined);
 
-        if (min !== undefined && max !== undefined && !isNaN(min) && !isNaN(max)) {
+        if (Array.isArray(rawCa.acceptedRanges) && rawCa.acceptedRanges.length > 0) {
+          correctAnswer = {
+            value: val ?? (min !== undefined && max !== undefined ? (min + max) / 2 : 0),
+            min,
+            max,
+            range: min !== undefined && max !== undefined ? { from: min, to: max } : range,
+            acceptedRanges: rawCa.acceptedRanges,
+            rawRange: rawCa.rawRange,
+          };
+        } else if (min !== undefined && max !== undefined && !isNaN(min) && !isNaN(max)) {
           if (val === undefined || isNaN(val)) {
             val = (min + max) / 2;
           }
           range = { from: min, to: max };
-          correctAnswer = { value: parseFloat(val.toFixed(4)), min, max, range };
+          correctAnswer = {
+            value: parseFloat(val.toFixed(4)),
+            min,
+            max,
+            range,
+            acceptedRanges: [{ min, max, range, value: parseFloat(val.toFixed(4)) }],
+            rawRange: rawCa.rawRange,
+          };
         } else if (val !== undefined && !isNaN(val)) {
-          correctAnswer = { value: val, ...(range ? { range } : {}) };
+          correctAnswer = {
+            value: val,
+            ...(range ? { range } : {}),
+            acceptedRanges: [{ min: val, max: val, range: { from: val, to: val }, value: val }],
+            rawRange: rawCa.rawRange,
+          };
         }
       } else if (typeof rawCa === 'number') {
-        correctAnswer = { value: rawCa };
+        correctAnswer = {
+          value: rawCa,
+          min: rawCa,
+          max: rawCa,
+          range: { from: rawCa, to: rawCa },
+          acceptedRanges: [{ min: rawCa, max: rawCa, range: { from: rawCa, to: rawCa }, value: rawCa }],
+        };
       } else if (typeof rawCa === 'string') {
         const trimmed = rawCa.trim();
         if (trimmed.toUpperCase() !== 'N/A' && trimmed.toUpperCase() !== 'NA' && trimmed !== 'needs_review') {
-          const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(?::|to)\s*(-?\d+(?:\.\d+)?)$/i);
-          if (rangeMatch) {
-            const from = parseFloat(rangeMatch[1]);
-            const to = parseFloat(rangeMatch[2]);
-            if (from === to) {
-              correctAnswer = { value: from };
-            } else {
+          if (trimmed.includes(';')) {
+            const segs = trimmed.split(';').map((s) => s.trim()).filter(Boolean);
+            const accepted: any[] = [];
+            for (const s of segs) {
+              const rMatch = s.match(/^(-?\d+(?:\.\d+)?)\s*(?::|to)\s*(-?\d+(?:\.\d+)?)$/i);
+              if (rMatch) {
+                const f = parseFloat(rMatch[1]);
+                const t = parseFloat(rMatch[2]);
+                accepted.push({ min: f, max: t, range: { from: f, to: t }, value: (f + t) / 2 });
+              } else {
+                const n = parseFloat(s);
+                if (!isNaN(n)) accepted.push({ min: n, max: n, range: { from: n, to: n }, value: n });
+              }
+            }
+            if (accepted.length > 0) {
+              correctAnswer = {
+                value: accepted[0].value,
+                min: accepted[0].min,
+                max: accepted[0].max,
+                range: accepted[0].range,
+                acceptedRanges: accepted,
+                rawRange: trimmed,
+              };
+            }
+          } else {
+            const rangeMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(?::|to)\s*(-?\d+(?:\.\d+)?)$/i);
+            if (rangeMatch) {
+              const from = parseFloat(rangeMatch[1]);
+              const to = parseFloat(rangeMatch[2]);
               correctAnswer = {
                 value: parseFloat(((from + to) / 2).toFixed(4)),
                 min: from,
                 max: to,
                 range: { from, to },
+                acceptedRanges: [{ min: from, max: to, range: { from, to }, value: parseFloat(((from + to) / 2).toFixed(4)) }],
+                rawRange: trimmed,
               };
-            }
-          } else {
-            const num = parseFloat(trimmed);
-            if (!isNaN(num)) {
-              correctAnswer = { value: num };
+            } else {
+              const num = parseFloat(trimmed);
+              if (!isNaN(num)) {
+                correctAnswer = {
+                  value: num,
+                  min: num,
+                  max: num,
+                  range: { from: num, to: num },
+                  acceptedRanges: [{ min: num, max: num, range: { from: num, to: num }, value: num }],
+                };
+              }
             }
           }
         }
@@ -594,7 +701,7 @@ export function normalizeGateQuestion(q: any): GateQuestion {
       if (typeof rawCa === 'string') {
         const trimmed = rawCa.trim().toUpperCase();
         if (trimmed !== 'N/A' && trimmed !== 'NA' && trimmed !== 'NEEDS_REVIEW') {
-          const match = trimmed.match(/[A-E]/);
+          const match = trimmed.match(/^[A-E]$/);
           if (match) {
             correctAnswer = match[0];
           } else {
@@ -602,22 +709,30 @@ export function normalizeGateQuestion(q: any): GateQuestion {
           }
         }
       } else if (typeof rawCa === 'number') {
-        correctAnswer = String.fromCharCode(65 + rawCa);
+        if (Number.isInteger(rawCa) && rawCa >= 0 && rawCa < 5) {
+          correctAnswer = String.fromCharCode(65 + rawCa);
+        } else {
+          correctAnswer = String(rawCa);
+        }
       } else if (Array.isArray(rawCa) && rawCa.length > 0) {
         const first = rawCa[0];
-        if (typeof first === 'number') {
+        if (typeof first === 'number' && Number.isInteger(first) && first >= 0 && first < 5) {
           correctAnswer = String.fromCharCode(65 + first);
         } else {
           const str = String(first).trim().toUpperCase();
-          const match = str.match(/[A-E]/);
+          const match = str.match(/^[A-E]$/);
           correctAnswer = match ? match[0] : str;
         }
       } else if (typeof rawCa === 'object' && rawCa !== null && 'value' in rawCa) {
         const val = rawCa.value;
         if (typeof val === 'number') {
-          correctAnswer = String.fromCharCode(65 + val);
+          if (Number.isInteger(val) && val >= 0 && val < 5) {
+            correctAnswer = String.fromCharCode(65 + val);
+          } else {
+            correctAnswer = String(val);
+          }
         } else if (typeof val === 'string') {
-          const match = val.trim().toUpperCase().match(/[A-E]/);
+          const match = val.trim().toUpperCase().match(/^[A-E]$/);
           correctAnswer = match ? match[0] : val.trim().toUpperCase();
         }
       }
