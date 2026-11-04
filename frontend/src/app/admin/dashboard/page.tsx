@@ -61,6 +61,7 @@ import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
 import { SmartQuestionPaperBuilder } from '@/components/question-bank/SmartQuestionPaperBuilder';
 import { QuestionBankImportPanel } from '@/components/question-bank/QuestionBankImportPanel';
 import { QuestionBankReviewQueuePanel } from '@/components/question-bank/QuestionBankReviewQueuePanel';
+import { SubjectWiseAnswerKeyView } from '@/components/question-bank/SubjectWiseAnswerKeyView';
 import { SearchableSubjectSelect } from '@/components/question-bank/SearchableSubjectSelect';
 import { CURRENT_INSTITUTION } from '@/config/institution';
 import { QuestionOptionContent, getOptionText } from '@/components/question-bank/QuestionOptionContent';
@@ -273,9 +274,9 @@ function getExamSemester(exam: any): string {
 export default function AdminDashboard() {
   const router = useRouter();
   const [zoomedImage, setZoomedImage] = useState<{ url: string; title?: string } | null>(null);
-  // Question Bank sub-navigation: Library (browse/filter/select), Import (JSONL/Excel/CSV/PDF —
-  // one entry point), Builder (the relocated Smart Question Paper Builder).
-  const [questionBankView, setQuestionBankView] = useState<'LIBRARY' | 'REVIEW_QUEUE' | 'IMPORT' | 'BUILDER'>('LIBRARY');
+  // Question Bank sub-navigation: Library (browse/filter/select), Answer Key (subject-wise review),
+  // Import (JSONL/Excel/CSV/PDF — one entry point), Builder (the relocated Smart Question Paper Builder).
+  const [questionBankView, setQuestionBankView] = useState<'LIBRARY' | 'REVIEW_QUEUE' | 'ANSWER_KEY' | 'IMPORT' | 'BUILDER'>('LIBRARY');
   const [builderInitialQuestions, setBuilderInitialQuestions] = useState<any[] | undefined>(undefined);
 
   const [activeTab, setActiveTab] = useState<
@@ -386,8 +387,9 @@ export default function AdminDashboard() {
     targetSemester: 'Semester VI',
     maxViolations: '5',
     instructions: '1. Total Duration: 180 Minutes.\n2. Fullscreen security mode is strictly enforced.',
-    questionCount: '',
+    questionCount: '25',
     sourceDocumentId: '',
+    publishImmediately: true,
   });
 
   // Results Ledger & System Settings State
@@ -823,7 +825,7 @@ export default function AdminDashboard() {
       };
       const res = await api.post('/admin/exams', payload);
       if (res.data?.success) {
-        showToast(res.data.message || 'Examination scheduled and published successfully!');
+        showToast(res.data.message || (newExamForm.publishImmediately ? 'Examination scheduled and published successfully!' : 'Examination draft created successfully.'));
         setIsCreateExamOpen(false);
         setNewExamForm({
           title: '',
@@ -835,8 +837,9 @@ export default function AdminDashboard() {
           targetSemester: 'Semester VI',
           maxViolations: '5',
           instructions: '1. Total Duration: 180 Minutes.\n2. Fullscreen security mode is strictly enforced.',
-          questionCount: '',
+          questionCount: '25',
           sourceDocumentId: '',
+          publishImmediately: true,
         });
         fetchInitialData();
       }
@@ -853,7 +856,19 @@ export default function AdminDashboard() {
         fetchInitialData();
       }
     } catch (err: any) {
-      showToast('Failed to update publication status');
+      showToast(err.response?.data?.message || 'Failed to update publication status');
+    }
+  };
+
+  const handleQuickAttachQuestions = async (id: string, title: string, count: number = 25) => {
+    try {
+      const res = await api.post(`/admin/exams/${id}/attach-questions`, { count, publish: false });
+      if (res.data?.success) {
+        showToast(res.data.message || `Attached ${count} questions to ${title}`);
+        fetchInitialData();
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Failed to attach questions');
     }
   };
 
@@ -1945,6 +1960,7 @@ export default function AdminDashboard() {
                             <th>Semester</th>
                             <th>Department</th>
                             <th>Faculty</th>
+                            <th>Questions</th>
                             <th>Duration</th>
                             <th>Marks</th>
                             <th>Examinees</th>
@@ -1982,9 +1998,30 @@ export default function AdminDashboard() {
                                   </td>
                                   <td className="font-mono text-xs">{exam.targetDepartment || 'CSE'}</td>
                                   <td className="font-medium text-slate-700">{exam.createdBy?.name || 'Dr. Sabitha'}</td>
+                                  <td>
+                                    {(exam._count?.testQuestions ?? 0) === 0 ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold bg-red-50 text-red-700 border border-red-200 whitespace-nowrap">
+                                          0 Qs
+                                        </span>
+                                        <button
+                                          onClick={() => handleQuickAttachQuestions(exam.id, exam.title)}
+                                          title="Quick attach 25 verified questions from question bank"
+                                          className="px-1.5 py-0.5 text-[10px] font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded border border-indigo-200 flex items-center gap-0.5 whitespace-nowrap"
+                                        >
+                                          <Sparkles className="w-2.5 h-2.5" />
+                                          <span>+25 Qs</span>
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 font-mono">
+                                        {exam._count?.testQuestions} Qs
+                                      </span>
+                                    )}
+                                  </td>
                                   <td className="font-mono">{exam.durationMinutes} Mins</td>
                                   <td className="font-mono font-bold text-emerald-700">+{exam.totalMarks}</td>
-                                  <td className="font-mono font-semibold">{exam._count?.assignments || 120}</td>
+                                  <td className="font-mono font-semibold">{exam._count?.assignments ?? 0}</td>
                                   <td>
                                     {exam.isPublished ? (
                                       <span className="erp-badge-green font-bold">● Published</span>
@@ -1993,7 +2030,7 @@ export default function AdminDashboard() {
                                     )}
                                   </td>
                                   <td>
-                                    <div className="flex items-center space-x-1">
+                                    <div className="flex items-center space-x-1.5">
                                       <button
                                         onClick={() => setSelectedExamPreview(exam)}
                                         title="Preview Exam"
@@ -2003,10 +2040,15 @@ export default function AdminDashboard() {
                                       </button>
                                       <button
                                         onClick={() => handleTogglePublishExam(exam.id)}
-                                        title="Toggle Status"
-                                        className="p-1.5 text-[#1E40AF] hover:bg-blue-50 rounded"
+                                        title={exam.isPublished ? 'Unpublish exam (move to Draft)' : 'Publish examination for students'}
+                                        className={`px-2 py-1 text-[11px] font-bold rounded flex items-center gap-1 transition-colors ${
+                                          exam.isPublished
+                                            ? 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-300'
+                                            : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm'
+                                        }`}
                                       >
-                                        <Radio className="w-3.5 h-3.5" />
+                                        <Radio className="w-3 h-3" />
+                                        <span>{exam.isPublished ? 'Unpublish' : 'Publish'}</span>
                                       </button>
                                       <button
                                         onClick={() => handlePublishExamResults(exam.id, exam.title)}
@@ -2036,7 +2078,7 @@ export default function AdminDashboard() {
                                 {/* Row Expansion Content Drawer */}
                                 {isExpanded && (
                                   <tr className="bg-blue-50/40">
-                                    <td colSpan={11} className="p-4 space-y-3 border-t border-b border-blue-200 text-xs">
+                                    <td colSpan={12} className="p-4 space-y-3 border-t border-b border-blue-200 text-xs">
                                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                         <div>
                                           <span className="font-bold text-slate-700 block uppercase text-[10px]">Exam Instructions</span>
@@ -2264,6 +2306,7 @@ export default function AdminDashboard() {
                 <div className="flex items-center gap-1 border-b border-slate-200">
                   {([
                     { id: 'LIBRARY', label: 'Questions' },
+                    { id: 'ANSWER_KEY', label: 'Subject-wise Answer Key' },
                     { id: 'REVIEW_QUEUE', label: `Review Queue (${questions.filter((q: any) => q.verificationStatus === 'NEEDS_REVIEW').length})` },
                     { id: 'IMPORT', label: 'Import / Extract' },
                     { id: 'BUILDER', label: 'Build Examination' },
@@ -2313,6 +2356,14 @@ export default function AdminDashboard() {
                   onRefreshData={fetchInitialData}
                   onSelectQuestion={(q) => setQbDetailQuestion(q)}
                   showToast={showToast}
+                  onZoomImage={(url, title) => setZoomedImage({ url, title })}
+                />
+              )}
+
+              {questionBankView === 'ANSWER_KEY' && (
+                <SubjectWiseAnswerKeyView
+                  questions={questions}
+                  subjects={qbSubjectOptions}
                   onZoomImage={(url, title) => setZoomedImage({ url, title })}
                 />
               )}
@@ -3217,7 +3268,7 @@ export default function AdminDashboard() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 uppercase mb-1">Number of Questions</label>
+                  <label className="block font-semibold text-slate-700 uppercase mb-1">Number of Questions *</label>
                   <input
                     type="number"
                     min={0}
@@ -3234,7 +3285,7 @@ export default function AdminDashboard() {
                     onChange={(e) => setNewExamForm({ ...newExamForm, sourceDocumentId: e.target.value })}
                     className="erp-select w-full"
                   >
-                    <option value="">All Questions</option>
+                    <option value="">All Verified Questions ({questions.length > 0 ? questions.length : '2,300+'} Pool)</option>
                     {questionBankDocuments.map((doc) => (
                       <option key={doc.id} value={doc.id}>
                         {doc.fileName || doc.title} ({doc.questionCount})
@@ -3244,21 +3295,43 @@ export default function AdminDashboard() {
                 </div>
               </div>
               <p className="text-[11px] text-slate-500 -mt-1">
-                Leave Number of Questions blank to create the exam shell without attaching questions. When set,
-                that many questions are picked at random from the selected source.
+                {Number(newExamForm.questionCount) > 0
+                  ? `Randomly selects ${newExamForm.questionCount} verified questions from the Question Bank into this examination paper.`
+                  : 'Leaving question count as 0 will create an empty draft shell without attaching questions.'}
               </p>
               <div>
                 <label className="block font-semibold text-slate-700 uppercase mb-1">Security Instructions</label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={newExamForm.instructions}
                   onChange={(e) => setNewExamForm({ ...newExamForm, instructions: e.target.value })}
                   className="erp-input font-mono"
                 />
               </div>
+
+              {/* Publish Immediately Option */}
+              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-md space-y-1">
+                <label className="flex items-center space-x-2 text-xs text-slate-800 font-bold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newExamForm.publishImmediately}
+                    onChange={(e) => setNewExamForm({ ...newExamForm, publishImmediately: e.target.checked })}
+                    className="rounded border-slate-300 text-[#1E40AF] focus:ring-[#1E40AF] w-4 h-4"
+                  />
+                  <span>Publish Immediately for Students</span>
+                </label>
+                <p className="text-[11px] text-slate-600 pl-6 leading-relaxed">
+                  {newExamForm.publishImmediately
+                    ? `✓ Exam will be immediately visible on eligible student dashboards (${newExamForm.targetDepartment || 'Selected Department'}).`
+                    : '○ Exam will be saved as DRAFT. Students cannot see it until you click "Publish".'}
+                </p>
+              </div>
+
               <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
                 <button type="button" onClick={() => setIsCreateExamOpen(false)} className="erp-btn-secondary py-1.5 text-xs">Cancel</button>
-                <button type="submit" className="erp-btn-primary py-1.5 text-xs">Create Draft Examination</button>
+                <button type="submit" className="erp-btn-primary py-1.5 text-xs">
+                  {newExamForm.publishImmediately ? 'Schedule & Publish Examination' : 'Create Draft Examination'}
+                </button>
               </div>
             </form>
           </div>

@@ -106,11 +106,20 @@ export class GateScoringService {
     const correctLetter = this.normalizeOptionToLetter(question.correctAnswer);
 
     if (correctLetter && chosenLetter === correctLetter) {
-      return { isCorrect: true, marksObtained: question.marks };
+      return { isCorrect: true, marksObtained: Number(question.marks.toFixed(2)) };
     } else {
-      // Negative marking ONLY applies to MCQ when candidate selected an incorrect option
-      const penalty = question.negativeMarks || (question.marks === 2.0 ? 0.67 : 0.33);
-      return { isCorrect: false, marksObtained: -Math.abs(penalty) };
+      // Standard GATE negative marking: 1/3 mark deduction for 1-mark MCQ (-0.33), 2/3 for 2-mark MCQ (-0.66)
+      let penalty = 0.33;
+      if (typeof question.negativeMarks === 'number' && question.negativeMarks > 0) {
+        penalty = question.negativeMarks;
+      } else if (question.marks === 2.0) {
+        penalty = 0.66;
+      } else if (question.marks === 1.0) {
+        penalty = 0.33;
+      } else {
+        penalty = Number((question.marks / 3).toFixed(2));
+      }
+      return { isCorrect: false, marksObtained: -Number(penalty.toFixed(2)) };
     }
   }
 

@@ -11,6 +11,7 @@ export class ExamController {
    * surfaces only — Faculty/Admin review is never subject to this check.
    */
   private static canStudentSeeResult(test: { resultVisibility: string; endTime: Date | string; resultsPublished: boolean; status?: string }): boolean {
+    if (Boolean(test.resultsPublished)) return true;
     switch (test.resultVisibility) {
       case 'IMMEDIATE':
         return true;
@@ -73,9 +74,15 @@ export class ExamController {
         }
       }
 
-      // 4. Query all test assignments strictly belonging to authenticated studentId
+      // 4. Query all test assignments strictly belonging to authenticated studentId (published or attempted)
       const assignments = await prisma.testAssignment.findMany({
-        where: { studentId },
+        where: {
+          studentId,
+          OR: [
+            { test: { isPublished: true } },
+            { status: { in: ['COMPLETED', 'AUTO_SUBMITTED', 'IN_PROGRESS'] } },
+          ],
+        },
         include: {
           test: {
             include: {
@@ -170,6 +177,13 @@ export class ExamController {
 
       if (!test.isPublished) {
         return res.status(403).json({ success: false, message: 'This examination has not been published yet.' });
+      }
+
+      if (test.testQuestions.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'This examination has 0 questions assigned. Please contact the examination administrator.',
+        });
       }
 
       const now = new Date();
@@ -385,6 +399,10 @@ export class ExamController {
       let totalScore = 0;
       let totalAttempted = 0;
       let totalCorrect = 0;
+      let totalWrong = 0;
+      let totalUnanswered = 0;
+      let totalPositiveMarks = 0;
+      let totalNegativeMarksDeducted = 0;
 
       const responseMap = new Map();
       assignment.responses.forEach(r => responseMap.set(r.questionId, r));
@@ -404,6 +422,9 @@ export class ExamController {
           chosenAnswer !== '' &&
           (!Array.isArray(chosenAnswer) || chosenAnswer.length > 0);
 
+        let isCorrect = false;
+        let marksObtained = 0;
+
         if (isAttempted) {
           totalAttempted++;
           const evaluation = GateScoringService.evaluateResponse(
@@ -417,23 +438,52 @@ export class ExamController {
             chosenAnswer
           );
 
-          totalScore += evaluation.marksObtained;
-          if (evaluation.isCorrect) totalCorrect++;
-
-          if (studentResp) {
-            await prisma.questionResponse.update({
-              where: { id: studentResp.id },
-              data: {
-                isCorrect: evaluation.isCorrect,
-                marksObtained: evaluation.marksObtained,
-              },
-            });
+          isCorrect = evaluation.isCorrect;
+          marksObtained = evaluation.marksObtained;
+          if (isCorrect) {
+            totalCorrect++;
+            totalPositiveMarks += marksObtained;
+          } else {
+            totalWrong++;
+            if (marksObtained < 0) {
+              totalNegativeMarksDeducted += Math.abs(marksObtained);
+            }
           }
+        } else {
+          totalUnanswered++;
         }
+
+        totalScore += marksObtained;
+
+        // Permanently record evaluation in QuestionResponse for every question
+        await prisma.questionResponse.upsert({
+          where: {
+            assignmentId_questionId: {
+              assignmentId,
+              questionId: q.id,
+            },
+          },
+          update: {
+            isCorrect,
+            marksObtained,
+            status: isAttempted ? (studentResp?.status || 'ANSWERED') : 'NOT_VISITED',
+            chosenAnswer: chosenAnswer !== undefined ? chosenAnswer : null,
+          },
+          create: {
+            assignmentId,
+            questionId: q.id,
+            isCorrect,
+            marksObtained,
+            status: isAttempted ? 'ANSWERED' : 'NOT_VISITED',
+            chosenAnswer: chosenAnswer !== undefined ? chosenAnswer : null,
+            timeSpentSec: 0,
+          },
+        });
       }
 
-      const finalScore = Math.max(0, Number(totalScore.toFixed(2)));
-      const accuracy = totalAttempted > 0 ? (totalCorrect / totalAttempted) * 100 : 0;
+      // Preserve decimal precision and allow final score to be negative if deductions exceed positive marks
+      const finalScore = Number(totalScore.toFixed(2));
+      const accuracy = totalAttempted > 0 ? Number(((totalCorrect / totalAttempted) * 100).toFixed(1)) : 0;
       const timeTakenSec = Math.floor((Date.now() - new Date(assignment.startedAt || Date.now()).getTime()) / 1000);
 
       await prisma.testAssignment.update({
@@ -442,7 +492,7 @@ export class ExamController {
           status: 'COMPLETED',
           score: finalScore,
           totalMarks: assignment.test.totalMarks,
-          accuracy: Number(accuracy.toFixed(1)),
+          accuracy,
           timeTakenSec,
           submittedAt: new Date(),
         },
@@ -468,9 +518,13 @@ export class ExamController {
           assignmentId,
           score: resultVisible ? finalScore : null,
           totalMarks: assignment.test.totalMarks,
-          accuracy: resultVisible ? Number(accuracy.toFixed(1)) : null,
+          accuracy: resultVisible ? accuracy : null,
           timeTakenSec,
           totalCorrect: resultVisible ? totalCorrect : undefined,
+          totalWrong: resultVisible ? totalWrong : undefined,
+          totalUnanswered: resultVisible ? totalUnanswered : undefined,
+          positiveMarks: resultVisible ? Number(totalPositiveMarks.toFixed(2)) : undefined,
+          negativeMarks: resultVisible ? Number(totalNegativeMarksDeducted.toFixed(2)) : undefined,
           totalAttempted,
           resultVisibility: assignment.test.resultVisibility,
           resultVisible,
@@ -548,6 +602,8 @@ export class ExamController {
     let attemptedCount = 0;
     let correctCount = 0;
     let wrongCount = 0;
+    let totalPositiveMarks = 0;
+    let totalNegativeMarksDeducted = 0;
 
     const solutions = assignment.test.testQuestions.map(tq => {
       const q = tq.question;
@@ -557,16 +613,31 @@ export class ExamController {
       const resp = responseMap.get(q.id);
       const chosenAnswer = resp ? resp.chosenAnswer : null;
 
-      let isCorrect = resp ? resp.isCorrect : false;
-      let marksObtained = resp ? resp.marksObtained : 0;
-
       const isAttempted =
         chosenAnswer !== null &&
         chosenAnswer !== undefined &&
         chosenAnswer !== '' &&
         (!Array.isArray(chosenAnswer) || chosenAnswer.length > 0);
 
-      if (isAttempted) {
+      let isCorrect = false;
+      let marksObtained = 0;
+
+      // Prefer the permanently stored evaluation from QuestionResponse if completed
+      if (resp && typeof resp.marksObtained === 'number' && (assignment.status === 'COMPLETED' || assignment.status === 'AUTO_SUBMITTED')) {
+        isCorrect = resp.isCorrect;
+        marksObtained = resp.marksObtained;
+        if (isAttempted) {
+          attemptedCount++;
+          if (isCorrect) {
+            correctCount++;
+            totalPositiveMarks += marksObtained;
+          } else {
+            wrongCount++;
+            if (marksObtained < 0) totalNegativeMarksDeducted += Math.abs(marksObtained);
+          }
+        }
+        totalScore += marksObtained;
+      } else if (isAttempted) {
         attemptedCount++;
         const evalRes = GateScoringService.evaluateResponse(
           {
@@ -581,42 +652,49 @@ export class ExamController {
         isCorrect = evalRes.isCorrect;
         marksObtained = evalRes.marksObtained;
         totalScore += marksObtained;
-        if (isCorrect) correctCount++;
-        else wrongCount++;
+        if (isCorrect) {
+          correctCount++;
+          totalPositiveMarks += marksObtained;
+        } else {
+          wrongCount++;
+          if (marksObtained < 0) totalNegativeMarksDeducted += Math.abs(marksObtained);
+        }
       }
 
       return {
         id: q.id,
         customId: q.customId,
         order: tq.order,
-        text: graded.text,
+        text: graded.text || q.text,
         type: graded.type,
         difficulty: graded.difficulty,
         marks: graded.marks,
         negativeMarks: graded.negativeMarks,
-        options: graded.options,
+        options: graded.options || q.options || [],
         imageUrl: graded.imageUrl || q.imageUrl,
         correctAnswer: canSeeAnswerKey ? graded.correctAnswer : undefined,
         chosenAnswer,
         isCorrect,
-        marksObtained,
+        isAttempted,
+        marksObtained: Number(marksObtained.toFixed(2)),
+        negativeDeducted: marksObtained < 0 ? Number(Math.abs(marksObtained).toFixed(2)) : 0,
         timeSpentSec: resp ? resp.timeSpentSec : 0,
-        explanation: canSeeAnswerKey ? graded.explanation : undefined,
+        explanation: canSeeAnswerKey ? (graded.explanation || q.explanation) : undefined,
         reference: q.reference,
         previousYear: q.previousYear,
-        subject: q.subtopic.topic.module.subject.name,
-        module: q.subtopic.topic.module.name,
-        topic: q.subtopic.topic.name,
-        subtopic: q.subtopic.name,
+        subject: q.subtopic?.topic?.module?.subject?.name || q.sourceChapter || 'General',
+        module: q.subtopic?.topic?.module?.name || 'General',
+        topic: q.subtopic?.topic?.name || q.sourceSection || 'General',
+        subtopic: q.subtopic?.name || q.sourceHeading || 'General',
       };
     });
 
     const totalQuestions = assignment.test.testQuestions.length;
     const unansweredCount = Math.max(0, totalQuestions - attemptedCount);
-    const finalScore = Math.max(0, Number(totalScore.toFixed(2)));
+    const finalScore = Number(totalScore.toFixed(2));
     const calculatedAccuracy = attemptedCount > 0 ? Number(((correctCount / attemptedCount) * 100).toFixed(1)) : 0;
-    const resolvedScore = assignment.score !== null ? (assignment.score === 0 && finalScore > 0 ? finalScore : assignment.score) : finalScore;
-    const resolvedAccuracy = assignment.accuracy !== null ? (assignment.accuracy === 0 && calculatedAccuracy > 0 ? calculatedAccuracy : assignment.accuracy) : calculatedAccuracy;
+    const resolvedScore = assignment.score !== null && assignment.score !== undefined ? assignment.score : finalScore;
+    const resolvedAccuracy = assignment.accuracy !== null && assignment.accuracy !== undefined ? assignment.accuracy : calculatedAccuracy;
 
     return {
       assignment,
@@ -624,6 +702,8 @@ export class ExamController {
       student: assignment.student,
       score: resolvedScore,
       totalMarks: assignment.test.totalMarks,
+      positiveMarks: Number(totalPositiveMarks.toFixed(2)),
+      negativeMarks: Number(totalNegativeMarksDeducted.toFixed(2)),
       accuracy: resolvedAccuracy,
       timeTakenSec: assignment.timeTakenSec,
       totalQuestions,
@@ -692,6 +772,8 @@ export class ExamController {
           testTitle: review.testTitle,
           score: review.score,
           totalMarks: review.totalMarks,
+          positiveMarks: review.positiveMarks,
+          negativeMarks: review.negativeMarks,
           accuracy: review.accuracy,
           timeTakenSec: review.timeTakenSec,
           totalQuestions: review.totalQuestions,
@@ -745,6 +827,8 @@ export class ExamController {
           student: review.student,
           score: review.score,
           totalMarks: review.totalMarks,
+          positiveMarks: review.positiveMarks,
+          negativeMarks: review.negativeMarks,
           accuracy: review.accuracy,
           timeTakenSec: review.timeTakenSec,
           totalQuestions: review.totalQuestions,

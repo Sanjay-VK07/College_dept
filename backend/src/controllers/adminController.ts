@@ -31,12 +31,14 @@ export class AdminController {
       if (req.user!.role === Role.FACULTY) {
         const userId = req.user!.id;
         
-        // Scope to exams created by or assigned to this faculty member
+        // Scope to exams created by or assigned to this faculty member or departmental
+        const userDept = (req.user!.department || '').trim();
         const facultyExams = await prisma.mockTest.findMany({
           where: {
             OR: [
               { createdById: userId },
-              { invigilators: { some: { facultyId: userId } } }
+              { invigilators: { some: { facultyId: userId } } },
+              { targetDepartment: { in: ['Computer Science and Engineering', 'Computer Science & Engineering', 'CSE', 'ALL', userDept] } }
             ]
           },
           select: { id: true, startTime: true, endTime: true, status: true, title: true }
@@ -57,7 +59,14 @@ export class AdminController {
           attendanceTotal,
           recentLogs,
         ] = await Promise.all([
-          prisma.question.count({ where: { createdById: userId } }),
+          prisma.question.count({
+            where: {
+              OR: [
+                { createdById: userId },
+                { subtopic: { topic: { module: { subject: { department: { in: ['CSE', 'Computer Science and Engineering', 'Computer Science & Engineering', 'CS', 'ALL'] } } } } } }
+              ]
+            }
+          }),
           prisma.testAssignment.count({ where: { testId: { in: examIds } } }),
           prisma.testAssignment.count({ where: { testId: { in: examIds }, status: 'COMPLETED' } }),
           prisma.testAssignment.count({ where: { testId: { in: examIds }, startedAt: { not: null } } }),
@@ -330,21 +339,22 @@ export class AdminController {
 
       if (req.user!.role === Role.FACULTY) {
         const userId = req.user!.id;
+        const userDept = (req.user!.department || '').trim();
         const facultyExams = await prisma.mockTest.findMany({
           where: {
             OR: [
               { createdById: userId },
-              { invigilators: { some: { facultyId: userId } } }
+              { invigilators: { some: { facultyId: userId } } },
+              { targetDepartment: { in: ['Computer Science and Engineering', 'Computer Science & Engineering', 'CSE', 'ALL', userDept] } }
             ]
           },
           select: { id: true }
         });
         const examIds = facultyExams.map(e => e.id);
-        whereClause.assignments = {
-          some: {
-            testId: { in: examIds }
-          }
-        };
+        whereClause.OR = [
+          { department: { in: ['Computer Science and Engineering', 'Computer Science & Engineering', 'CSE', userDept] } },
+          { assignments: { some: { testId: { in: examIds } } } }
+        ];
       }
 
       const students = await prisma.user.findMany({
@@ -763,21 +773,6 @@ export class AdminController {
           { text: { contains: query, mode: 'insensitive' } },
           { customId: { contains: query, mode: 'insensitive' } },
           { sourceHeading: { contains: query, mode: 'insensitive' } },
-        ];
-      }
-
-      if (req.user!.role === Role.FACULTY) {
-        const userDept = (req.user!.department || '').trim();
-        const deptAlias = userDept === 'Computer Science and Engineering' || userDept === 'CSE' ? 'CSE' : userDept;
-        whereClause.AND = [
-          {
-            OR: [
-              { createdById: req.user!.id },
-              { subtopic: { topic: { module: { subject: { department: { contains: deptAlias, mode: 'insensitive' } } } } } },
-              { subtopic: { topic: { module: { subject: { department: null } } } } },
-              { subtopic: null }
-            ]
-          }
         ];
       }
 
@@ -1576,9 +1571,11 @@ export class AdminController {
 
       const whereClause: any = {};
       if (role === Role.FACULTY) {
+        const userDept = (req.user!.department || '').trim();
         whereClause.OR = [
           { createdById: userId },
-          { invigilators: { some: { facultyId: userId } } }
+          { invigilators: { some: { facultyId: userId } } },
+          { targetDepartment: { in: ['Computer Science and Engineering', 'Computer Science & Engineering', 'CSE', 'ALL', userDept] } },
         ];
       }
 
@@ -1617,6 +1614,8 @@ export class AdminController {
         solutionVisibility,
         startTime,
         endTime,
+        publishImmediately,
+        isPublished,
       } = req.body;
 
       if (!title || String(title).trim().length < 5) {
@@ -1641,6 +1640,14 @@ export class AdminController {
       const parsedQuestionCount = Number(questionCount) || 0;
       if (questionCount !== undefined && (isNaN(parsedQuestionCount) || parsedQuestionCount < 0)) {
         return res.status(400).json({ success: false, message: 'Number of questions must be a non-negative number.' });
+      }
+
+      const shouldPublishImmediately = Boolean(publishImmediately || isPublished);
+      if (shouldPublishImmediately && parsedQuestionCount <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot publish examination with 0 questions. Please specify number of questions to attach, or uncheck "Publish Immediately" to save as draft.',
+        });
       }
 
       let resolvedYear: number | undefined = targetYear ? Number(targetYear) : undefined;
@@ -1691,9 +1698,6 @@ export class AdminController {
 
       let attachedCount = 0;
       if (parsedQuestionCount > 0) {
-        // verificationStatus is required here — found live via UI testing that this legacy
-        // random-attach path had no verification gate at all, letting a NEEDS_REVIEW or
-        // REJECTED question into a real exam.
         const poolWhere: any = { verificationStatus: VerificationStatus.VERIFIED };
         if (sourceDocumentId) {
           poolWhere.aiSources = { some: { documentId: String(sourceDocumentId) } };
@@ -1710,8 +1714,6 @@ export class AdminController {
         const selected = shuffled.slice(0, parsedQuestionCount);
 
         if (selected.length > 0) {
-          // Pin each question's current version at attach time so later edits/AI-solution
-          // approvals never retroactively change what this exam scores against.
           const versionIds = await Promise.all(
             selected.map((q) => QuestionVersionService.getCurrentVersionId(q.id))
           );
@@ -1728,27 +1730,189 @@ export class AdminController {
         }
       }
 
+      let finalExam = exam;
+      if (shouldPublishImmediately) {
+        if (attachedCount === 0) {
+          await prisma.mockTest.delete({ where: { id: exam.id } });
+          return res.status(400).json({
+            success: false,
+            message: 'No verified questions were available to attach. Exam was not published.',
+          });
+        }
+        finalExam = await prisma.mockTest.update({
+          where: { id: exam.id },
+          data: {
+            isPublished: true,
+            resultsPublished: true,
+            resultVisibility: ResultVisibility.IMMEDIATE,
+            status: ExamStatus.PUBLISHED,
+          },
+        });
+      }
+
       await AuditLogger.log({
         userId: req.user?.id,
         action: 'CREATE_EXAM',
         resource: 'MockTest',
-        details: `Scheduled and published exam: ${title}${parsedQuestionCount > 0 ? ` (${attachedCount}/${parsedQuestionCount} questions randomly attached)` : ''}`,
+        details: `${shouldPublishImmediately ? 'Scheduled and published' : 'Created draft'} exam: ${title}${parsedQuestionCount > 0 ? ` (${attachedCount}/${parsedQuestionCount} questions attached)` : ''}`,
         ipAddress: req.ip,
       });
 
       await NotificationController.createSystemNotification(
-        'Examination Created',
-        `New examination paper "${title}" created as DRAFT`,
-        'info',
+        shouldPublishImmediately ? 'Examination Published' : 'Examination Created',
+        `Examination paper "${title}" ${shouldPublishImmediately ? 'published for students' : 'created as DRAFT'}`,
+        shouldPublishImmediately ? 'success' : 'info',
         'ALL'
       );
 
-      const message =
-        parsedQuestionCount > 0 && attachedCount < parsedQuestionCount
-          ? `Exam created, but only ${attachedCount} of the requested ${parsedQuestionCount} questions were available in the selected pool.`
-          : 'Exam created successfully';
+      const message = shouldPublishImmediately
+        ? `Exam created and published successfully for students with ${attachedCount} questions!`
+        : (parsedQuestionCount > 0 && attachedCount < parsedQuestionCount
+            ? `Exam draft created, but only ${attachedCount} of the requested ${parsedQuestionCount} questions were available in the selected pool.`
+            : `Exam draft created successfully with ${attachedCount} questions attached.`);
 
-      return res.status(201).json({ success: true, message, data: { ...exam, attachedQuestionCount: attachedCount } });
+      return res.status(201).json({
+        success: true,
+        message,
+        data: { ...finalExam, attachedQuestionCount: attachedCount },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  public static async attachQuestions(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const { count = 25, sourceDocumentId, publish = false } = req.body;
+      const parsedCount = Number(count) || 25;
+
+      const exam = await prisma.mockTest.findUnique({
+        where: { id },
+        include: { testQuestions: true },
+      });
+
+      if (!exam) {
+        return res.status(404).json({ success: false, message: 'Exam not found' });
+      }
+
+      const existingQuestionIds = exam.testQuestions.map((tq) => tq.questionId);
+
+      const poolWhere: any = {
+        verificationStatus: VerificationStatus.VERIFIED,
+        // Exclude Answer Key pages so answer key tables are never attached as questions
+        sourcePage: { notIn: [93, 94, 165, 166, 272, 273, 274, 361, 362, 363, 467, 468, 469] },
+        text: { not: { contains: 'Answer Key', mode: 'insensitive' } },
+        sourceHeading: { not: { contains: 'Answer Key', mode: 'insensitive' } },
+      };
+      if (existingQuestionIds.length > 0) {
+        poolWhere.id = { notIn: existingQuestionIds };
+      }
+      if (sourceDocumentId) {
+        poolWhere.aiSources = { some: { documentId: String(sourceDocumentId) } };
+      }
+
+      // If exam title specifies a subject, match questions belonging to that subject
+      const examTitleLower = exam.title.trim().toLowerCase();
+      if (examTitleLower.includes('computer network') || examTitleLower.includes('network')) {
+        poolWhere.OR = [
+          { sourceChapter: { contains: 'Computer Networks', mode: 'insensitive' } },
+          { customId: { startsWith: '2.' } },
+          { customId: { startsWith: 'V3_2.' } },
+          { subtopic: { topic: { module: { subject: { name: { contains: 'Computer Networks', mode: 'insensitive' } } } } } },
+        ];
+      } else if (examTitleLower.includes('operating system') || examTitleLower.includes(' os')) {
+        poolWhere.OR = [
+          { sourceChapter: { contains: 'Operating Systems', mode: 'insensitive' } },
+          { customId: { startsWith: '5.' } },
+          { customId: { startsWith: 'V3_5.' } },
+          { subtopic: { topic: { module: { subject: { name: { contains: 'Operating Systems', mode: 'insensitive' } } } } } },
+        ];
+      } else if (examTitleLower.includes('database') || examTitleLower.includes('dbms')) {
+        poolWhere.OR = [
+          { sourceChapter: { contains: 'Databases', mode: 'insensitive' } },
+          { customId: { startsWith: '3.' } },
+          { customId: { startsWith: 'V3_3.' } },
+          { subtopic: { topic: { module: { subject: { name: { contains: 'Databases', mode: 'insensitive' } } } } } },
+        ];
+      } else if (examTitleLower.includes('digital logic')) {
+        poolWhere.OR = [
+          { sourceChapter: { contains: 'Digital Logic', mode: 'insensitive' } },
+          { customId: { startsWith: '4.' } },
+          { customId: { startsWith: 'V3_4.' } },
+          { subtopic: { topic: { module: { subject: { name: { contains: 'Digital Logic', mode: 'insensitive' } } } } } },
+        ];
+      } else if (examTitleLower.includes('algorithm')) {
+        poolWhere.OR = [
+          { sourceChapter: { contains: 'Algorithms', mode: 'insensitive' } },
+          { customId: { startsWith: '1.' } },
+          { subtopic: { topic: { module: { subject: { name: { contains: 'Algorithms', mode: 'insensitive' } } } } } },
+        ];
+      }
+
+      const pool = await prisma.question.findMany({ where: poolWhere, select: { id: true } });
+
+      const shuffled = [...pool];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      const selected = shuffled.slice(0, parsedCount);
+
+      if (selected.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No additional verified questions available in the question bank.',
+        });
+      }
+
+      const currentMaxOrder = exam.testQuestions.reduce((max, tq) => Math.max(max, tq.order), 0);
+      const versionIds = await Promise.all(
+        selected.map((q) => QuestionVersionService.getCurrentVersionId(q.id))
+      );
+
+      await prisma.mockTestQuestion.createMany({
+        data: selected.map((q, idx) => ({
+          mockTestId: exam.id,
+          questionId: q.id,
+          questionVersionId: versionIds[idx],
+          order: currentMaxOrder + idx + 1,
+        })),
+      });
+
+      const updatedCount = exam.testQuestions.length + selected.length;
+
+      let updatedExam = exam;
+      if (publish && !exam.isPublished) {
+        updatedExam = await prisma.mockTest.update({
+          where: { id },
+          data: {
+            isPublished: true,
+            resultsPublished: true,
+            resultVisibility: ResultVisibility.IMMEDIATE,
+            status: ExamStatus.PUBLISHED,
+          },
+          include: { testQuestions: true },
+        });
+      }
+
+      await AuditLogger.log({
+        userId: req.user?.id,
+        action: 'ATTACH_EXAM_QUESTIONS',
+        resource: 'MockTest',
+        details: `Attached ${selected.length} questions to exam "${exam.title}" (total: ${updatedCount})`,
+        ipAddress: req.ip,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Successfully attached ${selected.length} questions. Exam now has ${updatedCount} questions.${publish ? ' Exam is now published!' : ''}`,
+        data: {
+          attachedCount: selected.length,
+          totalQuestions: updatedCount,
+          isPublished: updatedExam.isPublished,
+        },
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }
@@ -1757,22 +1921,33 @@ export class AdminController {
   public static async togglePublishExam(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const exam = await prisma.mockTest.findUnique({ where: { id } });
+      const exam = await prisma.mockTest.findUnique({
+        where: { id },
+        include: {
+          _count: { select: { testQuestions: true } },
+        },
+      });
 
       if (!exam) {
         return res.status(404).json({ success: false, message: 'Exam not found' });
       }
 
-      // status must move in lockstep with isPublished — found live via UI testing that this
-      // endpoint left status stuck at DRAFT after a real publish (isPublished:true, status:
-      // 'DRAFT' simultaneously). Every current UI consumer happens to read isPublished for its
-      // badge, so this wasn't visibly wrong yet, but any other status-keyed logic would disagree
-      // with what the exam actually is.
       const nowPublished = !exam.isPublished;
+
+      // Prevent publishing an exam with 0 questions!
+      if (nowPublished && exam._count.testQuestions === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot publish examination with 0 questions. Please attach questions first using "+25 Qs" or AI Assembly.',
+        });
+      }
+
       const updated = await prisma.mockTest.update({
         where: { id },
         data: {
           isPublished: nowPublished,
+          resultsPublished: nowPublished,
+          resultVisibility: nowPublished ? ResultVisibility.IMMEDIATE : exam.resultVisibility,
           status: nowPublished ? ExamStatus.PUBLISHED : ExamStatus.DRAFT,
         },
       });
@@ -1794,7 +1969,7 @@ export class AdminController {
 
       return res.status(200).json({
         success: true,
-        message: `Exam status toggled to ${updated.isPublished ? 'Published' : 'Draft'}`,
+        message: `Exam status set to ${updated.isPublished ? 'Published' : 'Draft'}`,
         data: updated,
       });
     } catch (error: any) {
@@ -2147,10 +2322,12 @@ export class AdminController {
     try {
       const whereClause: any = {};
       if (req.user!.role === Role.FACULTY) {
+        const userDept = (req.user!.department || '').trim();
         whereClause.test = {
           OR: [
             { createdById: req.user!.id },
-            { invigilators: { some: { facultyId: req.user!.id } } }
+            { invigilators: { some: { facultyId: req.user!.id } } },
+            { targetDepartment: { in: ['Computer Science and Engineering', 'Computer Science & Engineering', 'CSE', 'ALL', userDept] } },
           ]
         };
       }
@@ -2188,6 +2365,7 @@ export class AdminController {
 
         return {
           id: a.id,
+          assignmentId: a.id,
           registerNo: a.student?.registerNo || '—',
           studentName: a.student?.name || 'Student',
           courseTitle: a.test?.title || 'Examination',

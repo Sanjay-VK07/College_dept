@@ -12,12 +12,14 @@ export class PDFPageRenderService {
 
     const normalizedCode = idOrCode.replace(/^(?:V\d+_|vol\d+_)/i, '').replace(/\./g, '_');
     const targetCodes = Array.from(new Set([idOrCode, normalizedCode]));
-
     const dirs = [
+      path.resolve(process.cwd(), 'gate-extraction-v2', 'images'),
+      path.resolve(process.cwd(), '..', 'gate-extraction-v2', 'images'),
+      path.resolve(__dirname, '..', '..', 'gate-extraction-v2', 'images'),
+      path.resolve(__dirname, '..', '..', '..', 'gate-extraction-v2', 'images'),
       path.join(process.cwd(), 'public', 'uploads', 'diagrams'),
       path.join(process.cwd(), 'uploads', 'diagrams'),
       path.join(process.cwd(), 'public', 'images'),
-      path.join(process.cwd(), '..', 'gate-extraction-v2', 'images'),
       path.join(process.cwd(), 'public', 'uploads'),
       path.join(process.cwd(), 'uploads'),
     ];

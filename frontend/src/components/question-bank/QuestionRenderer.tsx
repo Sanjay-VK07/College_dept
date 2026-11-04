@@ -59,12 +59,13 @@ function cleanImagePath(raw: string): string {
     return `/${clean}`;
   }
 
-  // 2. Extracted question filename pattern: e.g. 1_1_5.png, 1_1_5.jpg, /uploads/diagrams/1_1_5.jpg
-  // Always map to the canonical 300 DPI high-resolution PNG in /images/
+  // 2. Extracted question filename pattern: e.g. 1_1_5.png, v3_3_3_5.png, /uploads/diagrams/1_1_5.jpg
+  // Always normalize prefix (v2_, v3_) and map to canonical 300 DPI high-resolution PNG in /images/
   const filename = clean.split('/').pop() || '';
-  const match = filename.match(/^(\d+_\d+_\d+)(?:_p\d+)?\.(?:png|jpe?g|webp)$/i);
+  const normalizedFilename = filename.replace(/^(?:v\d+_|vol\d+_)/i, '');
+  const match = normalizedFilename.match(/^(\d+_\d+_\d+)(?:_p\d+)?\.(?:png|jpe?g|webp)$/i);
   if (match) {
-    const pngName = filename.replace(/\.(jpe?g|webp)$/i, '.png');
+    const pngName = normalizedFilename.replace(/\.(jpe?g|webp)$/i, '.png');
     return `/images/${pngName}`;
   }
 
@@ -86,7 +87,7 @@ function cleanImagePath(raw: string): string {
  */
 export function getQuestionImageUrl(q: any): string | null {
   if (!q) return null;
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
 
   // 1. Direct questionImage object or string
   if (q.questionImage) {
@@ -565,7 +566,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   // For questions marked status="needs_review", render collapsed by default
   // in review workflows (can be expanded with a single click).
   // =========================================================================
-  if (!isExpanded) {
+  if (!isExpanded && !isStudentOrSolution) {
     return (
       <div className={`erp-card p-0 overflow-hidden border border-amber-300 bg-amber-50/40 rounded-lg shadow-xs hover:border-amber-400 transition-all ${className}`}>
         <div
@@ -731,11 +732,12 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       ) : imageError ? (
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs font-mono space-y-2 shadow-sm">
           <div className="flex items-center justify-between gap-2">
-            <div className="font-bold flex items-center gap-1.5">
+            <div className="font-bold flex items-center gap-1.5 font-sans">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                Source document temporarily unavailable for Question{' '}
-                {question.order !== undefined ? question.order : qNorm.customId || qNorm.questionId}
+                {isStudentOrSolution
+                  ? 'Question image could not be loaded. Please proceed to other questions.'
+                  : `Source document temporarily unavailable for Question ${question.order !== undefined ? question.order : qNorm.customId || qNorm.questionId}`}
               </span>
             </div>
             {!isStudentOrSolution && (

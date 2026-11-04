@@ -77,6 +77,8 @@ router.post('/solutions/:id/approve', requireRoles(Role.FACULTY, Role.ADMIN), AI
 
 // Intelligent Exam Draft Assembly routes (Faculty & Admin only)
 router.post('/exams/assemble-draft', requireRoles(Role.FACULTY, Role.ADMIN), AIExamController.assembleDraft);
+router.post('/exams/generate', requireRoles(Role.FACULTY, Role.ADMIN), AIExamController.assembleDraft);
+router.post('/exams/:id/approve', requireRoles(Role.FACULTY, Role.ADMIN), AIExamController.approveExamDraft);
 router.post('/exams/validate-balance', requireRoles(Role.FACULTY, Role.ADMIN), AIExamController.validateExamBalance);
 
 // Student Practice & Adaptive Recommendations (Student, Faculty & Admin)

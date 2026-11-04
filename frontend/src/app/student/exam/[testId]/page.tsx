@@ -105,7 +105,7 @@ export default function ExamPage() {
         setSelectedAnswers(initialAnswers);
 
         // Socket connection
-        const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
+        const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5001';
         const socket = io(socketUrl, { auth: { token: localStorage.getItem('gsmas_token') } });
         socketRef.current = socket;
 
@@ -418,8 +418,14 @@ export default function ExamPage() {
               <span className="erp-badge-gray">{currentQ.type}</span>
               <span className="erp-badge-gray">Difficulty: {currentQ.difficulty}</span>
             </div>
-            <div className="text-xs font-mono text-slate-600">
-              Marks: <b className="text-emerald-700">+{currentQ.marks}</b> | Negative: <b className="text-red-700">-{currentQ.negativeMarks}</b>
+            <div className="text-xs font-mono text-slate-600 flex items-center gap-3">
+              <span>Marks allotted: <b className="text-emerald-700">{currentQ.marks === 1 ? '1 mark' : `${currentQ.marks} marks`}</b></span>
+              <span className="text-slate-300">•</span>
+              {currentQ.type === 'MCQ' ? (
+                <span>Negative marks deducted: <b className="text-rose-600">{currentQ.negativeMarks ? `${currentQ.negativeMarks} marks` : (currentQ.marks === 2 ? '0.66 marks' : '0.33 marks')}</b></span>
+              ) : (
+                <span className="text-slate-500">Negative marks: <b className="text-slate-700">0.00 marks (No negative marking)</b></span>
+              )}
             </div>
           </div>
 
@@ -427,6 +433,7 @@ export default function ExamPage() {
           <QuestionRenderer
             question={currentQ}
             selectedAnswer={selectedAnswers[currentQ.id]}
+            viewMode="STUDENT_EXAM"
             onSelectAnswer={(ans) => {
               if (currentQ.type === 'NAT' || currentQ.type === 'FREE_RESPONSE') {
                 const natVal =
@@ -449,7 +456,6 @@ export default function ExamPage() {
                 autoSave(currentQ.id, ans, 'ANSWERED');
               }
             }}
-            viewMode="STUDENT_EXAM"
           />
 
           {/* Bottom Controls Bar */}

@@ -46,23 +46,41 @@ app.use((req, res, next) => {
   if (req.url.startsWith('/api/api/')) {
     req.url = req.url.replace('/api/api/', '/api/');
   }
+  // Normalize Volume prefix in image URLs (e.g. /images/v3_3_3_5.png -> /images/3_3_5.png)
+  if (req.url.startsWith('/images/') || req.url.startsWith('/uploads/diagrams/')) {
+    req.url = req.url.replace(/(\/images\/|\/uploads\/diagrams\/)[vV]\d+_/i, '$1');
+  }
   next();
 });
 
 import path from 'path';
 
 // Serve uploaded diagrams, figures and assets statically with multi-directory fallback
+const gateExtractionDirs = [
+  path.resolve(process.cwd(), 'gate-extraction-v2', 'images'),
+  path.resolve(process.cwd(), '..', 'gate-extraction-v2', 'images'),
+  path.resolve(__dirname, '..', '..', 'gate-extraction-v2', 'images'),
+  path.resolve(__dirname, '..', '..', '..', 'gate-extraction-v2', 'images'),
+];
+
 app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 app.use('/uploads/diagrams', express.static(path.join(process.cwd(), 'public', 'uploads', 'diagrams')));
 app.use('/uploads/diagrams', express.static(path.join(process.cwd(), 'uploads', 'diagrams')));
 app.use('/uploads/diagrams', express.static(path.join(process.cwd(), 'public', 'images')));
-app.use('/uploads/diagrams', express.static(path.join(process.cwd(), '..', 'gate-extraction-v2', 'images')));
-app.use('/gate-extraction-v2', express.static(path.join(process.cwd(), '..', 'gate-extraction-v2')));
+for (const dir of gateExtractionDirs) {
+  app.use('/uploads/diagrams', express.static(dir));
+}
+
+app.use('/gate-extraction-v2', express.static(path.resolve(process.cwd(), 'gate-extraction-v2')));
+app.use('/gate-extraction-v2', express.static(path.resolve(process.cwd(), '..', 'gate-extraction-v2')));
+
 app.use('/images', express.static(path.join(process.cwd(), 'public', 'uploads', 'diagrams')));
 app.use('/images', express.static(path.join(process.cwd(), 'uploads', 'diagrams')));
 app.use('/images', express.static(path.join(process.cwd(), 'public', 'images')));
-app.use('/images', express.static(path.join(process.cwd(), '..', 'gate-extraction-v2', 'images')));
+for (const dir of gateExtractionDirs) {
+  app.use('/images', express.static(dir));
+}
 
 // Health & Readiness Probes
 app.use('/api/health', healthRoutes);

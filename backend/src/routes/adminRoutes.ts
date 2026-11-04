@@ -12,10 +12,10 @@ const router = Router();
 router.use(authenticateJWT);
 
 // Overview & Health
-router.get('/overview', requireRoles(Role.ADMIN), AdminController.getOverviewStats);
+router.get('/overview', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getOverviewStats);
 
 // Student Roster Management
-router.get('/students', requireRoles(Role.ADMIN), AdminController.getStudents);
+router.get('/students', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getStudents);
 router.post('/students', requireRoles(Role.ADMIN), AdminController.createStudent);
 router.put('/students/:id', requireRoles(Role.ADMIN), AdminController.updateStudent);
 router.delete('/students/:id', requireRoles(Role.ADMIN), AdminController.deleteStudent);
@@ -55,7 +55,8 @@ router.get('/question-bank-documents', requireRoles(Role.FACULTY, Role.ADMIN), A
 // Exam Management
 router.get('/exams', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.getExams);
 router.post('/exams', requireRoles(Role.FACULTY, Role.ADMIN), requireExamCreatePermission, AdminController.createExam);
-router.put('/exams/:id/publish', requireRoles(Role.ADMIN), AdminController.togglePublishExam);
+router.put('/exams/:id/publish', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.togglePublishExam);
+router.post('/exams/:id/attach-questions', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.attachQuestions);
 router.put('/exams/:id/status', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.updateExamStatus);
 router.put('/exams/:id/publish-results', requireRoles(Role.FACULTY, Role.ADMIN), AdminController.publishExamResults);
 router.delete('/exams/:id', requireRoles(Role.ADMIN), AdminController.deleteExam);

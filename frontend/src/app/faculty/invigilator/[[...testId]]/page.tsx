@@ -19,11 +19,13 @@ import {
   FileText,
   Bot,
   LayoutGrid,
+  BookOpen,
 } from 'lucide-react';
 import io from 'socket.io-client';
 import api from '@/lib/api';
 import { RiskTierTable, LiveStudent } from '@/components/invigilator/RiskTierTable';
 import { AIExaminationAssistant } from '@/components/ai/AIExaminationAssistant';
+import { SubjectWiseAnswerKeyView } from '@/components/question-bank/SubjectWiseAnswerKeyView';
 
 export default function InvigilatorDashboard() {
   const router = useRouter();
@@ -35,10 +37,11 @@ export default function InvigilatorDashboard() {
   const testId = Array.isArray(rawTestId) ? rawTestId[0] : (rawTestId as string | undefined);
 
   const [students, setStudents] = useState<LiveStudent[]>([]);
+  const [questions, setQuestions] = useState<any[]>([]);
   const [testTitle, setTestTitle] = useState('CS8601 Database Management Systems - Mid-Semester CBT Assessment');
   const [socketConnected, setSocketConnected] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    'OVERVIEW' | 'LIVE' | 'CREATE_EXAM' | 'STUDENT_ROSTER' | 'RESULTS' | 'REPORTS' | 'AI_ASSISTANT'
+    'OVERVIEW' | 'LIVE' | 'CREATE_EXAM' | 'STUDENT_ROSTER' | 'RESULTS' | 'REPORTS' | 'AI_ASSISTANT' | 'ANSWER_KEY'
   >('OVERVIEW');
 
   // Exam creation is Admin-only by default; a Faculty account only gets it if an Admin has
@@ -73,7 +76,7 @@ export default function InvigilatorDashboard() {
   const [examNotFound, setExamNotFound] = useState(false);
 
   useEffect(() => {
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
+    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5001';
     const socket = io(socketUrl, { auth: { token: localStorage.getItem('gsmas_token') } });
     socketRef.current = socket;
 
@@ -146,7 +149,7 @@ export default function InvigilatorDashboard() {
       return;
     }
     const token = localStorage.getItem('gsmas_token');
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
     window.open(`${apiUrl}/admin/export-report/${testId}?format=${format}&token=${token}`, '_blank');
   };
 
@@ -209,20 +212,34 @@ export default function InvigilatorDashboard() {
   const fetchFacultyData = async () => {
     setStatsLoading(true);
     try {
-      const [rRes, overviewRes, examsRes] = await Promise.all([
+      const [rRes, overviewRes, examsRes, qRes] = await Promise.all([
         api.get('/admin/results-ledger'),
         api.get('/admin/overview'),
         api.get('/admin/exams'),
+        api.get('/admin/questions'),
       ]);
       if (rRes.data?.success) setDbResults(rRes.data.data);
       if (overviewRes.data?.success) setDashboardStats(overviewRes.data.data);
       if (examsRes.data?.success) setExamsList(examsRes.data.data);
+      if (qRes.data?.success) setQuestions(qRes.data.data);
       // Students are loaded separately by fetchStudents (filter-driven).
       await fetchStudents();
     } catch (e) {
       console.error('Error loading faculty datasets:', e);
     } finally {
       setStatsLoading(false);
+    }
+  };
+
+  const handlePublishResults = async (examId: string) => {
+    try {
+      const res = await api.put(`/admin/exams/${examId}/publish-results`);
+      if (res.data?.success) {
+        alert(res.data.message || 'Results published successfully to students.');
+        await fetchFacultyData();
+      }
+    } catch (e: any) {
+      alert(e.response?.data?.message || 'Failed to publish results.');
     }
   };
 
@@ -351,6 +368,7 @@ export default function InvigilatorDashboard() {
             { id: 'OVERVIEW', label: 'Dashboard Overview', icon: LayoutGrid },
             { id: 'LIVE', label: 'Live Invigilation Monitor', icon: Radio, badge: students.length },
             ...(canCreateExam ? [{ id: 'CREATE_EXAM', label: 'Create Examination', icon: Plus }] : []),
+            { id: 'ANSWER_KEY', label: 'Question Bank & Answer Key', icon: BookOpen },
             { id: 'STUDENT_ROSTER', label: 'Candidate Roster', icon: Users },
             { id: 'RESULTS', label: 'Results & Evaluation', icon: Award },
             { id: 'REPORTS', label: 'Reports & Analytics', icon: FileText },
@@ -534,6 +552,21 @@ export default function InvigilatorDashboard() {
                                 </button>
                               )}
 
+                              {/* Publish Results Action */}
+                              {exam.resultsPublished ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                  ✓ Results Published
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => handlePublishResults(exam.id)}
+                                  className="px-2 py-1 bg-teal-600 text-white font-semibold rounded hover:bg-teal-700 transition-colors text-[10px]"
+                                  title="Publish examination results and marks to student dashboards"
+                                >
+                                  Publish Results
+                                </button>
+                              )}
+
                               {/* Launch Live Monitor */}
                               <button
                                 onClick={() => {
@@ -672,7 +705,22 @@ export default function InvigilatorDashboard() {
           </div>
         )}
 
-        {/* TAB 4: CANDIDATE ROSTER */}
+        {/* TAB 4: QUESTION BANK & ANSWER KEY */}
+        {activeTab === 'ANSWER_KEY' && (
+          <div className="space-y-4">
+            <div className="erp-card space-y-1.5 border-l-4 border-l-[#1E40AF]">
+              <h3 className="text-sm font-bold text-slate-900">Departmental Question Bank & Authentic Answer Keys</h3>
+              <p className="text-xs text-slate-600">
+                Browse verified GATE questions with source diagrams, official answers, type, and marking scheme.
+              </p>
+            </div>
+            <SubjectWiseAnswerKeyView
+              questions={questions}
+            />
+          </div>
+        )}
+
+        {/* TAB 5: CANDIDATE ROSTER */}
         {activeTab === 'STUDENT_ROSTER' && (
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -783,14 +831,16 @@ export default function InvigilatorDashboard() {
                     <th>Register Number</th>
                     <th>Candidate Name</th>
                     <th>Course Title</th>
-                    <th>Score Obtained</th>
+                    <th>Marks Obtained</th>
+                    <th>Marks Allotted</th>
                     <th>Grade Awarded</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {dbResults.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-slate-500">
+                      <td colSpan={7} className="py-8 text-center text-slate-500">
                         No evaluated test results found in database.
                       </td>
                     </tr>
@@ -800,8 +850,24 @@ export default function InvigilatorDashboard() {
                         <td className="font-mono font-bold text-[#1E40AF]">{row.registerNo}</td>
                         <td className="font-semibold text-slate-900">{row.studentName}</td>
                         <td className="text-slate-700">{row.courseTitle}</td>
-                        <td className="font-mono font-bold text-emerald-700">{row.score} / {row.totalMarks}</td>
+                        <td className="font-mono font-bold">
+                          <span className={Number(row.score) < 0 ? "text-rose-600 font-bold" : "text-emerald-700 font-bold"}>
+                            {Number(row.score) > 0 ? `+${row.score}` : row.score} marks
+                          </span>
+                        </td>
+                        <td className="font-mono text-slate-600">{row.totalMarks} marks</td>
                         <td className="font-semibold text-slate-900">{row.grade}</td>
+                        <td>
+                          {row.assignmentId && (
+                            <button
+                              onClick={() => router.push(`/student/solution/${row.assignmentId}`)}
+                              className="erp-btn-secondary py-1 text-xs"
+                              title="View question-by-question evaluation breakdown"
+                            >
+                              View Solution Review
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))
                   )}

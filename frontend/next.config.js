@@ -1,5 +1,5 @@
 /** @type {import('next').NextConfig} */
-const backendApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+const backendApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
 const backendBaseUrl = (process.env.NEXT_PUBLIC_SOCKET_URL || backendApiUrl.replace(/\/api\/?$/, '')).replace(/\/$/, '');
 
 const nextConfig = {

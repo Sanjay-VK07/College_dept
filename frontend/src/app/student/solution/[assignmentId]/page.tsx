@@ -319,6 +319,23 @@ export default function SolutionReviewPage({ params }: { params?: any }) {
     solutionsList.filter((q: any) => q.chosenAnswer !== null && q.chosenAnswer !== undefined && q.chosenAnswer !== '' && !q.isCorrect).length;
   const unansweredCount = data.unansweredCount ?? Math.max(0, totalQuestions - attemptedCount);
 
+  const positiveMarks =
+    data.positiveMarks ??
+    Number(
+      solutionsList
+        .filter((q: any) => q.isCorrect)
+        .reduce((acc: number, q: any) => acc + (q.marksObtained || 0), 0)
+        .toFixed(2)
+    );
+  const negativeMarks =
+    data.negativeMarks ??
+    Number(
+      solutionsList
+        .filter((q: any) => !q.isCorrect && q.marksObtained < 0)
+        .reduce((acc: number, q: any) => acc + Math.abs(q.marksObtained || 0), 0)
+        .toFixed(2)
+    );
+
   const filteredSolutions = solutionsList.filter((q: any) => {
     const isAttempted = q.chosenAnswer !== null && q.chosenAnswer !== undefined && q.chosenAnswer !== '';
     if (filterMode === 'ATTEMPTED') return isAttempted;
@@ -356,7 +373,7 @@ export default function SolutionReviewPage({ params }: { params?: any }) {
       {/* Main Container */}
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 space-y-6">
         {/* Score Summary Banner */}
-        <div className="erp-card bg-white border-l-4 border-l-[#1E40AF] flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="erp-card bg-white border-l-4 border-l-[#1E40AF] flex flex-col lg:flex-row lg:items-center justify-between gap-5">
           <div className="flex items-center space-x-4">
             <div className="p-3 bg-blue-50 text-[#1E40AF] rounded-md border border-blue-100 shrink-0">
               <Award className="w-8 h-8" />
@@ -369,27 +386,40 @@ export default function SolutionReviewPage({ params }: { params?: any }) {
                   / {data.totalMarks !== null && data.totalMarks !== undefined ? data.totalMarks : '--'} Marks
                 </span>
               </div>
+              <div className="text-xs font-mono text-slate-500 mt-0.5">
+                Marks obtained: <b className={Number(data.score) < 0 ? "text-rose-600 font-bold" : "text-emerald-700"}>{Number(data.score) > 0 ? `+${data.score}` : data.score} marks</b> | Positive marks: <b className="text-emerald-700">+{positiveMarks} marks</b> | Negative marks deducted: <b className="text-rose-600">{negativeMarks} marks</b>
+              </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 border-t md:border-t-0 md:border-l border-slate-200 pt-3 md:pt-0 md:pl-6 text-center">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 border-t lg:border-t-0 lg:border-l border-slate-200 pt-3 lg:pt-0 lg:pl-5 text-center">
             <div className="p-2 bg-slate-50 rounded border border-slate-200">
               <div className="text-[10px] text-slate-500 uppercase font-semibold">Accuracy</div>
-              <div className="text-lg font-bold text-emerald-700">
+              <div className="text-base font-bold text-emerald-700">
                 {data.accuracy !== null && data.accuracy !== undefined ? `${data.accuracy}%` : '--'}
               </div>
             </div>
             <div className="p-2 bg-slate-50 rounded border border-slate-200">
-              <div className="text-[10px] text-slate-500 uppercase font-semibold">Correct</div>
-              <div className="text-lg font-bold text-emerald-700">{correctCount}</div>
+              <div className="text-[10px] text-slate-500 uppercase font-semibold">Attempted</div>
+              <div className="text-base font-bold text-[#1E40AF]">
+                {attemptedCount} / {totalQuestions}
+              </div>
+            </div>
+            <div className="p-2 bg-emerald-50/60 rounded border border-emerald-200">
+              <div className="text-[10px] text-emerald-800 uppercase font-semibold">Correct</div>
+              <div className="text-base font-bold text-emerald-700">{correctCount}</div>
+            </div>
+            <div className="p-2 bg-rose-50/60 rounded border border-rose-200">
+              <div className="text-[10px] text-rose-800 uppercase font-semibold">Incorrect</div>
+              <div className="text-base font-bold text-rose-600">{wrongCount}</div>
             </div>
             <div className="p-2 bg-slate-50 rounded border border-slate-200">
-              <div className="text-[10px] text-slate-500 uppercase font-semibold">Incorrect</div>
-              <div className="text-lg font-bold text-red-600">{wrongCount}</div>
+              <div className="text-[10px] text-slate-500 uppercase font-semibold">Unanswered</div>
+              <div className="text-base font-bold text-slate-600">{unansweredCount}</div>
             </div>
             <div className="p-2 bg-slate-50 rounded border border-slate-200">
               <div className="text-[10px] text-slate-500 uppercase font-semibold">Time Taken</div>
-              <div className="text-lg font-bold text-[#1E40AF]">
+              <div className="text-base font-bold text-[#1E40AF]">
                 {data.timeTakenSec !== null && data.timeTakenSec !== undefined ? `${Math.round(data.timeTakenSec / 60)}m` : '--'}
               </div>
             </div>
@@ -465,26 +495,43 @@ export default function SolutionReviewPage({ params }: { params?: any }) {
           ) : (
             filteredSolutions.map((q: any) => (
               <div key={q.id || q.order} className="erp-card space-y-3">
-                <div className="flex justify-between items-center pb-2.5 border-b border-slate-200">
-                  <div className="flex items-center space-x-2.5">
+                <div className="flex flex-wrap justify-between items-center gap-2 pb-2.5 border-b border-slate-200">
+                  <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
                     <span className="font-bold text-[#1E40AF]">Question {q.order}</span>
+                    {q.customId && (
+                      <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-bold border border-slate-200">
+                        {q.customId}
+                      </span>
+                    )}
                     <span className="erp-badge-gray">{q.type || '--'}</span>
-                    <span className="text-xs text-slate-500 font-mono hidden sm:inline">
+                    <span className="text-xs text-slate-500 font-mono">
                       {q.subject || 'General'} → {q.topic || 'General'}
+                    </span>
+                    <span className="text-xs font-mono text-slate-600">
+                      Marks allotted: <b className="text-emerald-700">{q.marks === 1 ? '1 mark' : `${q.marks} marks`}</b>
+                      {q.type === 'MCQ' ? (
+                        <> | Negative deduction: <b className="text-rose-600">{q.negativeMarks ? `${q.negativeMarks} marks` : (q.marks === 2 ? '0.66 marks' : '0.33 marks')}</b></>
+                      ) : (
+                        <span className="text-slate-400"> (No negative marking)</span>
+                      )}
                     </span>
                   </div>
                   <div>
                     {q.isCorrect ? (
-                      <span className="erp-badge-green">
-                        <CheckCircle className="w-3.5 h-3.5 mr-1" /> Correct (+{q.marksObtained})
+                      <span className="erp-badge-green font-mono">
+                        <CheckCircle className="w-3.5 h-3.5 mr-1" /> Correct (+{Math.abs(Number(q.marksObtained || q.marks || 1)).toFixed(2)} marks)
                       </span>
-                    ) : q.chosenAnswer === null || q.chosenAnswer === undefined || q.chosenAnswer === '' ? (
-                      <span className="erp-badge-gray">
-                        <XCircle className="w-3.5 h-3.5 mr-1" /> Not Attempted (0)
+                    ) : q.chosenAnswer === null || q.chosenAnswer === undefined || q.chosenAnswer === '' || (Array.isArray(q.chosenAnswer) && q.chosenAnswer.length === 0) ? (
+                      <span className="erp-badge-gray font-mono">
+                        <XCircle className="w-3.5 h-3.5 mr-1" /> Not Attempted (0.00 marks)
+                      </span>
+                    ) : q.type === 'MCQ' ? (
+                      <span className="erp-badge-red font-mono">
+                        <XCircle className="w-3.5 h-3.5 mr-1" /> Incorrect (-{Math.abs(Number(q.marksObtained !== undefined ? q.marksObtained : (q.marks === 2 ? 0.66 : 0.33))).toFixed(2)} marks)
                       </span>
                     ) : (
-                      <span className="erp-badge-red">
-                        <XCircle className="w-3.5 h-3.5 mr-1" /> Incorrect ({q.marksObtained})
+                      <span className="erp-badge-red font-mono">
+                        <XCircle className="w-3.5 h-3.5 mr-1" /> Incorrect (0.00 marks)
                       </span>
                     )}
                   </div>
@@ -502,7 +549,7 @@ export default function SolutionReviewPage({ params }: { params?: any }) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono pt-1">
                   <div className="p-3 bg-slate-50 rounded-md border border-slate-200">
                     <span className="text-slate-500 block mb-1 uppercase text-[10px] font-semibold">Candidate Response:</span>
-                    <span className={q.isCorrect ? 'text-emerald-700 font-bold' : (q.chosenAnswer === null || q.chosenAnswer === undefined || q.chosenAnswer === '') ? 'text-slate-500' : 'text-red-700 font-bold'}>
+                    <span className={q.isCorrect ? 'text-emerald-700 font-bold' : (q.chosenAnswer === null || q.chosenAnswer === undefined || q.chosenAnswer === '') ? 'text-slate-500' : 'text-rose-600 font-bold'}>
                       {formatAnswerDisplay(q.chosenAnswer, q.options, q.type)}
                     </span>
                   </div>

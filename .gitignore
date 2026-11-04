@@ -26,3 +26,11 @@ backend/public/
 **/.next_staging/
 backups/
 **/backups/
+
+.vscode/
+*.zip
+Question_Bank_Output/
+input_pdf.pdf
+extract_question_bank.py
+backend/src/code.cpp
+
